@@ -217,9 +217,13 @@ class Panel:
     # ---------------- дії ----------------
     def action(self, name: str, data: dict) -> str:
         port = self.cfg["lock_port"]
+        if name in ("start", "restart"):
+            sec = self.cfg["secrets"]
+            if not sec["TELEGRAM_BOT_TOKEN"] or not sec["TELEGRAM_CHAT_ID"]:
+                raise ValueError("Спершу впишіть токен бота і свій chat_id: вкладка «✈️ Telegram і доступ» → Зберегти")
         if name == "start":
             if not control.start_bot(port):
-                raise ValueError("Бот не запустився — подивіться журнал")
+                raise ValueError("Бот не запустився. " + self.last_error())
             self.restart_needed = False
             return "Бот запущено"
         if name == "stop":
@@ -231,7 +235,7 @@ class Panel:
                 raise ValueError("Бот не зупинився за 40 с")
             time.sleep(1)
             if not control.start_bot(port):
-                raise ValueError("Бот не запустився — подивіться журнал")
+                raise ValueError("Бот не запустився. " + self.last_error())
             self.restart_needed = False
             return "Бот перезапущено"
         if name == "pause":
@@ -282,6 +286,21 @@ class Panel:
         if name == "retry":
             raise ValueError("Повтор — командою /retry N у Telegram")
         raise ValueError(f"Невідома дія {name}")
+
+    def last_error(self) -> str:
+        """Остання помилка служби з журналу — щоб показати причину просто в панелі."""
+        try:
+            lines = Path(self.cfg["paths"]["log"]).read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+        except OSError:
+            return "Подивіться вкладку «Журнал»."
+        for line in reversed(lines):
+            if "[ERROR]" in line or "[CRITICAL]" in line or "Error:" in line:
+                text = line.split("]: ", 1)[-1] if "]: " in line else line
+                for v in self.cfg["secrets"].values():
+                    if v and len(v) > 12:
+                        text = text.replace(v, mask(v))
+                return "Причина: " + text[:300]
+        return "Подивіться вкладку «Журнал»."
 
     # ---------------- користувачі ----------------
     def set_user(self, chat_id: int, role: str) -> str:

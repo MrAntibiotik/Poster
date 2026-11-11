@@ -138,6 +138,14 @@ class PanelTest(unittest.TestCase):
         users = self.req("GET", "/api/state")[1]["users"]
         self.assertTrue(users[0]["owner"])
 
+    def test_start_without_telegram(self):
+        (self.tmp / ".env").write_text("", encoding="utf-8")
+        self.login()
+        st, r = self.req("POST", "/api/action", {"name": "start"})
+        self.assertEqual(st, 400)
+        self.assertIn("токен бота", r["error"])
+        self.assertFalse(self.req("GET", "/api/state")[1]["secrets"]["TELEGRAM_BOT_TOKEN"]["set"])
+
     def test_folders(self):
         self.login()
         lib = self.tmp / "Мої шортси"
