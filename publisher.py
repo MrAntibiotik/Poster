@@ -8,7 +8,7 @@ from pathlib import Path
 
 import media
 from config import NAMES, PLATFORMS, local_dt, now_ts
-from meta import load_meta, move_pair, read_json, write_json
+from meta import apply_always_hashtags, load_meta, move_pair, read_json, write_json
 from platforms import TokenExpired
 
 log = logging.getLogger("publisher")
@@ -56,7 +56,7 @@ class Publisher:
     def run(self, item_id: int) -> None:
         app, db = self.app, self.app.db
         item = db.get_item(item_id)
-        meta = load_meta(item["json"], item["title_override"])
+        meta = apply_always_hashtags(load_meta(item["json"], item["title_override"]), app.cfg)
         results = dict(item["results"])
         log.info("Публікую #%s «%s» (%s)", item_id, meta.yt_title, item["mp4"])
         app.bot.refresh(item_id)

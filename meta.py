@@ -167,6 +167,40 @@ def auto_meta_json(mp4: Path, game: str, cfg: dict) -> dict:
     }
 
 
+def _strip_tags(text: str, tags: list[str]) -> str:
+    low = {t.lower() for t in tags}
+    words = [w for w in re.split(r"(\s+)", text or "") if w.strip().lower() not in low]
+    return re.sub(r"\s+", " ", "".join(words)).strip()
+
+
+def apply_always_hashtags(meta: PostMeta, cfg: dict) -> PostMeta:
+    """Додає обов'язкові хештеги в кінець назви й підписів (без дублів; назва YouTube ≤ 100 символів)."""
+    conf = cfg.get("always_hashtags") or {}
+    tags = _hashtags(conf.get("tags") or [])
+    if not tags:
+        return meta
+    line = " ".join(tags)
+    if conf.get("in_title", True):
+        base = _strip_tags(meta.yt_title, tags)
+        room = 100 - len(line) - 1
+        if len(base) > room:
+            base = base[:max(0, room - 1)].rstrip() + "…"
+        meta.yt_title = f"{base} {line}".strip()
+    if conf.get("in_captions", True):
+        def add(text: str) -> str:
+            present = {t.lower() for t in HASHTAG_RE.findall(text or "")}
+            missing = [t for t in tags if t.lower() not in present]
+            return f"{text} {' '.join(missing)}".strip() if missing else text
+        meta.tiktok_text = add(meta.tiktok_text)
+        meta.instagram_text = add(meta.instagram_text)
+        meta.facebook_text = add(meta.facebook_text)
+    # окремі хештеги (опис YouTube) — без тих, що вже стоять у назві
+    if conf.get("in_title", True):
+        low = {t.lower() for t in tags}
+        meta.hashtags = [t for t in meta.hashtags if t.lower() not in low]
+    return meta
+
+
 def parse_hashtags(text: str) -> list[str]:
     """«wot, #танки shorts» -> ['#wot', '#танки', '#shorts']; «-» -> []."""
     text = (text or "").strip()

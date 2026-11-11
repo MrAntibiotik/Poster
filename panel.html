@@ -313,6 +313,15 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
       <label class="check"><input type="checkbox" data-set="ask_texts_before_publish"> Після «🚀 Опублікувати» бот питає <b>назву й хештеги</b> — публікація лише після відповіді</label>
       <label class="check"><input type="checkbox" data-set="publish_on_approve"> Публікувати одразу після підтвердження (а не в час слоту)</label>
     </div>
+    <div class="card"><h2>#️⃣ Обов'язкові хештеги</h2>
+      <p class="muted small">Завжди додаються в кінець назви — незалежно від того, що введено в Telegram. Дублі прибираються;
+        якщо назва YouTube виходить довшою за 100 символів, скорочується текст, а не хештеги.</p>
+      <label class="f">Хештеги (через пробіл)</label>
+      <input type="text" data-set="always_hashtags.tags" placeholder="#wot #wotua #mrantibiotik #танки">
+      <label class="check"><input type="checkbox" data-set="always_hashtags.in_title"> У назві YouTube</label>
+      <label class="check"><input type="checkbox" data-set="always_hashtags.in_captions"> У підписах TikTok / Instagram / Facebook</label>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
+    </div>
     <div class="card"><h2>🏷 Тексти для відео без json</h2>
       <p class="muted small">Якщо поруч із відео немає json, програма створить його сама: <b>назва — з імені файлу</b>
         (наприклад «бій_на_прохорівці.mp4» → «Бій на прохорівці»; безликі назви на кшталт «2026-11-10 21-33.mp4» → «WoT — епічний момент 🔥»),

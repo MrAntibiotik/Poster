@@ -61,6 +61,7 @@ FIELDS = {
     "platforms.facebook.enabled": "bool",
     "platforms.tiktok.enabled": "bool", "platforms.tiktok.public": "bool", "platforms.tiktok.redirect_uri": "str",
     "auto_meta.enabled": "bool", "auto_meta.hashtags": "tagmap",
+    "always_hashtags.tags": "taglist", "always_hashtags.in_title": "bool", "always_hashtags.in_captions": "bool",
     "ai.enabled": "bool", "ai.model": "str", "ai.hashtags_count": "int", "ai.channel_description": "str",
     "ai.extra_prompt": "str",
 }
@@ -105,6 +106,15 @@ def coerce(kind: str, value):
         if not 1 <= len(slots) <= 6:
             raise ValueError("потрібно від 1 до 6 слотів")
         return slots
+    if kind == "taglist":
+        if isinstance(value, list):
+            value = " ".join(map(str, value))
+        out = []
+        for t in re.split(r"[\s,;]+", str(value)):
+            t = "#" + re.sub(r"[^\w]", "", t.lstrip("#"), flags=re.UNICODE)
+            if len(t) > 1 and t.lower() not in {x.lower() for x in out}:
+                out.append(t)
+        return out
     if kind == "tagmap":
         if isinstance(value, dict):
             return value
@@ -561,6 +571,7 @@ class Panel:
         settings = {k: dig(merged, k) for k in FIELDS}
         settings["regenerate_command"] = cmd_to_text(settings["regenerate_command"])
         settings["auto_meta.hashtags"] = tagmap_to_text(settings["auto_meta.hashtags"])
+        settings["always_hashtags.tags"] = " ".join(settings["always_hashtags.tags"] or [])
         secrets_ = {n: {"set": bool(v), "value": v if n in PUBLIC_IDS else mask(v), "label": SECRET_LABELS.get(n, n)}
                     for n, v in cfg["secrets"].items()}
 

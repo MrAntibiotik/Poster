@@ -17,7 +17,7 @@ from pathlib import Path
 
 import media
 from config import NAMES, PLATFORMS, SHORT, enabled_platforms, fmt_slot, now_ts
-from meta import PostMeta, apply_manual, load_meta, parse_hashtags
+from meta import PostMeta, apply_always_hashtags, apply_manual, load_meta, parse_hashtags
 from telegram_api import TelegramAPI, TelegramError
 
 log = logging.getLogger("bot")
@@ -140,10 +140,21 @@ class Bot:
     # ================= сповіщення про шортс =================
     def _meta(self, item: dict) -> PostMeta:
         try:
-            return load_meta(item["json"], item["title_override"])
+            return apply_always_hashtags(load_meta(item["json"], item["title_override"]), self.cfg)
         except Exception as e:  # noqa: BLE001
             log.warning("Метадані #%s недоступні: %s", item["id"], e)
             return PostMeta(yt_title=item["title_override"] or Path(item["mp4"]).stem)
+
+    def _raw_meta(self, item: dict) -> PostMeta:
+        """Метадані без обов'язкових хештегів — те, що вводить/залишає користувач."""
+        try:
+            return load_meta(item["json"], item["title_override"])
+        except Exception:  # noqa: BLE001
+            return PostMeta(yt_title=item["title_override"] or Path(item["mp4"]).stem)
+
+    def _always_line(self) -> str:
+        conf = self.cfg.get("always_hashtags") or {}
+        return " ".join(conf.get("tags") or []) if conf.get("in_title", True) else ""
 
     def _platform_line(self, item: dict) -> str:
         parts = [f"{SHORT[p]} {'🚫' if p in item['disabled'] else '✅'}" for p in enabled_platforms(self.cfg)]
@@ -504,17 +515,20 @@ class Bot:
 
     def dialog_start(self, chat: int, item_id: int) -> None:
         item = self.db.get_item(item_id)
-        meta = self._meta(item)
+        meta = self._raw_meta(item)
         self.dialog_set(chat, {"item": item_id, "step": "title"})
         kb = {"inline_keyboard": [
             [{"text": f"Залишити: {meta.yt_title[:40]}", "callback_data": f"keep:{item_id}:title"}],
             [{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}"}]]}
-        self.say(chat, f"✍️ <b>Крок 1/2.</b> Надішліть <b>назву</b> для шортса #{item_id} (до 100 символів).\n"
-                       f"Зараз: <i>{esc(meta.yt_title)}</i>", reply_markup=kb)
+        always = self._always_line()
+        note = f"\nℹ️ У кінець назви автоматично додаються: {esc(always)}" if always else ""
+        self.say(chat, f"✍️ <b>Крок 1/2.</b> Надішліть <b>назву</b> для шортса #{item_id}.\n"
+                       f"Зараз: <i>{esc(meta.yt_title)}</i>{note}", reply_markup=kb)
 
     def _ask_tags(self, chat: int, item_id: int) -> None:
-        meta = self._meta(self.db.get_item(item_id))
-        current = " ".join(meta.hashtags) or "—"
+        meta = self._raw_meta(self.db.get_item(item_id))
+        always = {t.lower() for t in (self._always_line().split())}
+        current = " ".join(t for t in meta.hashtags if t.lower() not in always) or "—"
         kb = {"inline_keyboard": [
             [{"text": f"Залишити: {current[:40]}", "callback_data": f"keep:{item_id}:tags"}],
             [{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}"}]]}
@@ -556,7 +570,7 @@ class Bot:
         item = self._dialog_item(chat, item_id)
         if not item:
             return answer()
-        meta = self._meta(item)
+        meta = self._raw_meta(item)
         if rest and rest[0] == "title" and st["step"] == "title":
             self.dialog_set(chat, {**st, "step": "tags", "title": meta.yt_title})
             answer("Назву залишено")
@@ -568,7 +582,7 @@ class Bot:
 
     def _dialog_finish(self, chat: int, item: dict, title: str | None, tags: list[str]) -> None:
         item_id = item["id"]
-        title = title or self._meta(item).yt_title
+        title = title or self._raw_meta(item).yt_title
         try:
             apply_manual(item["json"], title, tags)
         except Exception as e:  # noqa: BLE001

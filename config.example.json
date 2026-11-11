@@ -17,6 +17,11 @@
     "log": "log.txt"
   },
   "ready_status": "ready_to_post",
+  "always_hashtags": {
+    "tags": ["#wot", "#wotua", "#mrantibiotik", "#танки"],
+    "in_title": true,
+    "in_captions": true
+  },
   "auto_meta": {
     "enabled": true,
     "hashtags": {

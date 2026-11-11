@@ -61,6 +61,7 @@ class FlowBase(unittest.TestCase):
             "retry": {"attempts": 3, "pause_seconds": 0},
             "telegram": {"bot_token": "123:abc", "chat_id": "42"},
             "reports": {"daily_time": "22:30", "stats_after_hours": 24},
+            "always_hashtags": {"tags": []},
         }
         (self.tmp / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
         for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):

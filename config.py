@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.11-10"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.11-11"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -31,6 +31,12 @@ DEFAULTS: dict = {
     "catchup_minutes": 120,
     "max_skips": 3,
     "ready_status": "ready_to_post",
+    # Хештеги, що ЗАВЖДИ додаються в кінець назви (YouTube) і підписів (TikTok / Instagram / Facebook)
+    "always_hashtags": {
+        "tags": ["#wot", "#wotua", "#mrantibiotik", "#танки"],
+        "in_title": True,
+        "in_captions": True,
+    },
     # Відео без json: програма сама створить json (назва — з імені файлу, хештеги — за папкою гри)
     "auto_meta": {
         "enabled": True,
