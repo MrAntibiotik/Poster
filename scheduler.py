@@ -84,6 +84,10 @@ class Scheduler:
         self.maybe_stats(now)
         self.maybe_health_check(now)
         self.maybe_ai()
+        try:
+            self.app.bot.purge_expired()
+        except Exception as e:  # noqa: BLE001
+            log.debug("purge: %s", e)
 
     # ---------- черга ----------
     def scan(self, now: int | None = None) -> list[int]:
@@ -484,9 +488,9 @@ class Scheduler:
                 stats = collect(self.app)
             except Exception:  # noqa: BLE001
                 log.exception("Збір статистики для звіту")
-            self.app.bot.send(daily_report(self.app, now, stats), html_mode=True, to="all")
+            self.app.bot.send(daily_report(self.app, now, stats), html_mode=True, to="all", keep=True)
             if weekly and stats:
-                self.app.bot.send(weekly_top(self.app, stats), html_mode=True, to="all")
+                self.app.bot.send(weekly_top(self.app, stats), html_mode=True, to="all", keep=True)
         if getattr(self.app.publisher, "sync", False):
             work()
         else:

@@ -85,6 +85,9 @@ def user_name(u: dict) -> str:
     return f"{name} (@{u['username']})" if u.get("username") else name
 
 
+REPLY_TTL = 15 * 60      # відповіді на кнопки зникають за 15 хв (або при наступній дії)
+AUTO_TTL = 6 * 3600      # службові повідомлення (нові в черзі, запуск, примітки) — за 6 год
+
 class Bot:
     def __init__(self, app):
         self.app = app
@@ -157,12 +160,72 @@ class Bot:
             log.warning("Не вдалося налаштувати меню команд: %s", e)
 
     # ================= службові повідомлення =================
-    def say(self, chat_id: int, text: str, html_mode: bool = True, reply_markup=None):
+    def say(self, chat_id: int, text: str, html_mode: bool = True, reply_markup=None,
+            keep: bool | str = False, ttl: int = REPLY_TTL):
+        """keep=False — тимчасове (зникне при наступній дії або через ttl с);
+        keep=True — лишається назавжди; keep='kind' — лишається лише останнє такого типу."""
         try:
-            return self.tg.send_message(chat_id, text if html_mode else esc(text), reply_markup=reply_markup)
+            msg = self.tg.send_message(chat_id, text if html_mode else esc(text), reply_markup=reply_markup)
         except TelegramError as e:
             log.error("Не вдалося надіслати повідомлення в Telegram (%s): %s", chat_id, e)
             return None
+        if keep is False and isinstance(reply_markup, dict) and "keyboard" in reply_markup:
+            keep = "kbd"  # повідомлення з кнопками внизу — лишаємо останнє, щоб кнопки не зникли
+        if isinstance(keep, str):
+            self.keep_latest(chat_id, keep, msg)
+        elif not keep:
+            self.ephemeral(chat_id, msg, ttl)
+        return msg
+
+    # ---------- охайний чат: лишаються відео з прогресом, звіти й аналітика ----------
+    def ephemeral(self, chat_id: int, msg, ttl: int = REPLY_TTL) -> None:
+        mid = msg.get("message_id") if isinstance(msg, dict) else msg
+        if not mid:
+            return
+        key = f"eph:{chat_id}"
+        try:
+            rows = json.loads(self.db.get(key) or "[]")
+        except ValueError:
+            rows = []
+        rows.append([int(mid), now_ts() + ttl])
+        self.db.set(key, json.dumps(rows[-300:]))
+
+    def keep_latest(self, chat_id: int, kind: str, msg) -> None:
+        mid = msg.get("message_id") if isinstance(msg, dict) else msg
+        if not mid:
+            return
+        key = f"keep:{chat_id}:{kind}"
+        old = self.db.get(key)
+        self.db.set(key, int(mid))
+        if old and int(old) != int(mid):
+            self._delete(chat_id, [int(old)])
+
+    def _delete(self, chat_id: int, ids: list[int]) -> None:
+        for i in range(0, len(ids), 100):
+            try:
+                self.tg.call("deleteMessages", chat_id=chat_id, message_ids=ids[i:i + 100])
+            except Exception as e:  # noqa: BLE001 — старі повідомлення (>48 год) Telegram не видаляє
+                log.debug("deleteMessages: %s", e)
+
+    def purge(self, chat_id: int, only_expired: bool = False) -> None:
+        key = f"eph:{chat_id}"
+        try:
+            rows = json.loads(self.db.get(key) or "[]")
+        except ValueError:
+            rows = []
+        now = now_ts()
+        drop = [m for m, exp in rows if not only_expired or exp <= now]
+        if not drop:
+            return
+        self.db.set(key, json.dumps([[m, exp] for m, exp in rows if m not in set(drop)]) if only_expired else None)
+        self._delete(chat_id, sorted(drop))
+
+    def purge_expired(self) -> None:
+        for row in self.db.q("SELECT key FROM kv WHERE key LIKE 'eph:%' AND value IS NOT NULL"):
+            try:
+                self.purge(int(row["key"][4:]), only_expired=True)
+            except ValueError:
+                pass
 
     # ---------- тимчасові повідомлення (діалоги) — прибираються після завершення ----------
     def tmp(self, chat_id: int, text: str, html_mode: bool = True, reply_markup=None):
@@ -203,10 +266,18 @@ class Bot:
             self._track(chat_id, row["text_msg_id"])
             self.db.x("UPDATE tg_msgs SET text_msg_id=NULL WHERE item_id=? AND chat_id=?", (item_id, chat_id))
 
-    def send(self, text: str, html_mode: bool = False, to: str = "admins", keyboard: bool = False) -> None:
-        """to: 'admins' — службові повідомлення; 'all' — також глядачам (звіти, перегляди)."""
+    def drop_all_texts(self, item_id: int) -> None:
+        for r in self.db.tg_msgs(item_id):
+            if r.get("text_msg_id"):
+                self._delete(r["chat_id"], [r["text_msg_id"]])
+                self.db.x("UPDATE tg_msgs SET text_msg_id=NULL WHERE item_id=? AND chat_id=?", (item_id, r["chat_id"]))
+
+    def send(self, text: str, html_mode: bool = False, to: str = "admins", keyboard: bool = False,
+             keep: bool | str = False) -> None:
+        """to: 'admins' — службові повідомлення; 'all' — також глядачам (звіти, перегляди).
+        Службові повідомлення (keep=False) самі зникають за кілька годин або при наступній дії."""
         for cid in (self.recipients() if to == "all" else self.admins()):
-            self.say(cid, text, html_mode, self.reply_keyboard(cid) if keyboard else None)
+            self.say(cid, text, html_mode, self.reply_keyboard(cid) if keyboard else None, keep=keep, ttl=AUTO_TTL)
 
     def notify_reauth(self, key: str, reason: str) -> None:
         k = f"reauth_{key}"
@@ -215,7 +286,7 @@ class Bot:
             return
         self.db.set(k, now_ts())
         hint = self.app.platforms[key].reauth_hint if key in self.app.platforms else f"python poster.py auth {key}"
-        self.send(f"🔑 <b>Потрібна повторна авторизація: {NAMES[key]}</b>\n"
+        self.send(keep=True, text=f"🔑 <b>Потрібна повторна авторизація: {NAMES[key]}</b>\n"
                   f"Причина: {esc(reason[:300])}\n\nНа ПК: панель керування → {NAMES[key]} → «Авторизувати»\n"
                   f"або команда <code>{esc(hint)}</code>", html_mode=True)
 
@@ -499,7 +570,7 @@ class Bot:
             {"text": "🛠 Адмін", "callback_data": f"acc:{chat}:admin"},
             {"text": "❌ Відхилити", "callback_data": f"acc:{chat}:blocked"}]]}
         for cid in self.admins():
-            self.say(cid, f"👤 <b>Запит на доступ</b>\n{esc(name)}\nchat_id: <code>{chat}</code>\n\n"
+            self.say(cid, keep=True, text=f"👤 <b>Запит на доступ</b>\n{esc(name)}\nchat_id: <code>{chat}</code>\n\n"
                           "👁 Сповіщення — отримуватиме шортси, посилання і звіти (без керування)\n"
                           "🛠 Адмін — повне керування", reply_markup=kb)
 
@@ -771,7 +842,7 @@ class Bot:
         if not item:
             return
         for cid in self.admins():
-            self.say(cid, self.failed_text(item), reply_markup=self.retry_keyboard(item_id))
+            self.say(cid, self.failed_text(item), reply_markup=self.retry_keyboard(item_id), keep=True)
 
     def retry_button(self, chat: int, item_id: int, action: str, cq: dict, answer) -> None:
         item = self.db.get_item(item_id)
@@ -1209,7 +1280,7 @@ class Bot:
                 stats = collect(app)
                 text = analytics_text(app, stats) if op == "stats" else weekly_top(app, stats)
             if cmd.get("send"):
-                self.send(text, html_mode=True)
+                self.send(text, html_mode=True, keep=True)
             return text
         item_id = int(cmd.get("id") or 0)
         item = self.db.get_item(item_id)
@@ -1305,6 +1376,11 @@ class Bot:
             return
         if text in BTN:
             text = BTN[text]
+        in_dialog = bool(self.dialog_get(chat) or self.db.get(f"await_title:{chat}"))
+        if not in_dialog:  # нова дія — прибираємо попередні відповіді й натискання кнопок
+            self.purge(chat)
+            self.cleanup(chat)  # картки з черги, залишки діалогів
+            self.ephemeral(chat, m.get("message_id"))
         if text.startswith("/"):
             cmd, *args = text.split()
             cmd = cmd.split("@")[0].lower()
@@ -1341,18 +1417,21 @@ class Bot:
     def command(self, cmd: str, args: list[str], chat: int | None = None, role: str = "admin") -> None:
         app = self.app
         chat = chat or self.chat_id
-        reply = lambda text, html_mode=True, kb=None: self.say(chat, text, html_mode, kb)  # noqa: E731
+        reply = lambda text, html_mode=True, kb=None, keep=False: self.say(chat, text, html_mode, kb, keep)  # noqa: E731
         if cmd in ("/stats", "/top"):
-            reply("⏳ Збираю статистику з платформ…", False)
+            wait = reply("⏳ Збираю статистику з платформ…", False)
 
             def work(which=cmd):
                 from reports import analytics_text, collect, weekly_top
                 try:
                     stats = collect(app)
-                    reply(analytics_text(app, stats) if which == "/stats" else weekly_top(app, stats))
+                    reply(analytics_text(app, stats) if which == "/stats" else weekly_top(app, stats),
+                          keep=which[1:])  # лишається остання аналітика / останній топ
                 except Exception as e:  # noqa: BLE001
                     log.exception("Аналітика")
                     reply(f"❌ Не вдалося зібрати статистику: {esc(str(e))}")
+                if wait:
+                    self._delete(chat, [wait["message_id"]])
             if getattr(app.publisher, "sync", False):
                 work()
             else:
@@ -1374,7 +1453,7 @@ class Bot:
             reply(app.status_text())
         elif cmd == "/report":
             from reports import daily_report
-            reply(daily_report(app))
+            reply(daily_report(app), keep="report")
         elif cmd == "/pause":
             self.db.set("paused", "1")
             self.db.event(None, "paused", {"by": chat})

@@ -97,6 +97,8 @@ class Publisher:
             db.event(item_id, "publish_failed", {"title": meta.yt_title, "failed": failed})
         db.set(f"ignored:{item_id}", None)
         app.bot.refresh(item_id)
+        if ok and hasattr(app.bot, "drop_all_texts"):
+            app.bot.drop_all_texts(item_id)  # назва й хештеги вже в підписі відео — окреме повідомлення не потрібне
         if failed and hasattr(app.bot, "notify_failed"):
             app.bot.notify_failed(item_id)
         log.info("#%s: успішно %s, помилки %s", item_id, ok, failed)
