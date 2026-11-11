@@ -37,7 +37,7 @@ class PruneTest(FlowBase):
         self.assertEqual(len(msg), 1)
         self.assertIn("файл видалено", msg[0])
         plan = self.app.scheduler.projection(self.ts(11, "08:00"))
-        self.assertEqual(config.fmt_when(self.cfg, plan[0][1], self.ts(11, "08:00")), "сьогодні 10:00")  # зсунулись
+        self.assertEqual(config.fmt_when(self.cfg, plan[0][1], self.ts(11, "08:00")), "сьогодні 10:00 (11.11)")  # зсунулись
 
     def test_folder_change_and_back(self):
         old_root = self.cfg["paths"]["ready"]

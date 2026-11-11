@@ -68,10 +68,10 @@ class RetryTest(FlowBase):
         self.button(f"rq:{self.item['id']}")
         when = self.app.scheduler.retry_at(self.item["id"])
         config.FAKE_NOW = self.ts(11, "13:01")
-        self.assertEqual(config.fmt_when(self.cfg, when, self.ts(11, "13:01")), "сьогодні 16:00")
+        self.assertEqual(config.fmt_when(self.cfg, when, self.ts(11, "13:01")), "сьогодні 16:00 (11.11)")
         # слот зайнято повтором — черга (b) іде далі
         plan = self.app.scheduler.projection(self.ts(11, "13:01"))
-        self.assertEqual(config.fmt_when(self.cfg, plan[0][1], self.ts(11, "13:01")), "сьогодні 19:00")
+        self.assertEqual(config.fmt_when(self.cfg, plan[0][1], self.ts(11, "13:01")), "сьогодні 19:00 (11.11)")
         self.app.scheduler.tick(self.ts(11, "16:00"))
         self.assertEqual(self.app.db.get_item(self.item["id"])["results"]["instagram"]["status"], "ok")
 
@@ -79,7 +79,7 @@ class RetryTest(FlowBase):
         self.button(f"rt:{self.item['id']}")
         self.assertIn("Коли повторити", self.app.bot.tg.sent[-1][1])
         self.button(f"tc:{self.item['id']}")
-        self.say("сьогодні 18:20")
+        self.say("сьогодні 18:20 (11.11)")
         self.assertEqual(self.app.scheduler.retry_at(self.item["id"]), self.ts(11, "18:20"))
         self.button(f"ri:{self.item['id']}")
         self.assertIsNone(self.app.scheduler.retry_at(self.item["id"]))

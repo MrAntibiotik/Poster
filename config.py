@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.11-31"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.12-32"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -256,14 +256,14 @@ WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "нд"]
 
 
 def fmt_when(cfg: dict, ts: int, now: int | None = None) -> str:
-    """«сьогодні 13:00» / «завтра 10:00» / «пт 13.11 16:00»."""
+    """«сьогодні 13:00 (12.11)» / «завтра 10:00 (13.11)» / «пт 13.11 16:00»."""
     dt = local_dt(cfg, ts)
     today = local_dt(cfg, now or now_ts()).date()
     days = (dt.date() - today).days
-    if days == 0:
-        return f"сьогодні {dt:%H:%M}"
+    if days == 0:  # дата в дужках — щоб після півночі «сьогодні» не плутало
+        return f"сьогодні {dt:%H:%M} ({dt:%d.%m})"
     if days == 1:
-        return f"завтра {dt:%H:%M}"
+        return f"завтра {dt:%H:%M} ({dt:%d.%m})"
     return f"{WEEKDAYS[dt.weekday()]} {dt:%d.%m %H:%M}"
 
 

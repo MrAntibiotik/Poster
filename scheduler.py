@@ -177,6 +177,14 @@ class Scheduler:
         plan = {it["id"]: ts for it, ts in self.projection()}
         paused = self.db.get("paused") == "1"
         lines = [f"📥 <b>Нові шортси в черзі: {len(item_ids)}</b>"]
+        new = set(item_ids)
+        order = [it["id"] for it, _ in self.projection()]
+        first_new = min((order.index(i) for i in item_ids if i in order), default=0)
+        ahead = [(it, ts) for it, ts in self.projection()[:first_new] if it["id"] not in new]
+        if ahead and not paused:
+            busy = ", ".join(fmt_when(self.cfg, ts).split(" (")[0] for _, ts in ahead[:6] if ts)
+            lines.append(f"Перед ними в черзі ще {len(ahead)} — займають слоти: {busy}"
+                         f"{' …' if len(ahead) > 6 else ''}. Змінити порядок — «📋 Черга».")
         for item_id in item_ids[:15]:
             item = self.db.get_item(item_id)
             ts = plan.get(item_id)

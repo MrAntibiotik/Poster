@@ -23,14 +23,26 @@ class PlanTest(FlowBase):
         config.FAKE_NOW = self.ts(11, "08:00")
         self.app.scheduler.scan()
         self.assertEqual(self.plan(self.ts(11, "08:00")), [
-            ("a", "сьогодні 10:00"), ("b", "сьогодні 13:00"), ("c", "сьогодні 16:00"), ("d", "сьогодні 19:00"),
-            ("e", "сьогодні 21:00"), ("f", "завтра 10:00"), ("g", "завтра 13:00")])
+            ("a", "сьогодні 10:00 (11.11)"), ("b", "сьогодні 13:00 (11.11)"), ("c", "сьогодні 16:00 (11.11)"), ("d", "сьогодні 19:00 (11.11)"),
+            ("e", "сьогодні 21:00 (11.11)"), ("f", "завтра 10:00 (12.11)"), ("g", "завтра 13:00 (12.11)")])
         msg = [s[1] for s in self.app.bot.tg.sent if s[0] == "text" and "Нові шортси в черзі: 7" in s[1]]
         self.assertEqual(len(msg), 1)
-        self.assertIn("#1 a → <b>сьогодні 10:00</b>", msg[0])
-        self.assertIn("#7 g → <b>завтра 13:00</b>", msg[0])
+        self.assertIn("#1 a → <b>сьогодні 10:00 (11.11)</b>", msg[0])
+        self.assertIn("#7 g → <b>завтра 13:00 (12.11)</b>", msg[0])
         # черга в Telegram теж показує час
-        self.assertIn("a → <b>сьогодні 10:00</b>", self.app.queue_text())
+        self.assertIn("a → <b>сьогодні 10:00 (11.11)</b>", self.app.queue_text())
+
+    def test_announce_says_what_is_ahead(self):
+        for n in "abc":
+            self.make_short(n, age=1000 - ord(n))
+        config.FAKE_NOW = self.ts(11, "08:00")
+        self.app.scheduler.scan()
+        for n in "de":
+            self.make_short(n, age=500 - ord(n))
+        self.app.scheduler.scan()
+        msg = [s[1] for s in self.app.bot.tg.sent if s[0] == "text" and "Нові шортси в черзі: 2" in s[1]][0]
+        self.assertIn("#4 d → <b>сьогодні 19:00 (11.11)</b>", msg)
+        self.assertIn("Перед ними в черзі ще 3 — займають слоти: сьогодні 10:00, сьогодні 13:00, сьогодні 16:00", msg)
 
     def test_notification_matches_plan_and_skip_shifts(self):
         for n in "abc":
@@ -39,10 +51,10 @@ class PlanTest(FlowBase):
         sch.tick(self.ts(11, "09:00"))  # a -> 10:00 (уже сповіщено), b -> 13:00, c -> 16:00
         notified = self.app.db.items("status='notified'")[0]
         self.assertEqual((Path(notified["mp4"]).stem, notified["slot_at"]), ("a", self.ts(11, "10:00")))
-        self.assertEqual(self.plan(self.ts(11, "09:00")), [("b", "сьогодні 13:00"), ("c", "сьогодні 16:00")])
+        self.assertEqual(self.plan(self.ts(11, "09:00")), [("b", "сьогодні 13:00 (11.11)"), ("c", "сьогодні 16:00 (11.11)")])
         sch.tick(self.ts(11, "10:00"))  # a не підтверджено -> у кінець черги
         self.assertEqual(self.plan(self.ts(11, "10:00")),
-                         [("b", "сьогодні 13:00"), ("c", "сьогодні 16:00"), ("a", "сьогодні 19:00")])
+                         [("b", "сьогодні 13:00 (11.11)"), ("c", "сьогодні 16:00 (11.11)"), ("a", "сьогодні 19:00 (11.11)")])
         sch.tick(self.ts(11, "12:00"))  # сповіщення 13:00 — саме для b
         notified = self.app.db.items("status='notified'")[0]
         self.assertEqual(Path(notified["mp4"]).stem, "b")
@@ -52,9 +64,9 @@ class PlanTest(FlowBase):
         self.make_short("b", age=110)
         config.FAKE_NOW = self.ts(11, "11:00")
         self.app.scheduler.scan()
-        self.assertEqual(self.plan(self.ts(11, "11:00")), [("a", "сьогодні 13:00"), ("b", "сьогодні 16:00")])
+        self.assertEqual(self.plan(self.ts(11, "11:00")), [("a", "сьогодні 13:00 (11.11)"), ("b", "сьогодні 16:00 (11.11)")])
         self.app.scheduler.add_manual_slot(30)  # 11:30
-        self.assertEqual(self.plan(self.ts(11, "11:00")), [("a", "сьогодні 11:30"), ("b", "сьогодні 13:00")])
+        self.assertEqual(self.plan(self.ts(11, "11:00")), [("a", "сьогодні 11:30 (11.11)"), ("b", "сьогодні 13:00 (11.11)")])
         self.app.db.set("paused", "1")
         self.assertEqual(self.plan(self.ts(11, "11:00")), [("a", None), ("b", None)])
         self.assertIn("на паузі", self.app.queue_text())
