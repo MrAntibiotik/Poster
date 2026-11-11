@@ -234,15 +234,36 @@ def meta_pages(cfg: dict, short_token: str) -> list[dict]:
         raise PublishError(f"мережа: {e}") from e
     if "access_token" not in r:
         raise PublishError(f"Не вдалося обміняти токен: {(r.get('error') or {}).get('message') or r}")
-    try:
-        pages = requests.get(f"https://graph.facebook.com/{ver}/me/accounts", timeout=60, params={
-            "access_token": r["access_token"],
-            "fields": "id,name,access_token,instagram_business_account{id,username}"}).json()
-    except (requests.RequestException, ValueError) as e:
-        raise PublishError(f"мережа: {e}") from e
-    data = pages.get("data") or []
+    token = r["access_token"]
+    fields = "id,name,access_token,instagram_business_account{id,username}"
+
+    def get(path: str, **params) -> dict:
+        try:
+            j = requests.get(f"https://graph.facebook.com/{ver}/{path}", timeout=60,
+                             params={"access_token": token, **params}).json()
+        except (requests.RequestException, ValueError) as e:
+            raise PublishError(f"мережа: {e}") from e
+        if j.get("error"):
+            log.warning("Graph %s: %s", path, j["error"].get("message"))
+        return j
+
+    data = get("me/accounts", fields=fields).get("data") or []
     if not data:
-        raise PublishError("Не знайдено жодної сторінки — перевірте дозволи pages_show_list / pages_manage_posts")
+        # Сторінки, що належать бізнес-портфоліо, у me/accounts можуть не з'являтися
+        seen = set()
+        for biz in get("me/businesses", fields="id,name").get("data") or []:
+            for edge in ("owned_pages", "client_pages"):
+                for page in get(f"{biz['id']}/{edge}", fields=fields).get("data") or []:
+                    if page.get("access_token") and page["id"] not in seen:
+                        seen.add(page["id"])
+                        data.append(page)
+    if not data:
+        granted = [p["permission"] for p in get("me/permissions").get("data") or [] if p.get("status") == "granted"]
+        raise PublishError(
+            "Facebook не показав жодної сторінки. Найчастіше причина — у вікні входу не поставлено галочку "
+            "на вашій сторінці (повторіть Generate Access Token і виберіть сторінку та Instagram). "
+            "Також перевірте, що у вас є саме СТОРІНКА Facebook (не лише профіль) і ви її адміністратор. "
+            f"Надані дозволи: {', '.join(granted) or 'немає'}")
     return data
 
 
