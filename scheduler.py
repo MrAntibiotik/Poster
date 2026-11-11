@@ -15,15 +15,42 @@ from meta import auto_meta_json, json_status, load_meta, move_pair, read_json, w
 log = logging.getLogger("scheduler")
 
 
-def find_videos(folder: Path) -> list[Path]:
-    """mp4 у папці та в підпапках-іграх (розширення без урахування регістру: .mp4 / .MP4)."""
-    out = []
-    for base in [folder] + sorted(p for p in folder.iterdir() if p.is_dir() and not p.name.startswith(".")):
+SKIP_DIRS = {"posted", "skipped", "data", "tokens", "previews", ".venv", "__pycache__"}
+
+
+def find_videos(folder: Path, depth: int = 4, exclude: tuple = ()) -> list[Path]:
+    """mp4 у папці та підпапках до `depth` рівнів (напр. output/job_…/battle_…/відео.mp4).
+
+    Розширення без урахування регістру; папки posted/skipped/службові і `exclude` пропускаються.
+    """
+    out: list[Path] = []
+    excl = {Path(e).resolve() for e in exclude}
+
+    def walk(d: Path, level: int) -> None:
         try:
-            out += [f for f in base.iterdir() if f.is_file() and f.suffix.lower() == ".mp4"]
+            entries = sorted(d.iterdir())
         except OSError:
-            continue
+            return
+        for e in entries:
+            try:
+                if e.is_file() and e.suffix.lower() == ".mp4":
+                    out.append(e)
+                elif (e.is_dir() and level < depth and not e.name.startswith(".")
+                      and e.name.lower() not in SKIP_DIRS and e.resolve() not in excl):
+                    walk(e, level + 1)
+            except OSError:
+                continue
+    walk(folder, 0)
     return out
+
+
+def game_of(mp4: Path, ready: Path) -> str:
+    """Назва «гри» = перша підпапка в папці з шортсами (ready/WoT/… → WoT); для відео в корені — ''."""
+    try:
+        rel = mp4.resolve().relative_to(ready.resolve())
+    except ValueError:
+        return mp4.parent.name
+    return rel.parts[0] if len(rel.parts) > 1 else ""
 
 
 class Scheduler:
@@ -67,15 +94,17 @@ class Scheduler:
         if not ready.exists():
             ready.mkdir(parents=True, exist_ok=True)
             return []
-        known = self.db.known_paths()
+        self.prune_queue(ready)
+        missing = {r["mp4"]: r["id"] for r in self.db.q("SELECT id, mp4 FROM items WHERE status='missing'")}
+        known = self.db.known_paths() - set(missing)
         found = []
         auto = bool((self.cfg.get("auto_meta") or {}).get("enabled", True))
-        for mp4 in find_videos(ready):
+        for mp4 in find_videos(ready, exclude=(self.cfg["paths"]["posted"], self.cfg["paths"]["skipped"])):
             path = str(mp4.resolve())
             if path in known:
                 continue
             js = mp4.with_suffix(".json")
-            game = mp4.parent.name if mp4.parent != ready else ""
+            game = game_of(mp4, ready)
             try:
                 if time.time() - mp4.stat().st_mtime < 30:
                     continue  # файл ще записується / копіюється
@@ -98,6 +127,13 @@ class Scheduler:
             found.append((order, path, str(js.resolve()), game))
         added = []
         for _, path, js, game in sorted(found):
+            if path in missing:  # файл повернувся (напр. знову вибрали ту саму папку) — назад у чергу
+                item_id = missing[path]
+                self.db.update_item(item_id, status="queued", qpos=self.db.next_qpos(), note=None,
+                                    slot_at=None, skips=0, json=js, game=game)
+                added.append(item_id)
+                self.db.event(item_id, "queued", {"file": Path(path).name, "again": True})
+                continue
             item_id = self.db.add_item(path, js, game)
             if item_id:
                 added.append(item_id)
@@ -106,6 +142,34 @@ class Scheduler:
         if added:
             self.announce_queued(added)
         return added
+
+    def prune_queue(self, ready: Path) -> list[dict]:
+        """Прибирає з черги відео, файлів яких більше немає або які не з поточної папки з шортсами."""
+        ready = ready.resolve()
+        removed = []
+        for item in self.db.items("status IN ('queued','notified')"):
+            mp4 = Path(item["mp4"])
+            gone = not mp4.exists()
+            moved = not gone and item["status"] == "queued" and ready not in mp4.resolve().parents
+            if not (gone or moved):
+                continue
+            reason = "файл видалено" if gone else "не з поточної папки"
+            self.db.update_item(item["id"], status="missing", note=reason)
+            self.db.event(item["id"], "missing", {"file": mp4.name, "reason": reason})
+            if item["slot_at"]:  # звільняємо слот для наступного відео
+                self.db.x("UPDATE slots SET state='pending', item_id=NULL WHERE slot_at=? AND item_id=?",
+                          (item["slot_at"], item["id"]))
+                self.app.bot.refresh(item["id"])
+            removed.append({**item, "reason": reason})
+            log.info("#%s прибрано з черги (%s): %s", item["id"], reason, mp4)
+        if removed:
+            lines = [f"🗑 <b>Прибрано з черги: {len(removed)}</b> — наступні відео зсунулись уперед"]
+            for it in removed[:15]:
+                lines.append(f"• #{it['id']} {html.escape(Path(it['mp4']).stem)} ({it['reason']})")
+            if len(removed) > 15:
+                lines.append(f"… і ще {len(removed) - 15}")
+            self.app.bot.send("\n".join(lines), html_mode=True)
+        return removed
 
     def announce_queued(self, item_ids: list[int]) -> None:
         plan = {it["id"]: ts for it, ts in self.projection()}
@@ -145,7 +209,7 @@ class Scheduler:
     def projection(self, now: int | None = None) -> list[tuple[dict, int | None]]:
         """Черга з часом публікації: перше відео — у найближчий вільний слот, друге — у наступний…"""
         now = now or now_ts()
-        queue = self.db.queue()
+        queue = [it for it in self.db.queue() if Path(it["mp4"]).exists()]  # видалені файли не показуємо
         if self.db.get("paused") == "1":
             return [(it, None) for it in queue]
         slots = self.future_slots(now, len(queue))

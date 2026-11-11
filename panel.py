@@ -339,7 +339,8 @@ class Panel:
             if not videos:
                 raise ValueError("У папці з шортсами немає відео для проби")
             mp4 = videos[0]
-            game = mp4.parent.name if mp4.parent != Path(cfg["paths"]["ready"]) else ""
+            from scheduler import game_of
+            game = game_of(mp4, Path(cfg["paths"]["ready"]))
 
             def run():
                 r = ai.generate(cfg, mp4, game)
@@ -468,13 +469,14 @@ class Panel:
         games = set()
         try:
             from scheduler import find_videos
-            files = find_videos(folder)[:5000]
+            files = find_videos(folder, exclude=(self.cfg["paths"]["posted"], self.cfg["paths"]["skipped"]))[:5000]
         except OSError:
             return info
         for mp4 in files:
             info["total"] += 1
-            if mp4.parent != folder:
-                games.add(mp4.parent.name)
+            from scheduler import game_of
+            if game_of(mp4, folder):
+                games.add(game_of(mp4, folder))
             js = mp4.with_suffix(".json")
             if not js.exists():
                 info["no_json"] += 1
