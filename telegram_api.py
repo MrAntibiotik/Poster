@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 
@@ -91,6 +92,10 @@ class TelegramAPI:
                          disable_web_page_preview=not preview)
 
     def send_video(self, chat_id, path, caption, reply_markup=None, width=None, height=None, duration=None):
+        """path — локальний файл або file_id уже завантаженого в Telegram відео."""
+        if not os.path.exists(path):
+            return self.call("sendVideo", chat_id=chat_id, video=path, caption=caption, parse_mode="HTML",
+                             reply_markup=reply_markup, supports_streaming="true")
         return self.call("sendVideo", files={"video": path}, http_timeout=600, chat_id=chat_id,
                          caption=caption, parse_mode="HTML", reply_markup=reply_markup,
                          supports_streaming="true", width=width, height=height, duration=duration)

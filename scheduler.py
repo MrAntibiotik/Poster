@@ -101,6 +101,20 @@ class Scheduler:
             ts += 60
         self.db.x("INSERT INTO slots(slot_at, source, state) VALUES (?, 'manual', 'pending')", (ts,))
         log.info("Додано ручний слот %s", fmt_slot(self.cfg, ts))
+        # Якщо шортс уже чекає на пізніший слот — переносимо його на цей (тест «зараз», а не о 19:00)
+        later = self.db.one("SELECT s.slot_at, s.item_id FROM slots s JOIN items i ON i.id=s.item_id "
+                            "WHERE s.state='notified' AND s.slot_at>? AND i.status IN ('notified','approved') "
+                            "ORDER BY s.slot_at LIMIT 1", (ts,))
+        if later:
+            with self.db.tx():
+                self.db.conn.execute("UPDATE slots SET state='pending', item_id=NULL WHERE slot_at=?",
+                                     (later["slot_at"],))
+                self.db.conn.execute("UPDATE slots SET state='notified', item_id=? WHERE slot_at=?",
+                                     (later["item_id"], ts))
+                self.db.conn.execute("UPDATE items SET slot_at=? WHERE id=?", (ts, later["item_id"]))
+            log.info("#%s перенесено зі слоту %s на ручний %s", later["item_id"],
+                     fmt_slot(self.cfg, later["slot_at"]), fmt_slot(self.cfg, ts))
+            self.app.bot.refresh(later["item_id"])
         return ts
 
     def upcoming(self, now: int, limit: int = 6) -> list[dict]:
@@ -175,6 +189,8 @@ class Scheduler:
 
     # ---------- сповіщення за годину ----------
     def process_notifications(self, now: int) -> None:
+        if self.db.get("paused") == "1":
+            return  # пауза: нові шортси не надсилаються, слоти минають порожніми
         lead = int(self.cfg["notify_before_minutes"]) * 60
         min_lead = int(self.cfg["min_notify_lead_minutes"]) * 60
         for s in self.db.q("SELECT * FROM slots WHERE state='pending' AND slot_at>? AND slot_at<=? "
@@ -218,7 +234,7 @@ class Scheduler:
             return
         self.db.set("daily_report_day", day)
         from reports import daily_report
-        self.app.bot.send(daily_report(self.app, now), html_mode=True)
+        self.app.bot.send(daily_report(self.app, now), html_mode=True, to="all")
 
     def maybe_stats(self, now: int) -> None:
         if self._stats_thread and self._stats_thread.is_alive():

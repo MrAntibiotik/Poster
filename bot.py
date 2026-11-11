@@ -1,6 +1,10 @@
-"""Telegram-бот: сповіщення-відео з кнопками підтвердження, команди, службові повідомлення.
+"""Telegram-бот: сповіщення-відео з кнопками підтвердження, команди, доступ для кількох людей.
 
-Бот відповідає ЛИШЕ на chat_id з налаштувань.
+Ролі:
+  admin  — отримує все й керує (кнопки під шортсами, команди, запити на доступ);
+           головні адміністратори задаються в .env (TELEGRAM_CHAT_ID, можна кілька через кому);
+  viewer — отримує шортси (без кнопок), опубліковані посилання, звіти;
+  pending/blocked — запит на доступ / відхилено. Усіх інших бот ігнорує.
 """
 from __future__ import annotations
 
@@ -20,19 +24,42 @@ log = logging.getLogger("bot")
 esc = html.escape
 CAPTION_LIMIT = 1024
 
-HELP = (
+HELP_ADMIN = (
     "🤖 <b>poster</b> — автопублікація шортсів\n\n"
+    "Кнопки внизу екрана — основне керування. Команди:\n"
     "/queue — черга\n"
-    "/status — найближчі слоти\n"
+    "/status — найближчі слоти й доступи\n"
     "/report — підсумок за сьогодні\n"
+    "/testslot [хв] — позаплановий слот через N хв (типово 10)\n"
+    "/pause, /resume — призупинити / відновити розклад\n"
     "/retry N — повторити невдалі платформи для шортса #N\n"
-    "/testslot [хв] — позаплановий слот через N хв (типово 10) для тесту\n"
+    "/users — хто має доступ до бота\n"
     "/cancel — скасувати введення назви"
 )
+HELP_VIEWER = (
+    "🤖 <b>poster</b>\n\nВи отримуватимете шортси перед публікацією, посилання на пости та звіти.\n"
+    "/queue — черга\n/status — найближчі слоти\n/report — підсумок дня"
+)
+
+BTN = {
+    "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
+    "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
+    "👥 Доступ": "/users", "❓ Довідка": "/help",
+}
+VIEWER_CMDS = {"/start", "/help", "/queue", "/status", "/report"}
 
 
 def visible_len(text: str) -> int:
     return len(html.unescape(re.sub(r"<[^>]+>", "", text)))
+
+
+def parse_ids(value: str) -> list[int]:
+    return [int(x) for x in re.findall(r"-?\d+", value or "")]
+
+
+def user_name(u: dict) -> str:
+    name = " ".join(x for x in (u.get("first_name"), u.get("last_name")) if x) or "без імені"
+    return f"{name} (@{u['username']})" if u.get("username") else name
 
 
 class Bot:
@@ -41,17 +68,62 @@ class Bot:
         self.cfg = app.cfg
         self.db = app.db
         self.tg = TelegramAPI(self.cfg["secrets"]["TELEGRAM_BOT_TOKEN"])
-        chat = self.cfg["secrets"]["TELEGRAM_CHAT_ID"]
-        if not chat:
+        self.owners = parse_ids(self.cfg["secrets"]["TELEGRAM_CHAT_ID"])
+        if not self.owners:
             raise TelegramError("Не задано TELEGRAM_CHAT_ID")
-        self.chat_id = int(chat)
+        bot_id = self.cfg["secrets"]["TELEGRAM_BOT_TOKEN"].split(":")[0]
+        for cid in self.owners:
+            if str(cid) == bot_id:
+                raise TelegramError("TELEGRAM_CHAT_ID — це id самого бота; потрібен ваш id (@userinfobot)")
+            u = self.db.user(cid)
+            if not u or u["role"] != "admin":
+                self.db.set_user(cid, "admin", (u or {}).get("name") or "власник")
+
+    # ================= ролі =================
+    @property
+    def chat_id(self) -> int:  # головний адміністратор
+        return self.owners[0]
+
+    def admins(self) -> list[int]:
+        ids = list(self.owners)
+        ids += [u["chat_id"] for u in self.db.users("admin") if u["chat_id"] not in ids]
+        return ids
+
+    def recipients(self) -> list[int]:
+        ids = self.admins()
+        ids += [u["chat_id"] for u in self.db.users("viewer") if u["chat_id"] not in ids]
+        return ids
+
+    def role(self, chat_id: int) -> str | None:
+        if chat_id in self.owners:
+            return "admin"
+        u = self.db.user(chat_id)
+        return u["role"] if u else None
+
+    def paused(self) -> bool:
+        return self.db.get("paused") == "1"
+
+    def reply_keyboard(self, chat_id: int) -> dict:
+        if self.role(chat_id) == "admin":
+            pause = "▶️ Продовжити" if self.paused() else "⏸ Пауза"
+            rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["🧪 Тест-слот", pause, "👥 Доступ"]]
+        else:
+            rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"]]
+        return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
+                "is_persistent": True}
 
     # ================= службові повідомлення =================
-    def send(self, text: str, html_mode: bool = False) -> None:
+    def say(self, chat_id: int, text: str, html_mode: bool = True, reply_markup=None):
         try:
-            self.tg.send_message(self.chat_id, text if html_mode else esc(text))
+            return self.tg.send_message(chat_id, text if html_mode else esc(text), reply_markup=reply_markup)
         except TelegramError as e:
-            log.error("Не вдалося надіслати повідомлення в Telegram: %s", e)
+            log.error("Не вдалося надіслати повідомлення в Telegram (%s): %s", chat_id, e)
+            return None
+
+    def send(self, text: str, html_mode: bool = False, to: str = "admins", keyboard: bool = False) -> None:
+        """to: 'admins' — службові повідомлення; 'all' — також глядачам (звіти, перегляди)."""
+        for cid in (self.recipients() if to == "all" else self.admins()):
+            self.say(cid, text, html_mode, self.reply_keyboard(cid) if keyboard else None)
 
     def notify_reauth(self, key: str, reason: str) -> None:
         k = f"reauth_{key}"
@@ -61,7 +133,8 @@ class Bot:
         self.db.set(k, now_ts())
         hint = self.app.platforms[key].reauth_hint if key in self.app.platforms else f"python poster.py auth {key}"
         self.send(f"🔑 <b>Потрібна повторна авторизація: {NAMES[key]}</b>\n"
-                  f"Причина: {esc(reason[:300])}\n\nНа ПК виконайте:\n<code>{esc(hint)}</code>", html_mode=True)
+                  f"Причина: {esc(reason[:300])}\n\nНа ПК: панель керування → {NAMES[key]} → «Авторизувати»\n"
+                  f"або команда <code>{esc(hint)}</code>", html_mode=True)
 
     # ================= сповіщення про шортс =================
     def _meta(self, item: dict) -> PostMeta:
@@ -72,9 +145,7 @@ class Bot:
             return PostMeta(yt_title=item["title_override"] or Path(item["mp4"]).stem)
 
     def _platform_line(self, item: dict) -> str:
-        parts = []
-        for p in enabled_platforms(self.cfg):
-            parts.append(f"{SHORT[p]} {'🚫' if p in item['disabled'] else '✅'}")
+        parts = [f"{SHORT[p]} {'🚫' if p in item['disabled'] else '✅'}" for p in enabled_platforms(self.cfg)]
         return " ".join(parts) or "—"
 
     def _status_block(self, item: dict) -> str:
@@ -165,40 +236,71 @@ class Bot:
         return {"inline_keyboard": rows}
 
     def notify_item(self, item_id: int) -> None:
-        """Надсилає сам шортс (відеоповідомлення) + другим повідомленням тексти."""
+        """Надсилає сам шортс (відеоповідомлення) + тексти всім отримувачам; кнопки — лише адміністраторам."""
         item = self.db.get_item(item_id)
         meta = self._meta(item)
-        caption, kb = self.caption(item, meta), self.keyboard(item)
-        is_text = 0
+        caption, kb, texts = self.caption(item, meta), self.keyboard(item), self.texts(item, meta)
+        admins = self.admins()
+        self.db.clear_tg_msgs(item_id)
+        video, info, file_id, video_error = None, {}, None, None
         try:
             video = media.telegram_copy(item["mp4"], self.cfg)
             info = media.probe(video, self.cfg["ffprobe"])
-            msg = self.tg.send_video(self.chat_id, video, caption, kb, width=info.get("width"),
-                                     height=info.get("height"), duration=info.get("duration"))
-        except (media.MediaError, TelegramError, OSError) as e:
-            log.error("Не вдалося надіслати відео #%s: %s", item_id, e)
-            msg = self.tg.send_message(self.chat_id, caption, reply_markup=kb)
-            self.send(f"⚠️ Відео #{item_id} не вдалося надіслати в чат: {e}")
-            is_text = 1
-        text_msg = self.tg.send_message(self.chat_id, self.texts(item, meta), reply_to=msg["message_id"])
-        self.db.update_item(item_id, tg_msg=msg["message_id"], tg_msg_is_text=is_text,
-                            tg_text_msg=text_msg["message_id"] if text_msg else None)
+        except (media.MediaError, OSError) as e:
+            video_error = e
+        delivered_admin = False
+        for cid in self.recipients():
+            is_admin = cid in admins
+            try:
+                is_text, msg = 0, None
+                if video_error is None:
+                    try:
+                        msg = self.tg.send_video(cid, file_id or video, caption, kb if is_admin else None,
+                                                 width=info.get("width"), height=info.get("height"),
+                                                 duration=info.get("duration"))
+                        file_id = file_id or ((msg or {}).get("video") or {}).get("file_id")
+                    except TelegramError as e:
+                        video_error = e
+                if msg is None:
+                    log.error("Не вдалося надіслати відео #%s: %s", item_id, video_error)
+                    msg = self.tg.send_message(cid, caption, reply_markup=kb if is_admin else None)
+                    if is_admin:
+                        self.say(cid, f"⚠️ Відео #{item_id} не вдалося надіслати в чат: {esc(str(video_error))}")
+                    is_text = 1
+                text_msg = self.tg.send_message(cid, texts, reply_to=msg["message_id"])
+                self.db.set_tg_msg(item_id, cid, msg["message_id"], (text_msg or {}).get("message_id"), is_text)
+                if is_admin:
+                    delivered_admin = True
+                    if cid == self.chat_id:
+                        self.db.update_item(item_id, tg_msg=msg["message_id"], tg_msg_is_text=is_text,
+                                            tg_text_msg=(text_msg or {}).get("message_id"))
+            except TelegramError as e:
+                log.error("Сповіщення #%s для %s не доставлено: %s", item_id, cid, e)
+        if not delivered_admin:
+            raise TelegramError("сповіщення не доставлено жодному адміністратору")
 
     def refresh(self, item_id: int, texts: bool = False) -> None:
         item = self.db.get_item(item_id)
-        if not item or not item["tg_msg"]:
+        if not item:
+            return
+        rows = self.db.tg_msgs(item_id)
+        if not rows:
             return
         meta = self._meta(item)
-        try:
-            cap, kb = self.caption(item, meta), self.keyboard(item)
-            if item["tg_msg_is_text"]:
-                self.tg.edit_text(self.chat_id, item["tg_msg"], cap, kb)
-            else:
-                self.tg.edit_caption(self.chat_id, item["tg_msg"], cap, kb)
-            if texts and item["tg_text_msg"]:
-                self.tg.edit_text(self.chat_id, item["tg_text_msg"], self.texts(item, meta))
-        except TelegramError as e:
-            log.warning("Не вдалося оновити повідомлення #%s: %s", item_id, e)
+        cap, kb = self.caption(item, meta), self.keyboard(item)
+        txt = self.texts(item, meta) if texts else None
+        admins = set(self.admins())
+        for r in rows:
+            markup = kb if r["chat_id"] in admins else None
+            try:
+                if r["is_text"]:
+                    self.tg.edit_text(r["chat_id"], r["msg_id"], cap, markup)
+                else:
+                    self.tg.edit_caption(r["chat_id"], r["msg_id"], cap, markup)
+                if txt and r["text_msg_id"]:
+                    self.tg.edit_text(r["chat_id"], r["text_msg_id"], txt)
+            except TelegramError as e:
+                log.warning("Не вдалося оновити повідомлення #%s у %s: %s", item_id, r["chat_id"], e)
 
     # ================= вхідні оновлення =================
     def poll_once(self, timeout: int = 15) -> None:
@@ -215,32 +317,110 @@ class Bot:
         if "callback_query" in u:
             cq = u["callback_query"]
             chat = ((cq.get("message") or {}).get("chat") or {}).get("id")
-            if chat != self.chat_id:
-                log.warning("Callback від чужого chat_id=%s — ігнорую", chat)
-                self.tg.answer_callback(cq["id"], "⛔")
+            if self.role(chat) != "admin":
+                log.warning("Callback від chat_id=%s без прав адміністратора — ігнорую", chat)
+                self.tg.answer_callback(cq["id"], "⛔ Лише для адміністратора")
                 return
-            self.on_callback(cq)
+            self.on_callback(cq, chat)
         elif "message" in u:
             m = u["message"]
             chat = (m.get("chat") or {}).get("id")
-            if chat != self.chat_id:
-                log.warning("Повідомлення від невідомого chat_id=%s (%s) — ігнорую",
-                            chat, (m.get("from") or {}).get("username"))
+            if (m.get("chat") or {}).get("type", "private") != "private" and chat not in self.recipients():
                 return
-            self.on_message(m)
+            role = self.role(chat)
+            if role in ("admin", "viewer"):
+                self.on_message(m, chat, role)
+            elif role != "blocked":
+                self.access_request(m, chat, role)
 
-    def on_callback(self, cq: dict) -> None:
+    # ---------- доступ ----------
+    def access_request(self, m: dict, chat: int, role: str | None) -> None:
+        if not (m.get("text") or "").startswith("/start"):
+            if role is None:
+                self.say(chat, "Щоб отримати доступ до цього бота, надішліть /start", html_mode=False)
+            return
+        name = user_name(m.get("from") or {})
+        if role == "pending":
+            self.say(chat, "⏳ Запит на доступ уже надіслано власнику. Зачекайте.", html_mode=False)
+            return
+        self.db.set_user(chat, "pending", name)
+        log.info("Запит на доступ від %s (%s)", chat, name)
+        self.say(chat, "📨 Запит на доступ надіслано власнику бота. Ви отримаєте повідомлення, коли його схвалять.",
+                 html_mode=False)
+        kb = {"inline_keyboard": [[
+            {"text": "👁 Сповіщення", "callback_data": f"acc:{chat}:viewer"},
+            {"text": "🛠 Адмін", "callback_data": f"acc:{chat}:admin"},
+            {"text": "❌ Відхилити", "callback_data": f"acc:{chat}:blocked"}]]}
+        for cid in self.admins():
+            self.say(cid, f"👤 <b>Запит на доступ</b>\n{esc(name)}\nchat_id: <code>{chat}</code>\n\n"
+                          "👁 Сповіщення — отримуватиме шортси, посилання і звіти (без керування)\n"
+                          "🛠 Адмін — повне керування", reply_markup=kb)
+
+    def set_access(self, chat: int, role: str, by: int | None = None) -> str:
+        if chat in self.owners:
+            return "Головного адміністратора змінити не можна (він задається в .env)"
+        u = self.db.user(chat)
+        name = (u or {}).get("name") or str(chat)
+        if role == "delete":
+            self.db.del_user(chat)
+            self.say(chat, "🔒 Ваш доступ до бота скасовано.", html_mode=False,
+                     reply_markup={"remove_keyboard": True})
+            return f"🗑 {name}: доступ скасовано"
+        self.db.set_user(chat, role)
+        if role in ("admin", "viewer"):
+            what = "адміністратор (повне керування)" if role == "admin" else "сповіщення та звіти"
+            self.say(chat, f"✅ Доступ надано: {what}.\n\n" + (HELP_ADMIN if role == "admin" else HELP_VIEWER),
+                     reply_markup=self.reply_keyboard(chat))
+            return f"✅ {name}: {'адміністратор' if role == 'admin' else 'глядач'}"
+        return f"❌ {name}: відхилено"
+
+    def users_text(self) -> tuple[str, dict]:
+        lines, rows = ["👥 <b>Доступ до бота</b>"], []
+        titles = {"admin": "🛠 адмін", "viewer": "👁 глядач", "pending": "⏳ запит", "blocked": "🚫 відхилено"}
+        for u in self.db.users():
+            main = " (головний)" if u["chat_id"] in self.owners else ""
+            lines.append(f"{titles.get(u['role'], u['role'])}: {esc(u['name'] or '')} <code>{u['chat_id']}</code>{main}")
+            if u["chat_id"] in self.owners:
+                continue
+            cid, label = u["chat_id"], (u["name"] or str(u["chat_id"]))[:20]
+            if u["role"] in ("pending", "blocked"):
+                rows.append([{"text": f"👁 {label}", "callback_data": f"acc:{cid}:viewer"},
+                             {"text": "🛠 Адмін", "callback_data": f"acc:{cid}:admin"},
+                             {"text": "🗑", "callback_data": f"acc:{cid}:delete"}])
+            else:
+                other = "viewer" if u["role"] == "admin" else "admin"
+                rows.append([{"text": f"{'👁' if other == 'viewer' else '🛠'} {label}", "callback_data": f"acc:{cid}:{other}"},
+                             {"text": "🗑 Прибрати", "callback_data": f"acc:{cid}:delete"}])
+        lines.append("\nЩоб додати людину — хай знайде бота і надішле /start. Запит прийде сюди.")
+        return "\n".join(lines), {"inline_keyboard": rows}
+
+    # ---------- кнопки під повідомленнями ----------
+    def on_callback(self, cq: dict, chat: int) -> None:
         answer = lambda text="", alert=False: self.tg.answer_callback(cq["id"], text, alert)  # noqa: E731
         try:
             action, sid, *rest = (cq.get("data") or "").split(":")
-            item_id = int(sid)
+            target = int(sid)
         except ValueError:
             return answer()
+        if action == "acc" and rest:
+            result = self.set_access(target, rest[0], by=chat)
+            answer(result[:200])
+            try:
+                text, kb = self.users_text()
+                if "Запит на доступ" in ((cq.get("message") or {}).get("text") or ""):
+                    self.tg.edit_text(chat, cq["message"]["message_id"], esc(result))
+                else:
+                    self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
+            except TelegramError as e:
+                log.debug("edit users: %s", e)
+            return
         if action == "noop":
             return answer("Натисніть на платформу нижче, щоб вимкнути/увімкнути її")
+        item_id = target
         item = self.db.get_item(item_id)
+        own = self.db.tg_msg(item_id, chat)
         if (not item or item["status"] not in ("notified", "approved")
-                or cq["message"]["message_id"] != item["tg_msg"]):
+                or not own or cq["message"]["message_id"] != own["msg_id"]):
             return answer("Це сповіщення вже неактуальне", True)
 
         if action == "pub":
@@ -249,7 +429,7 @@ class Bot:
             if item["status"] != "notified":
                 return answer()
             self.db.update_item(item_id, status="approved")
-            self.db.event(item_id, "approved")
+            self.db.event(item_id, "approved", {"by": chat})
             if self.cfg.get("publish_on_approve"):
                 answer("Публікую зараз…")
                 self.app.publisher.start(item_id)
@@ -268,14 +448,14 @@ class Bot:
             self.refresh(item_id)
             answer(f"{NAMES[p]}: {'вимкнено' if p in disabled else 'увімкнено'}")
         elif action == "title":
-            self.db.set("await_title", item_id)
-            self.tg.send_message(self.chat_id, f"✏️ Надішліть нову назву для YouTube (шортс #{item_id}, "
-                                               "до 100 символів). /cancel — скасувати",
+            self.db.set(f"await_title:{chat}", item_id)
+            self.tg.send_message(chat, f"✏️ Надішліть нову назву для YouTube (шортс #{item_id}, "
+                                       "до 100 символів). /cancel — скасувати",
                                  reply_markup={"force_reply": True, "input_field_placeholder": "Нова назва"})
             answer()
         elif action == "regen":
             if not self.cfg.get("regenerate_command"):
-                return answer("Не налаштовано regenerate_command у config.json", True)
+                return answer("Не налаштовано команду перегенерації (панель → Розклад і папки)", True)
             answer("Перегенеровую тексти…")
             threading.Thread(target=self._regen, args=(item_id,), daemon=True).start()
         else:
@@ -301,59 +481,81 @@ class Bot:
         self.db.event(item_id, "edited", "regen")
         self.refresh(item_id, texts=True)
 
-    def on_message(self, m: dict) -> None:
+    # ---------- повідомлення й команди ----------
+    def on_message(self, m: dict, chat: int, role: str) -> None:
         text = (m.get("text") or "").strip()
         if not text:
             return
+        if text in BTN:
+            text = BTN[text]
         if text.startswith("/"):
             cmd, *args = text.split()
-            return self.command(cmd.split("@")[0].lower(), args)
-        await_id = self.db.get("await_title")
+            cmd = cmd.split("@")[0].lower()
+            if role != "admin" and cmd not in VIEWER_CMDS:
+                return self.say(chat, "⛔ Ця дія доступна лише адміністратору.", html_mode=False)
+            return self.command(cmd, args, chat, role)
+        if role != "admin":
+            return self.say(chat, HELP_VIEWER, reply_markup=self.reply_keyboard(chat))
+        await_id = self.db.get(f"await_title:{chat}")
         if await_id:
             item_id = int(await_id)
-            self.db.set("await_title", None)
+            self.db.set(f"await_title:{chat}", None)
             item = self.db.get_item(item_id)
             if not item or item["status"] not in ("notified", "approved"):
-                return self.send("Цей шортс уже неактуальний — назву не змінено.")
+                return self.say(chat, "Цей шортс уже неактуальний — назву не змінено.", html_mode=False)
             title = re.sub(r"\s+", " ", text)[:100]
             edited = [x for x in item["edited"] if x != "назву"] + ["назву"]
             self.db.update_item(item_id, title_override=title, edited=edited)
             self.db.event(item_id, "edited", {"title": title})
             self.refresh(item_id)
             note = " (обрізано до 100 символів)" if len(text) > 100 else ""
-            return self.send(f"✅ Назву для #{item_id} змінено{note}: {title}")
-        self.send(HELP, html_mode=True)
+            return self.say(chat, f"✅ Назву для #{item_id} змінено{note}: {title}", html_mode=False)
+        self.say(chat, HELP_ADMIN, reply_markup=self.reply_keyboard(chat))
 
-    def command(self, cmd: str, args: list[str]) -> None:
+    def command(self, cmd: str, args: list[str], chat: int | None = None, role: str = "admin") -> None:
         app = self.app
+        chat = chat or self.chat_id
+        reply = lambda text, html_mode=True, kb=None: self.say(chat, text, html_mode, kb)  # noqa: E731
         if cmd in ("/start", "/help"):
-            self.send(HELP, html_mode=True)
+            reply(HELP_ADMIN if role == "admin" else HELP_VIEWER, kb=self.reply_keyboard(chat))
         elif cmd == "/cancel":
-            self.db.set("await_title", None)
-            self.send("Скасовано.")
+            self.db.set(f"await_title:{chat}", None)
+            reply("Скасовано.", False)
         elif cmd == "/queue":
-            self.send(app.queue_text(), html_mode=True)
+            reply(app.queue_text())
         elif cmd == "/status":
-            self.send(app.status_text(), html_mode=True)
+            reply(app.status_text())
         elif cmd == "/report":
             from reports import daily_report
-            self.send(daily_report(app), html_mode=True)
+            reply(daily_report(app))
+        elif cmd == "/pause":
+            self.db.set("paused", "1")
+            self.db.event(None, "paused", {"by": chat})
+            self.send("⏸ Розклад призупинено: нові шортси не надсилатимуться, слоти лишатимуться порожніми.\n"
+                      "Уже підтверджені шортси буде опубліковано. Відновити — «▶️ Продовжити».", keyboard=True)
+        elif cmd == "/resume":
+            self.db.set("paused", None)
+            self.db.event(None, "resumed", {"by": chat})
+            self.send("▶️ Розклад відновлено.", keyboard=True)
+        elif cmd == "/users":
+            text, kb = self.users_text()
+            reply(text, kb=kb if kb["inline_keyboard"] else None)
         elif cmd == "/retry":
             if not args or not args[0].lstrip("#").isdigit():
-                return self.send("Використання: /retry N")
+                return reply("Використання: /retry N", False)
             item_id = int(args[0].lstrip("#"))
             item = self.db.get_item(item_id)
             if not item or item["status"] not in ("failed", "posted"):
-                return self.send("Повторити можна лише шортс зі статусом «не опубліковано» або частково опублікований.")
+                return reply("Повторити можна лише шортс зі статусом «не опубліковано» або частково опублікований.", False)
             pending = [p for p in app.publisher.targets(item) if item["results"].get(p, {}).get("status") != "ok"]
             if not pending:
-                return self.send("Усі платформи для цього шортса вже успішні.")
-            self.send(f"🔁 Повторюю #{item_id}: {', '.join(NAMES[p] for p in pending)}")
+                return reply("Усі платформи для цього шортса вже успішні.", False)
+            reply(f"🔁 Повторюю #{item_id}: {', '.join(NAMES[p] for p in pending)}", False)
             app.publisher.start(item_id)
         elif cmd == "/testslot":
             minutes = int(args[0]) if args and args[0].isdigit() else 10
             ts = app.scheduler.add_manual_slot(minutes)
-            self.send(f"🧪 Додано позаплановий слот о {fmt_slot(self.cfg, ts)}. "
-                      "Сповіщення прийде протягом хвилини (якщо черга не порожня).")
+            reply(f"🧪 Додано позаплановий слот о {fmt_slot(self.cfg, ts)}. "
+                  "Сповіщення прийде протягом хвилини (якщо черга не порожня).", False)
         else:
-            self.send(HELP, html_mode=True)
+            reply(HELP_ADMIN if role == "admin" else HELP_VIEWER, kb=self.reply_keyboard(chat))

@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from bot import CAPTION_LIMIT, visible_len  # noqa: E402
 from meta import load_meta, move_pair  # noqa: E402
-from tests.test_flow import FakeTG, FlowTest  # noqa: E402
+from tests.test_flow import FakeTG, FlowBase  # noqa: E402
 
 
 class MetaTest(unittest.TestCase):
@@ -68,7 +68,7 @@ class MetaTest(unittest.TestCase):
         self.assertFalse((self.tmp / "src/a.mp4").exists())
 
 
-class CaptionTest(FlowTest):
+class CaptionTest(FlowBase):
     """Використовує оточення FlowTest (App + FakeTG)."""
 
     def test_caption_limit(self):
@@ -118,7 +118,6 @@ class CaptionTest(FlowTest):
         self.assertIn("неактуальне", self.app.bot.tg.answers[-1])
 
 
-del FlowTest  # щоб тести FlowTest не запускались двічі з цього модуля
 
 if __name__ == "__main__":
     unittest.main()

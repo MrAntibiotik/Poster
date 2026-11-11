@@ -75,6 +75,8 @@ class App:
             who = f"#{s['item_id']}" if s["item_id"] else "—"
             src = " (ручний)" if s["source"] == "manual" else ""
             lines.append(f"• {fmt_slot(self.cfg, s['slot_at'], now)}{src}: {who}")
+        if self.db.get("paused") == "1":
+            lines.append("⏸ <b>Розклад на паузі</b> — нові шортси не надсилаються")
         lines.append(f"\n📦 У черзі: {len(self.db.queue())}")
         lines.append("Платформи: " + ", ".join(NAMES[p] for p in enabled_platforms(self.cfg)))
         tt = self.cfg["platforms"]["tiktok"]
@@ -108,8 +110,12 @@ def run_service(cfg: dict) -> int:
     app = App(cfg)
     log.info("poster запущено. Платформи: %s. dry_run=%s", list(app.platforms), cfg.get("dry_run"))
     app.scheduler.scan()
-    app.bot.send(f"🟢 poster запущено. У черзі: {len(app.db.queue())}. "
-                 f"Найближчий слот: " + (fmt_slot(cfg, s[0]["slot_at"]) if (s := app.scheduler.upcoming(now_ts(), 1)) else "—"))
+    app.scheduler.ensure_slots(now_ts())
+    app.db.set("control", None)
+    nxt = app.scheduler.upcoming(now_ts(), 1)
+    paused = " ⏸ Розклад на паузі." if app.db.get("paused") == "1" else ""
+    app.bot.send(f"🟢 poster запущено. У черзі: {len(app.db.queue())}. Найближчий слот: "
+                 f"{fmt_slot(cfg, nxt[0]['slot_at']) if nxt else '—'}.{paused}", keyboard=True)
     last_tick = 0.0
     errors = 0
     while True:
@@ -119,6 +125,11 @@ def run_service(cfg: dict) -> int:
                 app.scheduler.tick()
             app.bot.poll_once(timeout=10)
             errors = 0
+            if app.db.get("control") == "stop":  # команда з панелі керування
+                app.db.set("control", None)
+                log.info("Зупинка за командою з панелі керування")
+                app.bot.send("🔴 poster зупинено з панелі керування.")
+                return 0
         except KeyboardInterrupt:
             log.info("Зупинено користувачем")
             return 0

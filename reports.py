@@ -93,7 +93,7 @@ def send_stats(app, item: dict) -> None:
         else:
             lines.append(f"{SHORT[p]} {name}: {esc(v)}")
     lines.append(f"Разом: <b>{total:,}</b>".replace(",", " "))
-    app.bot.send("\n".join(lines), html_mode=True)
+    app.bot.send("\n".join(lines), html_mode=True, to="all")
     try:
         data = read_json(item["json"])
         data.setdefault("posting", {})["views_24h"] = views

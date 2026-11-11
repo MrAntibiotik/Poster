@@ -48,6 +48,22 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 
+CREATE TABLE IF NOT EXISTS users (
+    chat_id   INTEGER PRIMARY KEY,
+    name      TEXT,
+    role      TEXT NOT NULL DEFAULT 'pending',
+    added_at  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS tg_msgs (
+    item_id     INTEGER NOT NULL,
+    chat_id     INTEGER NOT NULL,
+    msg_id      INTEGER NOT NULL,
+    text_msg_id INTEGER,
+    is_text     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (item_id, chat_id)
+);
+
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -156,6 +172,42 @@ class DB:
     def set_slot(self, slot_at: int, **fields) -> None:
         sets = ", ".join(f"{k}=?" for k in fields)
         self.x(f"UPDATE slots SET {sets} WHERE slot_at=?", (*fields.values(), slot_at))
+
+    # ---- користувачі Telegram ----
+    ROLES = ("admin", "viewer", "pending", "blocked")
+
+    def users(self, *roles: str) -> list[dict]:
+        if roles:
+            marks = ",".join("?" * len(roles))
+            return self.q(f"SELECT * FROM users WHERE role IN ({marks}) ORDER BY added_at", roles)
+        return self.q("SELECT * FROM users ORDER BY role, added_at")
+
+    def user(self, chat_id: int) -> dict | None:
+        return self.one("SELECT * FROM users WHERE chat_id=?", (int(chat_id),))
+
+    def set_user(self, chat_id: int, role: str, name: str | None = None) -> None:
+        if role not in self.ROLES:
+            raise ValueError(role)
+        self.x("INSERT INTO users(chat_id, name, role, added_at) VALUES (?,?,?,?) "
+               "ON CONFLICT(chat_id) DO UPDATE SET role=excluded.role, name=COALESCE(excluded.name, users.name)",
+               (int(chat_id), name, role, now_ts()))
+
+    def del_user(self, chat_id: int) -> None:
+        self.x("DELETE FROM users WHERE chat_id=?", (int(chat_id),))
+
+    # ---- повідомлення Telegram по шортсах ----
+    def tg_msgs(self, item_id: int) -> list[dict]:
+        return self.q("SELECT * FROM tg_msgs WHERE item_id=?", (item_id,))
+
+    def tg_msg(self, item_id: int, chat_id: int) -> dict | None:
+        return self.one("SELECT * FROM tg_msgs WHERE item_id=? AND chat_id=?", (item_id, int(chat_id)))
+
+    def set_tg_msg(self, item_id: int, chat_id: int, msg_id: int, text_msg_id: int | None, is_text: int) -> None:
+        self.x("INSERT OR REPLACE INTO tg_msgs(item_id, chat_id, msg_id, text_msg_id, is_text) VALUES (?,?,?,?,?)",
+               (item_id, int(chat_id), msg_id, text_msg_id, is_text))
+
+    def clear_tg_msgs(self, item_id: int) -> None:
+        self.x("DELETE FROM tg_msgs WHERE item_id=?", (item_id,))
 
     # ---- events / kv ----
     def event(self, item_id: int | None, kind: str, details=None) -> None:

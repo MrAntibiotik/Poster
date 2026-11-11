@@ -31,11 +31,13 @@ class FakeTG:
         return {"message_id": self.msg_id}
 
     def send_video(self, chat, path, caption, kb=None, **kw):
-        self.sent.append(("video", caption, kb, path))
-        return self._msg()
+        self.sent.append(("video", caption, kb, path, chat))
+        m = self._msg()
+        m["video"] = {"file_id": f"FILE{m['message_id']}"}
+        return m
 
     def send_message(self, chat, text, reply_markup=None, reply_to=None, **kw):
-        self.sent.append(("text", text, reply_markup, reply_to))
+        self.sent.append(("text", text, reply_markup, reply_to, chat))
         return self._msg()
 
     def edit_caption(self, chat, mid, caption, kb=None):
@@ -48,7 +50,9 @@ class FakeTG:
         self.answers.append(text)
 
 
-class FlowTest(unittest.TestCase):
+class FlowBase(unittest.TestCase):
+    """Оточення: App з підставним Telegram, dry_run, керований час."""
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         cfg = {
@@ -107,10 +111,11 @@ class FlowTest(unittest.TestCase):
         return d / f"{name}.mp4"
 
     def press(self, data, item):
-        self.app.bot.on_callback({"id": "cb", "data": data, "message": {"message_id": item["tg_msg"],
-                                                                         "chat": {"id": 42}}})
+        self.app.bot.handle({"update_id": 1, "callback_query": {
+            "id": "cb", "data": data, "message": {"message_id": item["tg_msg"], "chat": {"id": 42}}}})
 
-    # ------------------------------------------------------------------
+
+class FlowTest(FlowBase):
     def test_full_path(self):
         self.make_short("a")
         self.make_short("b", game="Dota")
@@ -135,7 +140,7 @@ class FlowTest(unittest.TestCase):
         item = self.app.db.items("status='notified'")[0]
         self.press(f"tog:{item['id']}:facebook", item)
         self.press(f"title:{item['id']}", item)
-        self.app.bot.on_message({"text": "Нова назва", "chat": {"id": 42}})
+        self.app.bot.handle({"update_id": 2, "message": {"text": "Нова назва", "chat": {"id": 42, "type": "private"}}})
         self.press(f"pub:{item['id']}", item)
         item = self.app.db.get_item(item["id"])
         self.assertEqual(item["status"], "approved")
