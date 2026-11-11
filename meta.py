@@ -167,6 +167,36 @@ def auto_meta_json(mp4: Path, game: str, cfg: dict) -> dict:
     }
 
 
+def parse_hashtags(text: str) -> list[str]:
+    """«wot, #танки shorts» -> ['#wot', '#танки', '#shorts']; «-» -> []."""
+    text = (text or "").strip()
+    if text in ("-", "—", "0", "без", "нема", "ні"):
+        return []
+    words = [w.strip().lstrip("#") for w in re.split(r"[\s,;]+", text)]
+    return _hashtags([re.sub(r"[^\w]", "", w, flags=re.UNICODE) for w in words if w])
+
+
+def apply_manual(json_path: str | Path, title: str, hashtags: list[str]) -> None:
+    """Назва й хештеги, введені в Telegram, — для всіх платформ (записуються в json)."""
+    data = read_json(json_path)
+    meta = load_meta(json_path)
+    line = " ".join(hashtags)
+
+    def strip_tags(text: str) -> str:
+        return re.sub(r"\s*#[\w\d_]+", "", text or "").strip()
+
+    desc = strip_tags(meta.yt_description)
+    yt = data.get("youtube") if isinstance(data.get("youtube"), dict) else {}
+    yt.update({"title": title, "description": desc, "hashtags": hashtags,
+               "tags": [t.lstrip("#") for t in hashtags]})
+    data["youtube"] = yt
+    data["tiktok"] = {"caption": f"{title} {line}".strip()}
+    data["instagram"] = {"caption": f"{title}\n\n{line}".strip()}
+    data.pop("facebook", None)
+    data["manual_texts"] = True
+    write_json(json_path, data)
+
+
 def move_pair(mp4: str, json_path: str, dest_dir: Path) -> tuple[str, str]:
     """Переносить mp4 + json у dest_dir, уникаючи конфліктів імен."""
     dest_dir.mkdir(parents=True, exist_ok=True)

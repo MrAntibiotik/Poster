@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 import threading
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import media
 from config import NAMES, PLATFORMS, SHORT, enabled_platforms, fmt_slot, now_ts
-from meta import PostMeta, load_meta
+from meta import PostMeta, apply_manual, load_meta, parse_hashtags
 from telegram_api import TelegramAPI, TelegramError
 
 log = logging.getLogger("bot")
@@ -196,7 +197,9 @@ class Bot:
         head = f"🎬 <b>{esc(meta.yt_title)}</b>"
         tags = esc(" ".join(meta.hashtags))
         hint = ""
-        if item["status"] in ("notified", "approved") and "назву" not in item["edited"]:
+        if item["status"] == "notified" and self.cfg.get("ask_texts_before_publish"):
+            hint = "\n✍️ Натисніть «🚀 Опублікувати» — бот попросить назву й хештеги"
+        elif item["status"] in ("notified", "approved") and "назву" not in item["edited"]:
             if meta.ai:
                 hint = "\n🤖 Тексти від ШІ — перевірте; інший варіант: «🔄 Перегенерувати тексти»"
             elif meta.auto:
@@ -423,6 +426,8 @@ class Bot:
             return
         if action == "noop":
             return answer("Натисніть на платформу нижче, щоб вимкнути/увімкнути її")
+        if action in ("keep", "dlgx"):
+            return self.dialog_button(chat, target, action, rest, answer)
         item_id = target
         item = self.db.get_item(item_id)
         own = self.db.tg_msg(item_id, chat)
@@ -435,6 +440,9 @@ class Bot:
                 return answer("Усі платформи вимкнено — нічого публікувати", True)
             if item["status"] != "notified":
                 return answer()
+            if self.cfg.get("ask_texts_before_publish"):
+                answer("Введіть назву й хештеги")
+                return self.dialog_start(chat, item_id)
             self.db.update_item(item_id, status="approved")
             self.db.event(item_id, "approved", {"by": chat})
             if self.cfg.get("publish_on_approve"):
@@ -472,6 +480,102 @@ class Bot:
                 return answer("Підключіть безкоштовне ШІ: панель керування → 🤖 ШІ", True)
         else:
             answer()
+
+    # ---------- діалог «назва + хештеги» перед публікацією ----------
+    def dialog_get(self, chat: int) -> dict | None:
+        raw = self.db.get(f"dialog:{chat}")
+        try:
+            return json.loads(raw) if raw else None
+        except ValueError:
+            return None
+
+    def dialog_set(self, chat: int, state: dict | None) -> None:
+        self.db.set(f"dialog:{chat}", json.dumps(state, ensure_ascii=False) if state else None)
+
+    def dialog_start(self, chat: int, item_id: int) -> None:
+        item = self.db.get_item(item_id)
+        meta = self._meta(item)
+        self.dialog_set(chat, {"item": item_id, "step": "title"})
+        kb = {"inline_keyboard": [
+            [{"text": f"Залишити: {meta.yt_title[:40]}", "callback_data": f"keep:{item_id}:title"}],
+            [{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}"}]]}
+        self.say(chat, f"✍️ <b>Крок 1/2.</b> Надішліть <b>назву</b> для шортса #{item_id} (до 100 символів).\n"
+                       f"Зараз: <i>{esc(meta.yt_title)}</i>", reply_markup=kb)
+
+    def _ask_tags(self, chat: int, item_id: int) -> None:
+        meta = self._meta(self.db.get_item(item_id))
+        current = " ".join(meta.hashtags) or "—"
+        kb = {"inline_keyboard": [
+            [{"text": f"Залишити: {current[:40]}", "callback_data": f"keep:{item_id}:tags"}],
+            [{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}"}]]}
+        self.say(chat, "#️⃣ <b>Крок 2/2.</b> Надішліть <b>хештеги</b> через пробіл — можна з # або без "
+                       "(напр.: <code>wot танки shorts</code>). «-» — без хештегів.", reply_markup=kb)
+
+    def _dialog_item(self, chat: int, item_id: int) -> dict | None:
+        item = self.db.get_item(item_id)
+        if not item or item["status"] != "notified":
+            self.dialog_set(chat, None)
+            self.say(chat, "Цей шортс уже неактуальний (слот минув або його опубліковано).", html_mode=False)
+            return None
+        return item
+
+    def dialog_answer(self, chat: int, text: str) -> None:
+        st = self.dialog_get(chat)
+        item = self._dialog_item(chat, st["item"])
+        if not item:
+            return
+        if st["step"] == "title":
+            title = re.sub(r"\s+", " ", text).strip()[:100]
+            if not title:
+                return self.say(chat, "Назва порожня — надішліть текст.", html_mode=False)
+            self.dialog_set(chat, {**st, "step": "tags", "title": title})
+            return self._ask_tags(chat, item["id"])
+        tags = parse_hashtags(text)
+        if text.strip() not in ("-", "—") and not tags:
+            return self.say(chat, "Не бачу хештегів — надішліть слова через пробіл або «-».", html_mode=False)
+        self._dialog_finish(chat, item, st.get("title"), tags)
+
+    def dialog_button(self, chat: int, item_id: int, action: str, rest: list, answer) -> None:
+        st = self.dialog_get(chat)
+        if action == "dlgx":
+            self.dialog_set(chat, None)
+            answer("Скасовано")
+            return self.say(chat, "Скасовано. Шортс чекає на «🚀 Опублікувати» до свого слоту.", html_mode=False)
+        if not st or st.get("item") != item_id:
+            return answer("Цей запит уже неактуальний", True)
+        item = self._dialog_item(chat, item_id)
+        if not item:
+            return answer()
+        meta = self._meta(item)
+        if rest and rest[0] == "title" and st["step"] == "title":
+            self.dialog_set(chat, {**st, "step": "tags", "title": meta.yt_title})
+            answer("Назву залишено")
+            return self._ask_tags(chat, item_id)
+        if rest and rest[0] == "tags" and st["step"] == "tags":
+            answer("Хештеги залишено")
+            return self._dialog_finish(chat, item, st.get("title"), meta.hashtags)
+        answer()
+
+    def _dialog_finish(self, chat: int, item: dict, title: str | None, tags: list[str]) -> None:
+        item_id = item["id"]
+        title = title or self._meta(item).yt_title
+        try:
+            apply_manual(item["json"], title, tags)
+        except Exception as e:  # noqa: BLE001
+            log.error("Не вдалося записати тексти #%s: %s", item_id, e)
+            return self.say(chat, f"❌ Не вдалося зберегти тексти: {e}", html_mode=False)
+        self.dialog_set(chat, None)
+        edited = [x for x in item["edited"] if x not in ("назву", "тексти")] + ["назву", "хештеги"]
+        self.db.update_item(item_id, title_override=None, edited=edited, status="approved")
+        self.db.event(item_id, "approved", {"by": chat, "title": title, "hashtags": tags})
+        if len(tags) > 15:
+            self.say(chat, "⚠️ YouTube ігнорує всі хештеги, якщо їх більше 15.", html_mode=False)
+        when = "зараз" if self.cfg.get("publish_on_approve") else f"о {fmt_slot(self.cfg, item['slot_at'])}"
+        self.say(chat, f"✅ <b>Готово!</b> Публікація {when}.\n🎬 {esc(title)}\n{esc(' '.join(tags)) or 'без хештегів'}")
+        if self.cfg.get("publish_on_approve"):
+            self.app.publisher.start(item_id)
+        else:
+            self.refresh(item_id, texts=True)
 
     def _regen_ai(self, item_id: int) -> None:
         import ai
@@ -524,6 +628,8 @@ class Bot:
             return self.command(cmd, args, chat, role)
         if role != "admin":
             return self.say(chat, HELP_VIEWER, reply_markup=self.reply_keyboard(chat))
+        if self.dialog_get(chat):
+            return self.dialog_answer(chat, text)
         await_id = self.db.get(f"await_title:{chat}")
         if await_id:
             item_id = int(await_id)
@@ -548,6 +654,7 @@ class Bot:
             reply(HELP_ADMIN if role == "admin" else HELP_VIEWER, kb=self.reply_keyboard(chat))
         elif cmd == "/cancel":
             self.db.set(f"await_title:{chat}", None)
+            self.db.set(f"dialog:{chat}", None)
             reply("Скасовано.", False)
         elif cmd == "/queue":
             reply(app.queue_text())

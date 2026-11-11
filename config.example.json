@@ -4,6 +4,7 @@
   "notify_before_minutes": 60,
   "min_notify_lead_minutes": 5,
   "publish_on_approve": false,
+  "ask_texts_before_publish": true,
   "catchup_minutes": 120,
   "max_skips": 3,
 

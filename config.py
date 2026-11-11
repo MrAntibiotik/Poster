@@ -25,6 +25,8 @@ DEFAULTS: dict = {
     "notify_before_minutes": 60,
     "min_notify_lead_minutes": 5,
     "publish_on_approve": False,
+    # Після «🚀 Опублікувати» бот питає назву й хештеги; публікація — лише після відповіді
+    "ask_texts_before_publish": False,
     "catchup_minutes": 120,
     "max_skips": 3,
     "ready_status": "ready_to_post",

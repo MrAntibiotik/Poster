@@ -302,7 +302,8 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
         <div><label class="f">Пауза між спробами, с</label><input type="number" min="0" data-set="retry.pause_seconds"></div>
         <div><label class="f">Часовий пояс</label><input type="text" data-set="timezone"></div>
       </div>
-      <label class="check"><input type="checkbox" data-set="publish_on_approve"> Публікувати одразу після натискання «Опублікувати» (а не в час слоту)</label>
+      <label class="check"><input type="checkbox" data-set="ask_texts_before_publish"> Після «🚀 Опублікувати» бот питає <b>назву й хештеги</b> — публікація лише після відповіді</label>
+      <label class="check"><input type="checkbox" data-set="publish_on_approve"> Публікувати одразу після підтвердження (а не в час слоту)</label>
     </div>
     <div class="card"><h2>🏷 Тексти для відео без json</h2>
       <p class="muted small">Якщо поруч із відео немає json, програма створить його сама: <b>назва — з імені файлу</b>
