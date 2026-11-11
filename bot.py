@@ -513,6 +513,8 @@ class Bot:
             except TelegramError as e:
                 log.debug("edit platforms: %s", e)
             return
+        if action in ("qp", "qi", "qt", "qf", "qd"):
+            return self.queue_button(chat, target, action, cq, answer)
         if action in ("time", "tk", "ts", "tc", "tn", "tx"):
             return self.time_button(chat, target, action, rest, answer)
         item_id = target
@@ -579,10 +581,10 @@ class Bot:
     def dialog_set(self, chat: int, state: dict | None) -> None:
         self.db.set(f"dialog:{chat}", json.dumps(state, ensure_ascii=False) if state else None)
 
-    def dialog_start(self, chat: int, item_id: int) -> None:
+    def dialog_start(self, chat: int, item_id: int, preset=None) -> None:
         item = self.db.get_item(item_id)
         meta = self._raw_meta(item)
-        self.dialog_set(chat, {"item": item_id, "step": "title"})
+        self.dialog_set(chat, {"item": item_id, "step": "title", "preset": preset})
         kb = {"inline_keyboard": [
             [{"text": f"Залишити: {meta.yt_title[:40]}", "callback_data": f"keep:{item_id}:title"}],
             [{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}"}]]}
@@ -601,9 +603,10 @@ class Bot:
         self.say(chat, "#️⃣ <b>Крок 2/2.</b> Надішліть <b>хештеги</b> через пробіл — можна з # або без "
                        "(напр.: <code>wot танки shorts</code>). «-» — без хештегів.", reply_markup=kb)
 
-    def _dialog_item(self, chat: int, item_id: int, allow_approved: bool = False) -> dict | None:
+    def _dialog_item(self, chat: int, item_id: int, allow_approved: bool = False,
+                     allow_queued: bool = False) -> dict | None:
         item = self.db.get_item(item_id)
-        ok = ("notified", "approved") if allow_approved else ("notified",)
+        ok = ("queued",) if allow_queued else ("notified", "approved") if allow_approved else ("notified",)
         if not item or item["status"] not in ok:
             self.dialog_set(chat, None)
             self.say(chat, "Цей шортс уже неактуальний (слот минув або його опубліковано).", html_mode=False)
@@ -612,7 +615,8 @@ class Bot:
 
     def dialog_answer(self, chat: int, text: str) -> None:
         st = self.dialog_get(chat)
-        item = self._dialog_item(chat, st["item"], allow_approved=st.get("mode") == "change")
+        item = self._dialog_item(chat, st["item"], allow_approved=st.get("mode") == "change",
+                                 allow_queued=st.get("mode") == "queue")
         if not item:
             return
         if st["step"] in ("time", "time_custom"):
@@ -662,9 +666,110 @@ class Bot:
         self.db.update_item(item_id, title_override=None, edited=edited)
         if len(tags) > 15:
             self.say(chat, "⚠️ YouTube ігнорує всі хештеги, якщо їх більше 15.", html_mode=False)
-        self.dialog_set(chat, {"item": item_id, "step": "time", "mode": "dialog", "title": title, "tags": tags})
+        preset = (self.dialog_get(chat) or {}).get("preset")
+        st = {"item": item_id, "step": "time", "mode": "dialog", "title": title, "tags": tags}
+        self.dialog_set(chat, st)
         self.refresh(item_id, texts=True)
+        if preset:  # час уже обрали з черги
+            return self._apply_time(chat, self.db.get_item(item_id), st, "now" if preset == "now" else None)
         self._ask_time(chat, item_id, dialog=True)
+
+    # ---------- вибір відео з черги ----------
+    def queue_keyboard(self, page: int = 0, per: int = 8) -> dict | None:
+        plan = self.app.scheduler.projection()
+        if not plan:
+            return None
+        now = now_ts()
+        chunk = plan[page * per:(page + 1) * per]
+        rows = [[{"text": f"#{it['id']} {Path(it['mp4']).stem[:24]} · {fmt_when(self.cfg, ts, now) if ts else '—'}",
+                  "callback_data": f"qi:{it['id']}"}] for it, ts in chunk]
+        nav = []
+        if page > 0:
+            nav.append({"text": "⬅️ Назад", "callback_data": f"qp:{page - 1}"})
+        if (page + 1) * per < len(plan):
+            nav.append({"text": "Далі ➡️", "callback_data": f"qp:{page + 1}"})
+        if nav:
+            rows.append(nav)
+        return {"inline_keyboard": rows}
+
+    def queue_button(self, chat: int, target: int, action: str, cq: dict, answer) -> None:
+        if action == "qp":
+            answer()
+            kb = self.queue_keyboard(target)
+            try:
+                self.tg.edit_text(chat, cq["message"]["message_id"], self.app.queue_text(), kb)
+            except TelegramError as e:
+                log.debug("queue page: %s", e)
+            return
+        item = self.db.get_item(target)
+        if not item or item["status"] != "queued":
+            return answer("Цього відео вже немає в черзі", True)
+        if action == "qi":
+            answer()
+            return self._queue_card(chat, item)
+        if action == "qt":
+            self.dialog_set(chat, {"item": target, "step": "time", "mode": "queue"})
+            answer()
+            return self._ask_time(chat, target, dialog=False)
+        if action == "qf":
+            self.db.update_item(target, qpos=self.db.first_qpos())
+            plan = {it["id"]: ts for it, ts in self.app.scheduler.projection()}
+            when = fmt_when(self.cfg, plan[target]) if plan.get(target) else "—"
+            answer("Першим у черзі")
+            return self.say(chat, f"⬆️ #{target} тепер першим у черзі → <b>{when}</b>")
+        if action == "qd":
+            from meta import move_pair
+            mp4, js = move_pair(item["mp4"], item["json"], Path(self.cfg["paths"]["skipped"]))
+            self.db.update_item(target, status="skipped", mp4=mp4, json=js, note="прибрано вручну")
+            self.db.event(target, "removed", {"by": chat})
+            answer("Прибрано")
+            return self.say(chat, f"🗑 #{target} прибрано з черги — файл у папці skipped.", html_mode=False)
+        answer()
+
+    def _queue_card(self, chat: int, item: dict) -> None:
+        plan = {it["id"]: ts for it, ts in self.app.scheduler.projection()}
+        ts = plan.get(item["id"])
+        meta = self._meta(item)
+        cap = (f"🎬 <b>{esc(meta.yt_title)}</b>\n📦 У черзі #{item['id']} → "
+               f"<b>{fmt_when(self.cfg, ts) if ts else '—'}</b>\nОпублікувати раніше чи пізніше — «🕐 Обрати час».")
+        kb = {"inline_keyboard": [
+            [{"text": "🕐 Обрати час / ⚡ зараз", "callback_data": f"qt:{item['id']}"}],
+            [{"text": "⬆️ Першим у черзі", "callback_data": f"qf:{item['id']}"},
+             {"text": "🗑 Прибрати", "callback_data": f"qd:{item['id']}"}]]}
+        try:
+            video = media.telegram_copy(item["mp4"], self.cfg)
+            info = media.probe(video, self.cfg["ffprobe"])
+            self.tg.send_video(chat, video, cap, kb, width=info.get("width"), height=info.get("height"),
+                               duration=info.get("duration"))
+        except (media.MediaError, TelegramError, OSError) as e:
+            log.warning("Картка #%s без відео: %s", item["id"], e)
+            self.say(chat, cap, reply_markup=kb)
+
+    def _pick_from_queue(self, chat: int, item: dict, choice, answer=None) -> None:
+        """Відео з черги на обраний час (або зараз): сповіщення з кнопками, далі — назва й хештеги."""
+        item_id = item["id"]
+        if choice is None:
+            return self.dialog_set(chat, None)
+        if isinstance(choice, int):
+            try:
+                self.app.scheduler.move_slot(item_id, choice)
+            except ValueError as e:
+                if answer:
+                    answer(str(e), True)
+                return self.say(chat, f"⚠️ {e}. Оберіть інший час.", html_mode=False)
+            if answer:
+                answer("Час обрано")
+        self.db.update_item(item_id, status="notified", note=None)
+        self.db.event(item_id, "picked", {"by": chat, "when": choice})
+        self.dialog_set(chat, None)
+        try:
+            self.notify_item(item_id)
+        except TelegramError as e:
+            log.error("Сповіщення #%s: %s", item_id, e)
+        if self.cfg.get("ask_texts_before_publish"):
+            return self.dialog_start(chat, item_id, preset=choice)
+        st = {"item": item_id, "mode": "dialog"}
+        self._apply_time(chat, self.db.get_item(item_id), st, "now" if choice == "now" else None)
 
     # ---------- вибір часу публікації ----------
     def _ask_time(self, chat: int, item_id: int, dialog: bool) -> None:
@@ -678,19 +783,22 @@ class Bot:
         btns = [{"text": fmt_when(self.cfg, ts, now), "callback_data": f"ts:{item_id}:{ts}"} for ts in free]
         rows += [btns[i:i + 2] for i in range(0, len(btns), 2)]
         extra = [{"text": "⌨️ Свій час", "callback_data": f"tc:{item_id}"}]
-        if dialog or item["status"] == "approved":
+        if dialog or item["status"] in ("approved", "queued"):
             extra.append({"text": "⚡ Зараз", "callback_data": f"tn:{item_id}"})
         rows.append(extra)
         rows.append([{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}" if dialog else f"tx:{item_id}"}])
-        head = "🕐 <b>Крок 3/3. Коли публікуємо?</b>" if dialog else f"🕐 <b>Новий час для шортса #{item_id}</b>"
+        head = ("🕐 <b>Крок 3/3. Коли публікуємо?</b>" if dialog else
+                f"🕐 <b>Коли опублікувати шортс #{item_id}?</b>" if item["status"] == "queued" else
+                f"🕐 <b>Новий час для шортса #{item_id}</b>")
         self.say(chat, f"{head}\nОберіть вільний слот, «Свій час» (напр. <code>завтра 18:30</code>) або «Зараз».",
                  reply_markup={"inline_keyboard": rows})
 
     def time_button(self, chat: int, item_id: int, action: str, rest: list, answer) -> None:
         item = self.db.get_item(item_id)
-        if not item or item["status"] not in ("notified", "approved"):
-            return answer("Цей шортс уже неактуальний", True)
         st = self.dialog_get(chat)
+        from_queue = bool(st and st.get("item") == item_id and st.get("mode") == "queue")
+        if not item or item["status"] not in (("queued",) if from_queue else ("notified", "approved")):
+            return answer("Цей шортс уже неактуальний", True)
         dialog = bool(st and st.get("item") == item_id and st.get("mode") == "dialog")
         if action == "time":
             if st and st.get("item") != item_id:
@@ -732,6 +840,8 @@ class Bot:
     def _apply_time(self, chat: int, item: dict, st: dict, choice, answer=None) -> None:
         """choice: timestamp — новий час; None — залишити; 'now' — опублікувати зараз."""
         item_id = item["id"]
+        if st.get("mode") == "queue":
+            return self._pick_from_queue(chat, item, choice, answer)
         if isinstance(choice, int):
             try:
                 self.app.scheduler.move_slot(item_id, choice)
@@ -860,7 +970,8 @@ class Bot:
             self.db.set(f"dialog:{chat}", None)
             reply("Скасовано.", False)
         elif cmd == "/queue":
-            reply(app.queue_text())
+            kb = self.queue_keyboard(0) if role == "admin" else None
+            reply(app.queue_text() + ("\n\n👇 Оберіть відео, щоб опублікувати його коли захочете" if kb else ""), kb=kb)
         elif cmd == "/status":
             reply(app.status_text())
         elif cmd == "/report":
