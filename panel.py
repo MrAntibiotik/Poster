@@ -676,7 +676,10 @@ def make_handler(panel: Panel):
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                log.debug("Браузер закрив з'єднання до відповіді")
 
         def json(self, data, code: int = 200, extra: dict | None = None):
             self._send(code, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8", extra)

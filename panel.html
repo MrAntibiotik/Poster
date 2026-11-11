@@ -20,7 +20,10 @@ a{color:var(--accent)}
 header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line)}
 .bar{max-width:1100px;margin:0 auto;padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .logo{font-weight:700;font-size:18px;margin-right:auto}
-nav{max-width:1100px;margin:0 auto;padding:0 8px;display:flex;gap:2px;overflow-x:auto}
+nav{max-width:1100px;margin:0 auto;padding:0 8px;display:flex;gap:2px;flex-wrap:wrap}
+@media (max-width:640px){nav{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none} nav::-webkit-scrollbar{display:none}}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
 nav button{border:0;background:none;color:var(--muted);padding:10px 12px;font:inherit;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
 nav button.on{color:var(--text);border-color:var(--accent);font-weight:600}
 main{max-width:1100px;margin:0 auto;padding:16px}
@@ -132,7 +135,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
     </div>
 
     <div class="card"><h2>🧪 Тест</h2>
-      <div class="row">Позаплановий слот через <input id="testMin" type="number" min="6" max="180" value="10" style="width:80px"> хв
+      <div class="row">Позаплановий слот через <input id="testMin" type="number" min="7" max="180" value="10" style="width:80px"> хв
         <button class="btn primary" data-act="testslot">Створити тестовий слот</button>
         <button class="btn" data-act="tg_test">Перевірити зв'язок із Telegram</button></div>
       <p class="muted small">Перший шортс із черги прийде в Telegram протягом хвилини. Бот має бути запущений.</p>
@@ -386,11 +389,14 @@ async function api(path, body){
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
 }
-async function run(fn, btn){
-  if (btn) btn.disabled = true;
+const SLOW = {start: "Запускаю бота…", stop: "Зупиняю бота…", restart: "Перезапускаю бота…"};
+async function run(fn, btn, slow){
+  let label = null;
+  if (btn) { btn.disabled = true; if (slow) { label = btn.innerHTML; btn.innerHTML = '<span class="spin"></span>' + esc(slow); } }
+  if (slow) toast("⏳ " + slow + " Це може тривати до 30 секунд.");
   try { const j = await fn(); if (j && j.message) toast(j.message, "okk"); await refresh(); return j; }
   catch(e){ toast(e.message, "err"); }
-  finally { if (btn) btn.disabled = false; }
+  finally { if (btn) { btn.disabled = false; if (label !== null) btn.innerHTML = label; } }
 }
 
 /* ---------- вхід ---------- */
@@ -521,7 +527,9 @@ document.addEventListener("click", ev => {
     const name = b.dataset.act, body = {name};
     if (name === "testslot") body.minutes = +$("#testMin").value || 10;
     if (name === "stop" && !confirm("Зупинити бота? Сповіщення і публікації не працюватимуть, доки не запустите знову.")) return;
-    run(() => api("/api/action", body), b);
+    if (name === "testslot" && body.minutes < 7) { body.minutes = 7; $("#testMin").value = 7; toast("Найменше — 7 хв: бот має встигнути надіслати шортс і дочекатися відповіді"); }
+    if (SLOW[name]) $$(`button[data-act="${name}"]`).forEach(x => { if (x !== b) x.disabled = true; });
+    run(() => api("/api/action", body), b, SLOW[name]).then(() => $$(`button[data-act="${name}"]`).forEach(x => x.disabled = false));
   } else if (b.dataset.open) {
     run(() => api("/api/action", {name:"open", what:b.dataset.open}), b);
   } else if (b.dataset.user) {

@@ -93,7 +93,9 @@ def autostart_installed() -> bool | None:
 
 
 def run_powershell(script: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / script)],
+    cmd = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; "
+           f"& '{str(ROOT / script).replace(chr(39), chr(39) * 2)}'")
+    return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
                           cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
