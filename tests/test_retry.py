@@ -57,6 +57,7 @@ class RetryTest(FlowBase):
         self.assertIn("rf:", json.dumps(self.app.bot.tg.edits[-1][2]))  # кнопки й під самим відео
         self.say("⚠️ Невдалі")
         self.assertTrue(any("Невдалі публікації: 1" in s[1] for s in self.app.bot.tg.sent if s[0] == "text"))
+        self.assertEqual(self.app.bot.tg.sent[-1][0], "video")
         self.button(f"rf:{self.item['id']}")  # тепер Instagram проходить
         it = self.app.db.get_item(self.item["id"])
         self.assertEqual(it["results"]["instagram"]["status"], "ok")
@@ -88,7 +89,10 @@ class RetryTest(FlowBase):
         self.assertIn("Невдалих публікацій немає", last[1])
         self.assertIn("Проігноровані (1)", json.dumps(last[2], ensure_ascii=False))
         self.button("ig:0")
-        self.assertIn("ru:", json.dumps(self.app.bot.tg.sent[-1][2]))
+        card = self.app.bot.tg.sent[-1]
+        self.assertEqual(card[0], "video")  # з самим відео, як перед публікацією
+        self.assertIn("🙈 ⚠️ <b>Не опубліковано</b>", card[1])
+        self.assertIn("ru:", json.dumps(card[2]))
         self.button(f"ru:{self.item['id']}")
         self.assertEqual(len(self.app.scheduler.failed_items()), 1)  # повернулось до невдалих
         self.assertEqual(self.app.scheduler.failed_items(ignored=True), [])

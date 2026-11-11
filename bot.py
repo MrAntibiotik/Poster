@@ -747,13 +747,13 @@ class Bot:
         self._ask_time(chat, item_id, dialog=True)
 
     # ---------- невдалі публікації ----------
-    def failed_text(self, item: dict) -> str:
+    def failed_text(self, item: dict, err_len: int = 300) -> str:
         meta = self._meta(item)
         errs = self.failed_errors(item)
         ok = [p for p, r in item["results"].items() if r.get("status") == "ok"]
         lines = [f"⚠️ <b>Не опубліковано</b> #{item['id']}: {esc(meta.yt_title)}"]
         for p, r in errs.items():
-            lines.append(f"❌ <b>{NAMES[p]}</b>: {esc(str(r.get('error', 'невідома помилка'))[:300])}")
+            lines.append(f"❌ <b>{NAMES[p]}</b>: {esc(str(r.get('error', 'невідома помилка'))[:err_len])}")
         if ok:
             lines.append("✅ Вийшло: " + ", ".join(NAMES[p] for p in ok))
         when = self.app.scheduler.retry_at(item["id"])
@@ -840,6 +840,28 @@ class Bot:
         self.cleanup(chat)
         self.refresh(item_id)
 
+    def _item_card(self, chat: int, item: dict, kb: dict, prefix: str = "") -> None:
+        """Картка шортса з самим відео (як перед публікацією): підпис — назва, причина, кнопки."""
+        cap = ""
+        for n in (300, 150, 80, 40):
+            cap = prefix + self.failed_text(item, err_len=n)
+            if visible_len(cap) <= CAPTION_LIMIT:
+                break
+        if visible_len(cap) > CAPTION_LIMIT:
+            cap = cap[:CAPTION_LIMIT - 1] + "…"
+            cap = re.sub(r"<[^>]*$", "", cap)
+        path = item["mp4"]
+        if not Path(path).exists():
+            return self.say(chat, cap + "\n<i>(файл відео не знайдено)</i>", reply_markup=kb)
+        try:
+            video = media.telegram_copy(path, self.cfg)
+            info = media.probe(video, self.cfg["ffprobe"])
+            self.tg.send_video(chat, video, cap, kb, width=info.get("width"), height=info.get("height"),
+                               duration=info.get("duration"))
+        except (media.MediaError, TelegramError, OSError) as e:
+            log.warning("Картка #%s без відео: %s", item["id"], e)
+            self.say(chat, cap, reply_markup=kb)
+
     def failed_list(self, chat: int) -> None:
         items = self.app.scheduler.failed_items()
         ignored = self.app.scheduler.failed_items(ignored=True)
@@ -847,9 +869,9 @@ class Bot:
               if ignored else None)
         if not items:
             return self.say(chat, "✅ Невдалих публікацій немає.", reply_markup=kb)
-        self.say(chat, f"⚠️ <b>Невдалі публікації: {len(items)}</b>")
+        self.say(chat, f"⚠️ <b>Невдалі публікації: {len(items)}</b>" + (" (показано 10)" if len(items) > 10 else ""))
         for item in items[:10]:
-            self.say(chat, self.failed_text(item), reply_markup=self.retry_keyboard(item["id"]))
+            self._item_card(chat, item, self.retry_keyboard(item["id"]))
         if kb:
             self.say(chat, "Проігноровані відео — тут 👇", reply_markup=kb)
 
@@ -857,11 +879,12 @@ class Bot:
         items = self.app.scheduler.failed_items(ignored=True)
         if not items:
             return self.say(chat, "Проігнорованих відео немає.", html_mode=False)
-        self.say(chat, f"🙈 <b>Проігноровані: {len(items)}</b> — бот про них не нагадує")
-        for item in items[:15]:
-            kb = {"inline_keyboard": [[{"text": "↩️ Повернути до невдалих", "callback_data": f"ru:{item['id']}"},
-                                       {"text": "🔁 Повторити зараз", "callback_data": f"rf:{item['id']}"}]]}
-            self.say(chat, self.failed_text(item), reply_markup=kb)
+        self.say(chat, f"🙈 <b>Проігноровані: {len(items)}</b> — бот про них не нагадує"
+                       + (" (показано 10)" if len(items) > 10 else ""))
+        for item in items[:10]:
+            kb = {"inline_keyboard": [[{"text": "↩️ Повернути до невдалих", "callback_data": f"ru:{item['id']}"}],
+                                      [{"text": "🔁 Повторити зараз", "callback_data": f"rf:{item['id']}"}]]}
+            self._item_card(chat, item, kb, prefix="🙈 ")
 
     # ---------- вибір відео з черги ----------
     def queue_keyboard(self, page: int = 0, per: int = 8) -> dict | None:
