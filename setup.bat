@@ -4,7 +4,7 @@ cd /d "%~dp0"
 where python >nul 2>nul
 if errorlevel 1 (
     echo [!] Python not found. Install Python 3.11+ from python.org with "Add python.exe to PATH".
-    pause
+    if /i not "%~1"=="nopause" pause
     exit /b 1
 )
 if not exist ".venv\Scripts\python.exe" (
@@ -23,4 +23,4 @@ echo   1. Edit config.json and .env  (see README.md)
 echo   2. .venv\Scripts\python poster.py auth youtube / auth meta / auth tiktok
 echo   3. .venv\Scripts\python poster.py check
 echo   4. powershell -ExecutionPolicy Bypass -File install_task.ps1
-pause
+if /i not "%~1"=="nopause" pause

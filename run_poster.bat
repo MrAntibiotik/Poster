@@ -1,9 +1,10 @@
 @echo off
-rem Manual start of poster with a console window (for checking). Autostart: install_task.ps1
+rem Start poster with a console window. First run installs everything automatically.
+rem Autostart with Windows: install_task.ps1
 cd /d "%~dp0"
-if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" poster.py run
-) else (
-    python poster.py run
+if not exist ".venv\Scripts\python.exe" (
+    echo First run: installing...
+    call setup.bat nopause || exit /b 1
 )
+".venv\Scripts\python.exe" poster.py run
 pause
