@@ -48,17 +48,32 @@ ready/WoT/clip.mp4 + clip.json (status: ready_to_post)
 2. **ffmpeg**: завантажте збірку (наприклад, «release essentials» з gyan.dev), розпакуйте в `C:\ffmpeg`
    і або додайте `C:\ffmpeg\bin` у PATH, або вкажіть у `config.json`:
    `"ffmpeg": "C:/ffmpeg/bin/ffmpeg.exe", "ffprobe": "C:/ffmpeg/bin/ffprobe.exe"`.
-3. Скопіюйте папку `poster` на ПК (наприклад, `D:\Shorts\poster`) і запустіть **`setup.bat`** —
-   він створить `.venv`, встановить залежності та скопіює `config.json` і `.env` з прикладів.
-   (Вручну те саме: `python -m venv .venv`, `.venv\Scripts\pip install -r requirements.txt`,
-   `copy config.example.json config.json`, `copy .env.example .env`.)
-
+3. Скопіюйте папку `poster` на ПК (наприклад, `D:\Shorts\poster`) і запустіть **`menu.bat`**.
+   Перший запуск сам усе встановить: знайде Python (або встановить через winget), створить `.venv`,
+   поставить залежності й скопіює `config.json` і `.env` з прикладів. (Лише встановлення — `setup.bat`.)
 4. Відредагуйте `config.json` (шляхи до папок) та `.env` (ключі — див. розділ 4).
 
 > Усі ключі й токени зберігаються лише в `.env`, `client_secret.json` і папці `tokens/`.
 > Вони внесені в `.gitignore` — не комітьте і не пересилайте їх.
 
 ---
+
+### Меню `menu.bat`
+
+| Пункт | Що робить |
+|---|---|
+| 1. Перший запуск | перевіряє зв'язок із ботом (якщо треба — відкриває бота, щоб натиснути Start), запускає бота, створює тестовий слот через 10 хв |
+| 2. Запустити бота | у окремому вікні (якщо вже працює — повідомить) |
+| 3. Тестовий слот | позаплановий слот через 10 хв |
+| 4. Черга | черга і найближчі слоти |
+| 5. Авторизація | YouTube / Facebook+Instagram / TikTok |
+| 6. Перевірити підключення | те саме, що `python poster.py check` |
+| 7. Режим | тестовий (`dry_run`) ↔ бойовий |
+| 8. Автозапуск | увімкнути/вимкнути запуск із Windows (Планувальник завдань) |
+| 9. Файли | відкрити log.txt / config.json / .env у Блокноті |
+| 10. ffmpeg | встановити через winget і прописати шлях у config.json |
+
+Ті самі дії доступні командами: `poster.py tg-test`, `poster.py mode test|live`, `poster.py test-slot 10` тощо.
 
 ## 3. Налаштування `config.json`
 
@@ -268,7 +283,8 @@ powershell -ExecutionPolicy Bypass -File install_task.ps1
 
 | Файл | Призначення |
 |---|---|
-| `setup.bat` | встановлення в один клік |
+| `menu.bat` / `menu.py` | меню керування (запуск, тест, авторизація, режим, автозапуск) |
+| `setup.bat` | встановлення (Python через winget, .venv, залежності) |
 | `poster.py` | точка входу: служба, `check`, `auth`, `queue`, `test-slot` |
 | `bot.py` | Telegram-бот: сповіщення, кнопки, команди |
 | `scheduler.py` | черга, слоти, пропуски, звіти за розкладом |

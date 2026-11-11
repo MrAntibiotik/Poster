@@ -165,6 +165,57 @@ def cmd_check(cfg: dict) -> int:
     return 0 if ok else 2
 
 
+def cmd_tg_test(cfg: dict) -> int:
+    """Перевіряє токен і chat_id; якщо бот ще не може писати — відкриває його в Telegram."""
+    import webbrowser
+
+    from telegram_api import TelegramAPI, TelegramError
+
+    token, chat = cfg["secrets"]["TELEGRAM_BOT_TOKEN"], cfg["secrets"]["TELEGRAM_CHAT_ID"]
+    if not token or not chat:
+        print("❌ У .env не заповнено TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID")
+        return 1
+    if token.split(":")[0] == chat:
+        print("❌ TELEGRAM_CHAT_ID — це id самого бота. Потрібен ВАШ id (напишіть @userinfobot)")
+        return 1
+    try:
+        tg = TelegramAPI(token)
+        me = tg.call("getMe")
+    except TelegramError as e:
+        print(f"❌ Токен не підходить або немає інтернету: {e}")
+        return 1
+    link = f"https://t.me/{me['username']}"
+    print(f"✅ Бот: @{me['username']} ({link})")
+    try:
+        tg.send_message(int(chat), "✅ Зв'язок із poster налаштовано. Бот працює!", html=False)
+    except (TelegramError, ValueError) as e:
+        print(f"❌ Бот не може написати вам: {e}")
+        print("   Відкриваю бота в Telegram — натисніть там «Start» / «Почати».")
+        webbrowser.open(link)
+        return 1
+    print("✅ Тестове повідомлення надіслано — перевірте Telegram.")
+    return 0
+
+
+def cmd_mode(cfg: dict, mode: str) -> int:
+    import re
+
+    path = Path(cfg["config_path"])
+    text = path.read_text(encoding="utf-8")
+    value = "true" if mode == "test" else "false"
+    new, n = re.subn(r'("dry_run"\s*:\s*)(true|false)', rf"\g<1>{value}", text)
+    if not n:
+        import json
+        data = json.loads(text)
+        data["dry_run"] = mode == "test"
+        new = json.dumps(data, ensure_ascii=False, indent=2)
+    path.write_text(new, encoding="utf-8")
+    print("🧪 Тестовий режим: публікації імітуються." if mode == "test"
+          else "🚀 Бойовий режим: шортси публікуються по-справжньому.")
+    print("   Перезапустіть бота, щоб зміна набула чинності.")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Автопублікація шортсів")
     ap.add_argument("--config", help="шлях до config.json")
@@ -177,6 +228,9 @@ def main(argv=None) -> int:
     a.add_argument("platform", choices=["youtube", "tiktok", "meta", "instagram", "facebook"])
     t = sub.add_parser("test-slot")
     t.add_argument("minutes", type=int, nargs="?", default=10)
+    sub.add_parser("tg-test", help="перевірити зв'язок із ботом і надіслати тестове повідомлення")
+    m = sub.add_parser("mode", help="test — імітація публікацій (dry_run), live — справжні публікації")
+    m.add_argument("mode", choices=["test", "live"])
     args = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):  # українські тексти в консолі Windows
         if stream is not None and hasattr(stream, "reconfigure"):
@@ -194,6 +248,10 @@ def main(argv=None) -> int:
     os.chdir(cfg["root"])
 
     cmd = args.cmd or "run"
+    if cmd == "tg-test":
+        return cmd_tg_test(cfg)
+    if cmd == "mode":
+        return cmd_mode(cfg, args.mode)
     if cmd == "run":
         return run_service(cfg)
     if cmd == "check":
