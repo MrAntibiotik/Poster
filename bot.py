@@ -195,7 +195,11 @@ class Bot:
         slot = fmt_slot(self.cfg, item["slot_at"]) if item["slot_at"] else "—"
         head = f"🎬 <b>{esc(meta.yt_title)}</b>"
         tags = esc(" ".join(meta.hashtags))
-        tail = f"🕐 Слот: {slot} | Платформи: {self._platform_line(item)}\n\n{self._status_block(item)}"
+        hint = ""
+        if meta.auto and "назву" not in item["edited"] and item["status"] in ("notified", "approved"):
+            hint = "\nℹ️ Назва з імені файлу — змінити: «✏️ Ввести назву вручну»"
+        tail = (f"🕐 Слот: {slot} | Платформи: {self._platform_line(item)}\n\n"
+                f"{self._status_block(item)}{hint}")
         text = "\n".join(x for x in (head, tags, tail) if x)
         if visible_len(text) > CAPTION_LIMIT and tags:
             room = CAPTION_LIMIT - visible_len(head + "\n\n" + tail) - 2

@@ -28,6 +28,14 @@ DEFAULTS: dict = {
     "catchup_minutes": 120,
     "max_skips": 3,
     "ready_status": "ready_to_post",
+    # Відео без json: програма сама створить json (назва — з імені файлу, хештеги — за папкою гри)
+    "auto_meta": {
+        "enabled": True,
+        "hashtags": {
+            "*": ["#shorts", "#gaming", "#ігри"],
+            "WoT": ["#wot", "#worldoftanks", "#танки", "#shorts"],
+        },
+    },
     "scan_interval_seconds": 60,
     "regenerate_command": [],
     "regenerate_cwd": "",

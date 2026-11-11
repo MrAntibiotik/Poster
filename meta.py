@@ -21,6 +21,7 @@ class PostMeta:
     instagram_text: str = ""
     facebook_text: str = ""
     game: str = ""
+    auto: bool = False  # тексти створено автоматично з імені файлу
 
 
 def read_json(path: str | Path) -> dict:
@@ -124,7 +125,44 @@ def load_meta(json_path: str | Path, title_override: str | None = None) -> PostM
         instagram_text=ig_text,
         facebook_text=fb_text,
         game=str(data.get("game") or Path(json_path).parent.name),
+        auto=bool(data.get("auto_generated")),
     )
+
+
+GENERIC_NAME = re.compile(r"(?i)^(vid|video|clip|short|shorts|replay|obs|img|mov|record|recording|запис|відео)?[\s\d]*$")
+
+
+def title_from_filename(stem: str, game: str = "") -> str:
+    """«бій_на_прохорівці» -> «Бій на прохорівці»; безлике «2026-11-10 21-33-05» -> «WoT — епічний момент 🔥»."""
+    name = re.sub(r"[_\-.]+", " ", stem)
+    name = re.sub(r"\s+", " ", name).strip()
+    letters = sum(ch.isalpha() for ch in name)
+    if letters < 3 or GENERIC_NAME.match(name):
+        return f"{game} — епічний момент 🔥" if game else "Епічний ігровий момент 🔥"
+    return (name[:1].upper() + name[1:])[:100]
+
+
+def game_hashtags(cfg: dict, game: str) -> list[str]:
+    table = (cfg.get("auto_meta") or {}).get("hashtags") or {}
+    for key, tags in table.items():
+        if key != "*" and game and key.casefold() == game.casefold():
+            return _hashtags(tags)
+    return _hashtags(table.get("*") or [])
+
+
+def auto_meta_json(mp4: Path, game: str, cfg: dict) -> dict:
+    """json для відео, у якого його немає (замість generate_meta.py)."""
+    title = title_from_filename(mp4.stem, game)
+    tags = game_hashtags(cfg, game)
+    line = " ".join(tags)
+    return {
+        "status": cfg.get("ready_status", "ready_to_post"),
+        "auto_generated": True,
+        "game": game,
+        "youtube": {"title": title, "description": title, "tags": [t.lstrip("#") for t in tags], "hashtags": tags},
+        "tiktok": {"caption": f"{title} {line}".strip()},
+        "instagram": {"caption": f"{title}\n\n{line}".strip()},
+    }
 
 
 def move_pair(mp4: str, json_path: str, dest_dir: Path) -> tuple[str, str]:

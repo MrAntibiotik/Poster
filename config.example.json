@@ -16,6 +16,13 @@
     "log": "log.txt"
   },
   "ready_status": "ready_to_post",
+  "auto_meta": {
+    "enabled": true,
+    "hashtags": {
+      "WoT": ["#wot", "#worldoftanks", "#танки", "#shorts"],
+      "*": ["#shorts", "#gaming", "#ігри"]
+    }
+  },
   "scan_interval_seconds": 60,
 
   "regenerate_command": ["python", "D:/Shorts/generate_meta.py", "--force", "{mp4}"],

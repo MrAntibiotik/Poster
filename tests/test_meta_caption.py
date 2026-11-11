@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from bot import CAPTION_LIMIT, visible_len  # noqa: E402
-from meta import load_meta, move_pair  # noqa: E402
+from meta import load_meta, move_pair, title_from_filename  # noqa: E402
 from tests.test_flow import FakeTG, FlowBase  # noqa: E402
 
 
@@ -57,6 +57,12 @@ class MetaTest(unittest.TestCase):
         m = load_meta(self.write({"youtube": {"title": "A"}}), "  B  ")
         self.assertEqual(m.yt_title, "B")
 
+    def test_title_from_filename(self):
+        self.assertEqual(title_from_filename("топ-3_вистріли", "WoT"), "Топ 3 вистріли")
+        self.assertEqual(title_from_filename("VID_20261110_213305", "WoT"), "WoT — епічний момент 🔥")
+        self.assertEqual(title_from_filename("Replay 2026.11.10", ""), "Епічний ігровий момент 🔥")
+        self.assertEqual(title_from_filename("Kranvagn carry", "WoT"), "Kranvagn carry")
+
     def test_move_pair_collision(self):
         for d in ("src", "dst"):
             (self.tmp / d).mkdir()
@@ -66,6 +72,49 @@ class MetaTest(unittest.TestCase):
         self.assertEqual(Path(mp4).name, "a_2.mp4")
         self.assertEqual(Path(js).name, "a_2.json")
         self.assertFalse((self.tmp / "src/a.mp4").exists())
+
+
+class AutoMetaTest(FlowBase):
+    """Відео без json: програма сама створює тексти."""
+
+    def video(self, name, game="WoT", age=120):
+        d = self.cfg["paths"]["ready"] / game if game else self.cfg["paths"]["ready"]
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / name
+        p.write_bytes(b"\x00" * 1024)
+        os.utime(p, (os.path.getmtime(p) - age,) * 2)
+        return p
+
+    def test_video_without_json(self):
+        a = self.video("бій_на_прохорівці.mp4")
+        b = self.video("2026-11-10 21-33-05.MP4", game="Dota")
+        self.video("щойно_скопійоване.mp4", age=0)  # ще копіюється — поки не брати
+        self.app.scheduler.scan()
+        q = self.app.db.queue()
+        self.assertEqual(len(q), 2)
+        m = load_meta(a.with_suffix(".json"))
+        self.assertEqual(m.yt_title, "Бій на прохорівці")
+        self.assertEqual(m.hashtags, ["#wot", "#worldoftanks", "#танки", "#shorts"])
+        self.assertIn("#танки", m.tiktok_text)
+        self.assertTrue(m.auto)
+        m2 = load_meta(b.with_suffix(".json"))
+        self.assertEqual(m2.yt_title, "Dota — епічний момент 🔥")
+        self.assertEqual(m2.hashtags, ["#shorts", "#gaming", "#ігри"])
+        # підказка в Telegram і зникає після ручної назви
+        self.app.scheduler.tick(self.ts(11, "12:00"))
+        cap = [s for s in self.app.bot.tg.sent if s[0] == "video"][0][1]
+        self.assertIn("Назва з імені файлу", cap)
+        item = self.app.db.items("status='notified'")[0]
+        self.press(f"title:{item['id']}", item)
+        self.app.bot.handle({"update_id": 2, "message": {"text": "Моя назва", "chat": {"id": 42, "type": "private"}}})
+        self.assertNotIn("Назва з імені файлу", self.app.bot.tg.edits[-1][1])
+
+    def test_disabled(self):
+        self.cfg["auto_meta"]["enabled"] = False
+        self.video("x.mp4")
+        self.app.scheduler.scan()
+        self.assertEqual(self.app.db.queue(), [])
+        self.assertFalse((self.cfg["paths"]["ready"] / "WoT" / "x.json").exists())
 
 
 class CaptionTest(FlowBase):

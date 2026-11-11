@@ -277,8 +277,17 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
       </div>
       <label class="check"><input type="checkbox" data-set="publish_on_approve"> Публікувати одразу після натискання «Опублікувати» (а не в час слоту)</label>
     </div>
+    <div class="card"><h2>🏷 Тексти для відео без json</h2>
+      <p class="muted small">Якщо поруч із відео немає json, програма створить його сама: <b>назва — з імені файлу</b>
+        (наприклад «бій_на_прохорівці.mp4» → «Бій на прохорівці»; безликі назви на кшталт «2026-11-10 21-33.mp4» → «WoT — епічний момент 🔥»),
+        хештеги — за папкою гри. Перед публікацією назву можна змінити кнопкою «✏️ Ввести назву вручну» в Telegram.</p>
+      <label class="check"><input type="checkbox" data-set="auto_meta.enabled"> Публікувати відео без json (створювати тексти автоматично)</label>
+      <label class="f">Хештеги за грою — один рядок на гру: «Назва папки гри: #тег #тег». Рядок «*» — для всіх інших.</label>
+      <textarea data-set="auto_meta.hashtags" rows="4" placeholder="WoT: #wot #worldoftanks #танки #shorts&#10;*: #shorts #gaming"></textarea>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
+    </div>
     <div class="card"><h2>📂 Папки й інструменти</h2>
-      <label class="f">Готові шортси (усередині — папки ігор: &lt;Гра&gt;/відео.mp4 + відео.json)</label>
+      <label class="f">Готові шортси (усередині — папки ігор: &lt;Гра&gt;/відео.mp4; json — необов'язково)</label>
       <div class="pw"><input type="text" data-set="paths.ready"><button class="btn" data-pick="paths.ready">📂 Обрати…</button></div>
       <div class="two"><div><label class="f">Опубліковані</label><div class="pw"><input type="text" data-set="paths.posted"><button class="btn" data-pick="paths.posted" title="Обрати папку">📂</button></div></div>
         <div><label class="f">Пропущені</label><div class="pw"><input type="text" data-set="paths.skipped"><button class="btn" data-pick="paths.skipped" title="Обрати папку">📂</button></div></div></div>
@@ -430,7 +439,8 @@ async function refresh(){
   $("#qCount").textContent = s.queue.length;
   const ri = s.ready_info; $("#readyPath").textContent = ri.path;
   $("#readyInfo").innerHTML = !ri.exists ? '<span style="color:var(--bad)">папки не існує — оберіть іншу</span>' :
-    `знайдено шортсів: <b>${ri.total}</b>, готових до публікації: <b>${ri.ready}</b>${ri.games.length ? " · ігри: " + ri.games.map(esc).join(", ") : ""}`;
+    `знайдено відео: <b>${ri.total}</b>, готових до публікації: <b>${ri.ready}</b>${ri.games.length ? " · ігри: " + ri.games.map(esc).join(", ") : ""}` +
+    (ri.no_json ? `<br><span class="muted">з них без json: ${ri.no_json} — назву й хештеги програма створить сама${s.settings["auto_meta.enabled"] ? "" : " (зараз вимкнено!)"}</span>` : "");
   $("#queue").innerHTML = s.queue.map(i => `<li>#${i.id} ${i.game ? "[" + esc(i.game) + "] " : ""}${esc(i.name)}${i.skips ? ` <span class="pill warn">пропусків: ${i.skips}</span>` : ""}</li>`).join("") || '<li class="muted">черга порожня — покладіть шортси в папку ready</li>';
   $("#posted").innerHTML = s.posted.map(i => `<tr><td>${esc(i.when)}</td><td>${esc(i.name)}</td><td>${
     Object.entries(i.links).map(([p, u]) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(s.platforms[p].name)}</a>` : esc(s.platforms[p].name)).join(" · ")}${
@@ -608,8 +618,8 @@ async function loadFs(path){
       (j.dirs.length ? "" : '<div class="muted small" style="padding:10px">підпапок немає</div>');
     const sh = j.shorts;
     $("#fsInfo").innerHTML = fsTarget !== "paths.ready" ? "" : (sh.total
-      ? `✅ Тут шортсів: <b>${sh.total}</b>, готових: <b>${sh.ready}</b>${sh.games.length ? " · ігри: " + sh.games.map(esc).join(", ") : ""}`
-      : '<span class="muted">У цій папці (і її підпапках) шортсів mp4 + json не знайдено.</span>');
+      ? `✅ Тут відео: <b>${sh.total}</b>, готових: <b>${sh.ready}</b>${sh.games.length ? " · ігри: " + sh.games.map(esc).join(", ") : ""}`
+      : '<span class="muted">У цій папці (і її підпапках-іграх) відео mp4 не знайдено.</span>');
   } catch(e){ toast(e.message, "err"); }
 }
 $("#fsModal").addEventListener("click", ev => {

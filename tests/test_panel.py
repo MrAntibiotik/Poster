@@ -154,18 +154,26 @@ class PanelTest(unittest.TestCase):
         (lib / "WoT").mkdir(parents=True)
         (lib / "WoT" / "a.mp4").write_bytes(b"0")
         (lib / "WoT" / "a.json").write_text('{"status": "ready_to_post"}', encoding="utf-8")
-        (lib / "WoT" / "b.mp4").write_bytes(b"0")  # без json — не рахується
+        (lib / "WoT" / "b.mp4").write_bytes(b"0")  # без json — тексти створяться автоматично
         st, j = self.req("POST", "/api/fs", {"path": "Мої шортси"})  # відносний шлях -> повний
         self.assertEqual(st, 200)
         self.assertEqual(Path(j["path"]), lib.resolve())
         self.assertEqual(j["dirs"], ["WoT"])
-        self.assertEqual((j["shorts"]["total"], j["shorts"]["ready"], j["shorts"]["games"]), (1, 1, ["WoT"]))
+        sh = j["shorts"]
+        self.assertEqual((sh["total"], sh["ready"], sh["no_json"], sh["games"]), (2, 2, 1, ["WoT"]))
         st, j = self.req("POST", "/api/fs/mkdir", {"path": str(lib), "name": "Dota"})
         self.assertTrue((lib / "Dota").is_dir())
         self.assertEqual(self.req("POST", "/api/fs/mkdir", {"path": str(lib), "name": "../evil"})[0], 400)
         self.req("POST", "/api/settings", {"paths.ready": str(lib)})
         info = self.req("GET", "/api/state")[1]["ready_info"]
-        self.assertEqual((info["exists"], info["ready"]), (True, 1))
+        self.assertEqual((info["exists"], info["ready"]), (True, 2))
+        # хештеги за грою редагуються текстом
+        self.req("POST", "/api/settings", {"auto_meta.hashtags": "WoT: #wot танки\nDota: #dota2\n*: #shorts", "auto_meta.enabled": False})
+        cfg = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["auto_meta"]["hashtags"], {"WoT": ["#wot", "#танки"], "Dota": ["#dota2"], "*": ["#shorts"]})
+        st = self.req("GET", "/api/state")[1]
+        self.assertEqual(st["settings"]["auto_meta.hashtags"], "WoT: #wot #танки\nDota: #dota2\n*: #shorts")
+        self.assertEqual(st["ready_info"]["ready"], 1)  # без json не рахуються, коли вимкнено
         # на не-Windows рідного вікна немає — панель показує власний перегляд папок
         if not panel_mod.control.WIN:
             self.assertEqual(self.req("POST", "/api/pick_folder", {})[1], {"path": None, "native": False})

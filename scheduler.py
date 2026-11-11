@@ -9,9 +9,20 @@ from pathlib import Path
 
 import media
 from config import fmt_slot, local_dt, now_ts
-from meta import json_status, load_meta, move_pair, read_json, write_json
+from meta import auto_meta_json, json_status, load_meta, move_pair, read_json, write_json
 
 log = logging.getLogger("scheduler")
+
+
+def find_videos(folder: Path) -> list[Path]:
+    """mp4 у папці та в підпапках-іграх (розширення без урахування регістру: .mp4 / .MP4)."""
+    out = []
+    for base in [folder] + sorted(p for p in folder.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        try:
+            out += [f for f in base.iterdir() if f.is_file() and f.suffix.lower() == ".mp4"]
+        except OSError:
+            continue
+    return out
 
 
 class Scheduler:
@@ -44,7 +55,10 @@ class Scheduler:
 
     # ---------- черга ----------
     def scan(self, now: int | None = None) -> list[int]:
-        """Додає нові ready/<Гра>/*.mp4 (з json у статусі ready_to_post) у кінець черги (FIFO)."""
+        """Додає нові ready/<Гра>/*.mp4 у кінець черги (FIFO).
+
+        Відео з json — якщо статус ready_to_post; відео без json — json створюється автоматично (auto_meta).
+        """
         now = now or now_ts()
         ready = Path(self.cfg["paths"]["ready"])
         if not ready.exists():
@@ -52,23 +66,33 @@ class Scheduler:
             return []
         known = self.db.known_paths()
         found = []
-        for mp4 in list(ready.glob("*.mp4")) + list(ready.glob("*/*.mp4")):
+        auto = bool((self.cfg.get("auto_meta") or {}).get("enabled", True))
+        for mp4 in find_videos(ready):
             path = str(mp4.resolve())
             if path in known:
                 continue
             js = mp4.with_suffix(".json")
-            if not js.exists():
-                continue
+            game = mp4.parent.name if mp4.parent != ready else ""
             try:
-                if time.time() - max(mp4.stat().st_mtime, js.stat().st_mtime) < 30:
-                    continue  # файл ще записується
+                if time.time() - mp4.stat().st_mtime < 30:
+                    continue  # файл ще записується / копіюється
+                if not js.exists():
+                    if not auto:
+                        continue
+                    write_json(js, auto_meta_json(mp4, game, self.cfg))
+                    log.info("Створено json для %s (назва з імені файлу)", mp4.name)
+                    order = mp4.stat().st_mtime
+                else:
+                    if time.time() - js.stat().st_mtime < 30 and not read_json(js).get("auto_generated"):
+                        continue  # json ще записується
+                    order = js.stat().st_mtime
                 data = read_json(js)
-            except (OSError, ValueError):
+            except (OSError, ValueError) as e:
+                log.debug("Пропускаю %s: %s", mp4, e)
                 continue
             if json_status(data) != self.cfg["ready_status"]:
                 continue
-            game = mp4.parent.name if mp4.parent != ready else ""
-            found.append((js.stat().st_mtime, path, str(js.resolve()), game))
+            found.append((order, path, str(js.resolve()), game))
         added = []
         for _, path, js, game in sorted(found):
             item_id = self.db.add_item(path, js, game)

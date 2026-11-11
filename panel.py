@@ -60,6 +60,7 @@ FIELDS = {
     "platforms.instagram.enabled": "bool", "platforms.instagram.share_to_feed": "bool",
     "platforms.facebook.enabled": "bool",
     "platforms.tiktok.enabled": "bool", "platforms.tiktok.public": "bool", "platforms.tiktok.redirect_uri": "str",
+    "auto_meta.enabled": "bool", "auto_meta.hashtags": "tagmap",
 }
 
 
@@ -102,11 +103,35 @@ def coerce(kind: str, value):
         if not 1 <= len(slots) <= 6:
             raise ValueError("потрібно від 1 до 6 слотів")
         return slots
+    if kind == "tagmap":
+        if isinstance(value, dict):
+            return value
+        out = {}
+        for line in str(value).splitlines():
+            if ":" not in line:
+                continue
+            game, tags = line.split(":", 1)
+            game = game.strip() or "*"
+            if game in ("усі", "всі", "інші", "все"):
+                game = "*"
+            tags = ["#" + t.lstrip("#") for t in re.split(r"[\s,]+", tags) if t.strip("#").strip()]
+            if tags:
+                out[game] = tags
+        if "*" not in out:
+            out["*"] = ["#shorts"]
+        return out
     if kind == "cmd":
         if isinstance(value, list):
             return [str(x) for x in value]
         return [t.strip('"') for t in shlex.split(str(value), posix=False)] if str(value).strip() else []
     return str(value).strip()
+
+
+def tagmap_to_text(table: dict) -> str:
+    table = table or {}
+    lines = [f"{k}: {' '.join(v)}" for k, v in table.items() if k != "*"]
+    lines.append(f"*: {' '.join(table.get('*', []))}")
+    return "\n".join(lines)
 
 
 def cmd_to_text(cmd) -> str:
@@ -398,21 +423,26 @@ class Panel:
         """Скільки mp4 з парним json лежить у папці та її підпапках-іграх (і скільки з них готові)."""
         folder = Path(folder)
         ready_status = self.cfg["ready_status"]
-        info = {"path": str(folder), "exists": folder.is_dir(), "total": 0, "ready": 0, "games": []}
+        info = {"path": str(folder), "exists": folder.is_dir(), "total": 0, "ready": 0, "games": [], "no_json": 0}
+        auto = bool((self.cfg.get("auto_meta") or {}).get("enabled", True))
         if not info["exists"]:
             return info
         games = set()
         try:
-            files = list(folder.glob("*.mp4"))[:3000] + list(folder.glob("*/*.mp4"))[:3000]
+            from scheduler import find_videos
+            files = find_videos(folder)[:5000]
         except OSError:
             return info
         for mp4 in files:
-            js = mp4.with_suffix(".json")
-            if not js.exists():
-                continue
             info["total"] += 1
             if mp4.parent != folder:
                 games.add(mp4.parent.name)
+            js = mp4.with_suffix(".json")
+            if not js.exists():
+                info["no_json"] += 1
+                if auto:
+                    info["ready"] += 1
+                continue
             try:
                 from meta import json_status, read_json
                 if json_status(read_json(js)) == ready_status:
@@ -493,6 +523,7 @@ class Panel:
         merged = _merge(DEFAULTS, self.raw_config())
         settings = {k: dig(merged, k) for k in FIELDS}
         settings["regenerate_command"] = cmd_to_text(settings["regenerate_command"])
+        settings["auto_meta.hashtags"] = tagmap_to_text(settings["auto_meta.hashtags"])
         secrets_ = {n: {"set": bool(v), "value": v if n in PUBLIC_IDS else mask(v), "label": SECRET_LABELS.get(n, n)}
                     for n, v in cfg["secrets"].items()}
 
