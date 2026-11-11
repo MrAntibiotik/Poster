@@ -108,6 +108,7 @@ def run_service(cfg: dict) -> int:
         log.error("poster уже запущено (порт %s зайнятий) — виходжу", cfg["lock_port"])
         return 1
     app = App(cfg)
+    app.db.set("pid", os.getpid())
     log.info("poster запущено. Платформи: %s. dry_run=%s", list(app.platforms), cfg.get("dry_run"))
     app.scheduler.scan()
     app.scheduler.ensure_slots(now_ts())
@@ -118,25 +119,37 @@ def run_service(cfg: dict) -> int:
                  f"{fmt_slot(cfg, nxt[0]['slot_at']) if nxt else '—'}.{paused}", keyboard=True)
     last_tick = 0.0
     errors = 0
+
+    def stop_requested() -> bool:
+        if app.db.get("control") != "stop":
+            return False
+        app.db.set("control", None)
+        log.info("Зупинка за командою з панелі керування")
+        app.bot.send("🔴 poster зупинено з панелі керування.")
+        return True
+
     while True:
         try:
+            if stop_requested():
+                return 0
             if time.time() - last_tick >= 15:
                 last_tick = time.time()
                 app.scheduler.tick()
             app.bot.poll_once(timeout=10)
             errors = 0
-            if app.db.get("control") == "stop":  # команда з панелі керування
-                app.db.set("control", None)
-                log.info("Зупинка за командою з панелі керування")
-                app.bot.send("🔴 poster зупинено з панелі керування.")
-                return 0
         except KeyboardInterrupt:
             log.info("Зупинено користувачем")
             return 0
         except Exception as e:  # noqa: BLE001
             errors += 1
-            log.exception("Помилка в головному циклі: %s", e)
-            time.sleep(min(60, 5 * errors))
+            if errors <= 3 or errors % 20 == 0:
+                log.exception("Помилка в головному циклі: %s", e)
+            else:
+                log.warning("Помилка в головному циклі (%s-й раз поспіль): %s", errors, e)
+            for _ in range(min(60, 5 * errors)):  # пауза, але команду зупинки помічаємо щосекунди
+                time.sleep(1)
+                if app.db.get("control") == "stop":
+                    break
 
 
 def cmd_check(cfg: dict) -> int:
@@ -239,6 +252,8 @@ def main(argv=None) -> int:
     a.add_argument("platform", choices=["youtube", "tiktok", "meta", "instagram", "facebook"])
     t = sub.add_parser("test-slot")
     t.add_argument("minutes", type=int, nargs="?", default=10)
+    sub.add_parser("panel-reset", help="скинути пароль панелі керування")
+    sub.add_parser("panel", help="відкрити панель керування в браузері")
     sub.add_parser("tg-test", help="перевірити зв'язок із ботом і надіслати тестове повідомлення")
     m = sub.add_parser("mode", help="test — імітація публікацій (dry_run), live — справжні публікації")
     m.add_argument("mode", choices=["test", "live"])
@@ -261,6 +276,13 @@ def main(argv=None) -> int:
     cmd = args.cmd or "run"
     if cmd == "tg-test":
         return cmd_tg_test(cfg)
+    if cmd == "panel":
+        import panel
+        return panel.serve(args.config)
+    if cmd == "panel-reset":
+        DB(Path(cfg["paths"]["data"]) / "poster.sqlite3").set("panel_pw", None)
+        print("Пароль панелі скинуто — при наступному відкритті створіть новий.")
+        return 0
     if cmd == "mode":
         return cmd_mode(cfg, args.mode)
     if cmd == "run":

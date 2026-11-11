@@ -113,7 +113,7 @@ def load_config(path: str | os.PathLike | None = None) -> dict:
     try:
         from dotenv import load_dotenv
 
-        load_dotenv(root / ".env")
+        load_dotenv(root / ".env", override=True)  # зміни з панелі підхоплюються одразу
     except ImportError:  # pragma: no cover
         pass
     if not path.exists():

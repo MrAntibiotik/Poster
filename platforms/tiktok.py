@@ -100,10 +100,10 @@ class TikTok(Platform):
         return None
 
     # ---------- авторизація (Login Kit, PKCE) ----------
-    def authorize(self) -> None:
+    def auth_begin(self) -> dict:
+        """Крок 1: адреса для входу в TikTok. Повертає {'url', 'verifier', 'state', 'local'}."""
         if not self.secrets["TIKTOK_CLIENT_KEY"] or not self.secrets["TIKTOK_CLIENT_SECRET"]:
-            print("Спершу заповніть TIKTOK_CLIENT_KEY і TIKTOK_CLIENT_SECRET у .env")
-            return
+            raise PublishError("Спершу заповніть Client key і Client secret TikTok")
         redirect = self.pcfg["redirect_uri"]
         verifier = pysecrets.token_urlsafe(64)[:64]
         challenge = hashlib.sha256(verifier.encode()).hexdigest()  # TikTok (desktop) очікує hex
@@ -112,45 +112,77 @@ class TikTok(Platform):
             "client_key": self.secrets["TIKTOK_CLIENT_KEY"], "response_type": "code", "scope": SCOPES,
             "redirect_uri": redirect, "state": state,
             "code_challenge": challenge, "code_challenge_method": "S256"})
-        u = urlparse(redirect)
-        code = None
-        print("Відкрийте посилання та дозвольте доступ:\n", url)
-        if u.hostname in ("localhost", "127.0.0.1"):
-            got: dict = {}
+        local = urlparse(redirect).hostname in ("localhost", "127.0.0.1")
+        return {"url": url, "verifier": verifier, "state": state, "local": local}
 
-            class H(BaseHTTPRequestHandler):
-                def do_GET(self):  # noqa: N802
-                    q = parse_qs(urlparse(self.path).query)
-                    got.update({k: v[0] for k, v in q.items()})
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write("Готово! Можна закрити вкладку.".encode())
+    def auth_wait_local(self, flow: dict, timeout: int = 600) -> str:
+        """Крок 2 (redirect на localhost): чекає, поки браузер повернеться з кодом. Повертає URL-запит."""
+        u = urlparse(self.pcfg["redirect_uri"])
+        got: dict = {}
 
-                def log_message(self, *a):
-                    pass
+        class H(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                q = parse_qs(urlparse(self.path).query)
+                got.update({k: v[0] for k, v in q.items()})
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                ok = "code" in got
+                self.wfile.write(("<h2>Готово! TikTok підключено, вкладку можна закрити.</h2>" if ok
+                                  else "<h2>Помилка авторизації TikTok</h2>").encode())
 
-            srv = HTTPServer((u.hostname, u.port or 80), H)
-            threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
-            while "code" not in got and "error" not in got:
+            def log_message(self, *a):
+                pass
+
+        srv = HTTPServer((u.hostname, u.port or 80), H)
+        srv.timeout = 5
+        deadline = time.time() + timeout
+        try:
+            while "code" not in got and "error" not in got and time.time() < deadline:
                 srv.handle_request()
+        finally:
             srv.server_close()
-            if got.get("state") != state or "code" not in got:
-                print("Помилка авторизації:", got)
-                return
-            code = got["code"]
-        else:
-            webbrowser.open(url)
-            back = input("Вставте повну адресу, на яку вас перенаправило: ").strip()
-            q = parse_qs(urlparse(back).query)
-            code = (q.get("code") or [""])[0]
-        j = self._oauth(grant_type="authorization_code", code=code, redirect_uri=redirect,
-                        code_verifier=verifier)
+        if "code" not in got:
+            raise PublishError(f"TikTok не повернув код: {got.get('error_description') or got.get('error') or 'час вийшов'}")
+        return "?" + urlencode(got)
+
+    def auth_finish(self, flow: dict, redirected_url: str) -> dict:
+        """Крок 3: обмін коду на токени; redirected_url — адреса, на яку повернув TikTok."""
+        q = parse_qs(urlparse(redirected_url.strip()).query)
+        code = (q.get("code") or [""])[0]
+        if not code:
+            raise PublishError("В адресі немає параметра code — скопіюйте адресу повністю")
+        if q.get("state") and q["state"][0] != flow["state"]:
+            raise PublishError("Адреса від іншої спроби входу — почніть авторизацію заново")
+        j = self._oauth(grant_type="authorization_code", code=code, redirect_uri=self.pcfg["redirect_uri"],
+                        code_verifier=flow["verifier"])
         if "access_token" not in j:
-            print("Помилка отримання токена:", j)
+            raise PublishError(f"TikTok не видав токен: {j.get('error_description') or j}")
+        return self._save(j)
+
+    def authorize(self) -> None:
+        """Авторизація з консолі."""
+        try:
+            flow = self.auth_begin()
+        except PublishError as e:
+            print(e)
             return
-        tok = self._save(j)
+        print("Відкрийте посилання та дозвольте доступ:\n", flow["url"])
+        threading.Thread(target=lambda: webbrowser.open(flow["url"]), daemon=True).start()
+        try:
+            back = self.auth_wait_local(flow) if flow["local"] else \
+                input("Вставте повну адресу, на яку вас перенаправило: ")
+            tok = self.auth_finish(flow, back)
+        except PublishError as e:
+            print("Помилка авторизації:", e)
+            return
         print(f"Токен TikTok збережено: {self.token_file} (scope: {tok.get('scope')})")
+
+    def token_info(self) -> dict:
+        if not self.token_file.exists():
+            return {"connected": False}
+        tok = json.loads(self.token_file.read_text(encoding="utf-8"))
+        return {"connected": True, "refresh_expires_at": tok.get("refresh_expires_at"), "scope": tok.get("scope")}
 
     # ---------- публікація ----------
     def _creator(self) -> dict:

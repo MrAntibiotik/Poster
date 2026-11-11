@@ -193,46 +193,59 @@ class Facebook(_MetaBase):
         return f"сторінка «{r.get('name')}»"
 
 
-def authorize_meta(cfg: dict) -> None:
-    """Обмін короткого user-токена на «вічний» токен сторінки; запис у .env."""
-    from dotenv import set_key
-
+def meta_pages(cfg: dict, short_token: str) -> list[dict]:
+    """Обмінює короткий user-токен на довготривалий і повертає сторінки з токенами сторінок."""
     s = cfg["secrets"]
     ver = cfg["graph_api_version"]
-    app_id, app_secret = s["META_APP_ID"], s["META_APP_SECRET"]
-    if not app_id or not app_secret:
-        print("Спершу заповніть META_APP_ID і META_APP_SECRET у .env")
-        return
-    short = input("Вставте короткий User Access Token з Graph API Explorer: ").strip()
-    r = requests.get(f"https://graph.facebook.com/{ver}/oauth/access_token", timeout=60, params={
-        "grant_type": "fb_exchange_token", "client_id": app_id,
-        "client_secret": app_secret, "fb_exchange_token": short}).json()
+    if not s["META_APP_ID"] or not s["META_APP_SECRET"]:
+        raise PublishError("Спершу заповніть App ID і App Secret")
+    try:
+        r = requests.get(f"https://graph.facebook.com/{ver}/oauth/access_token", timeout=60, params={
+            "grant_type": "fb_exchange_token", "client_id": s["META_APP_ID"],
+            "client_secret": s["META_APP_SECRET"], "fb_exchange_token": short_token.strip()}).json()
+    except (requests.RequestException, ValueError) as e:
+        raise PublishError(f"мережа: {e}") from e
     if "access_token" not in r:
-        print("Помилка обміну токена:", r.get("error", r))
-        return
-    long_user = r["access_token"]
-    pages = requests.get(f"https://graph.facebook.com/{ver}/me/accounts", timeout=60, params={
-        "access_token": long_user,
-        "fields": "id,name,access_token,instagram_business_account{id,username}"}).json()
+        raise PublishError(f"Не вдалося обміняти токен: {(r.get('error') or {}).get('message') or r}")
+    try:
+        pages = requests.get(f"https://graph.facebook.com/{ver}/me/accounts", timeout=60, params={
+            "access_token": r["access_token"],
+            "fields": "id,name,access_token,instagram_business_account{id,username}"}).json()
+    except (requests.RequestException, ValueError) as e:
+        raise PublishError(f"мережа: {e}") from e
     data = pages.get("data") or []
     if not data:
-        print("Не знайдено жодної сторінки. Перевірте дозволи pages_show_list / pages_manage_posts.", pages)
+        raise PublishError("Не знайдено жодної сторінки — перевірте дозволи pages_show_list / pages_manage_posts")
+    return data
+
+
+def meta_save(cfg: dict, page: dict) -> str:
+    """Записує токен сторінки, FB_PAGE_ID та IG_USER_ID у .env."""
+    from dotenv import set_key
+
+    env = cfg["env_path"]
+    if not os.path.exists(env):
+        open(env, "a", encoding="utf-8").close()
+    set_key(env, "META_PAGE_TOKEN", page["access_token"], quote_mode="never")
+    set_key(env, "FB_PAGE_ID", page["id"], quote_mode="never")
+    ig = page.get("instagram_business_account") or {}
+    if ig.get("id"):
+        set_key(env, "IG_USER_ID", ig["id"], quote_mode="never")
+        return f"Сторінка «{page['name']}» та Instagram @{ig.get('username')} підключені"
+    return (f"Сторінку «{page['name']}» підключено, але до неї не прив'язано професійний Instagram — "
+            "IG_USER_ID не записано")
+
+
+def authorize_meta(cfg: dict) -> None:
+    """Авторизація з консолі."""
+    short = input("Вставте короткий User Access Token з Graph API Explorer: ").strip()
+    try:
+        data = meta_pages(cfg, short)
+    except PublishError as e:
+        print("Помилка:", e)
         return
     for i, p in enumerate(data, 1):
         ig = p.get("instagram_business_account") or {}
         print(f"{i}. {p['name']} (id {p['id']}) — Instagram: @{ig.get('username', '—')}")
-    idx = 0
-    if len(data) > 1:
-        idx = int(input("Номер сторінки: ").strip() or "1") - 1
-    page = data[idx]
-    env = cfg["env_path"]
-    if not os.path.exists(env):
-        open(env, "a", encoding="utf-8").close()
-    set_key(env, "META_PAGE_TOKEN", page["access_token"])
-    set_key(env, "FB_PAGE_ID", page["id"])
-    ig = (page.get("instagram_business_account") or {}).get("id")
-    if ig:
-        set_key(env, "IG_USER_ID", ig)
-    else:
-        print("⚠️ До сторінки не прив'язано Instagram (професійний акаунт) — IG_USER_ID не записано.")
-    print(f"Готово: токен сторінки «{page['name']}» записано в {env}")
+    idx = int(input("Номер сторінки: ").strip() or "1") - 1 if len(data) > 1 else 0
+    print(meta_save(cfg, data[idx]))

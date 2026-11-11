@@ -32,6 +32,10 @@ class Scheduler:
             self.scan(now)
         self.ensure_slots(now)
         self.resume_publishing()
+        pending_refresh = self.db.get("refresh_item")
+        if pending_refresh:
+            self.db.set("refresh_item", None)
+            self.app.bot.refresh(int(pending_refresh))
         self.process_due_slots(now)
         self.process_notifications(now)
         self.maybe_daily_report(now)
@@ -115,6 +119,7 @@ class Scheduler:
             log.info("#%s перенесено зі слоту %s на ручний %s", later["item_id"],
                      fmt_slot(self.cfg, later["slot_at"]), fmt_slot(self.cfg, ts))
             self.app.bot.refresh(later["item_id"])
+            self.db.set("refresh_item", later["item_id"])  # якщо слот додано з панелі/меню — оновить служба
         return ts
 
     def upcoming(self, now: int, limit: int = 6) -> list[dict]:

@@ -178,7 +178,16 @@ def files_menu() -> None:
         open_file(name)
 
 
+def open_panel() -> None:
+    kw = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW} if WIN else {"start_new_session": True}
+    exe = Path(PY)
+    pyw = exe.with_name("pythonw.exe") if WIN and exe.with_name("pythonw.exe").exists() else exe
+    subprocess.Popen([str(pyw), str(ROOT / "panel.py")], cwd=ROOT, **kw)
+    print("Панель відкривається в браузері: http://127.0.0.1:8770/")
+
+
 MENU = [
+    ("P", "🖥  Панель керування в браузері (токени, доступ, кнопки)", open_panel),
     ("1", "🚀 Перший запуск (перевірка Telegram → запуск бота → тестовий шортс)", first_run),
     ("2", "▶️  Запустити бота", start_bot),
     ("3", "🧪 Тестовий слот через 10 хв", lambda: poster("test-slot", "10")),
@@ -207,7 +216,7 @@ def main() -> None:
             if choice == "":
                 continue
             return
-        action = next((fn for key, _, fn in MENU if key == choice), None)
+        action = next((fn for key, _, fn in MENU if key == choice.upper()), None)
         if not action:
             continue
         try:
