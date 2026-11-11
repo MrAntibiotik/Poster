@@ -574,7 +574,10 @@ class Bot:
             except TelegramError as e:
                 log.debug("edit platforms: %s", e)
             return
-        if action in ("rf", "rt", "rq", "ri"):
+        if action == "ig":
+            answer()
+            return self.ignored_list(chat)
+        if action in ("rf", "rt", "rq", "ri", "ru"):
             return self.retry_button(chat, target, action, cq, answer)
         if action in ("qp", "qi", "qt", "qf", "qd"):
             return self.queue_button(chat, target, action, cq, answer)
@@ -773,6 +776,11 @@ class Bot:
         if self.app.publisher.is_active(item_id):
             return answer("Уже публікується…", True)
         msg_id = (cq.get("message") or {}).get("message_id")
+        if action == "ru":
+            self.db.set(f"ignored:{item_id}", None)
+            answer("↩️ Повернуто до невдалих")
+            self._close_msg(chat, msg_id, "↩️ Повернуто до «⚠️ Невдалі»")
+            return self.refresh(item_id)
         if action == "rf":
             self.db.set(f"ignored:{item_id}", None)
             answer("🔁 Повторюю публікацію…")
@@ -834,11 +842,26 @@ class Bot:
 
     def failed_list(self, chat: int) -> None:
         items = self.app.scheduler.failed_items()
+        ignored = self.app.scheduler.failed_items(ignored=True)
+        kb = ({"inline_keyboard": [[{"text": f"🙈 Проігноровані ({len(ignored)})", "callback_data": "ig:0"}]]}
+              if ignored else None)
         if not items:
-            return self.say(chat, "✅ Невдалих публікацій немає.", html_mode=False)
+            return self.say(chat, "✅ Невдалих публікацій немає.", reply_markup=kb)
         self.say(chat, f"⚠️ <b>Невдалі публікації: {len(items)}</b>")
         for item in items[:10]:
             self.say(chat, self.failed_text(item), reply_markup=self.retry_keyboard(item["id"]))
+        if kb:
+            self.say(chat, "Проігноровані відео — тут 👇", reply_markup=kb)
+
+    def ignored_list(self, chat: int) -> None:
+        items = self.app.scheduler.failed_items(ignored=True)
+        if not items:
+            return self.say(chat, "Проігнорованих відео немає.", html_mode=False)
+        self.say(chat, f"🙈 <b>Проігноровані: {len(items)}</b> — бот про них не нагадує")
+        for item in items[:15]:
+            kb = {"inline_keyboard": [[{"text": "↩️ Повернути до невдалих", "callback_data": f"ru:{item['id']}"},
+                                       {"text": "🔁 Повторити зараз", "callback_data": f"rf:{item['id']}"}]]}
+            self.say(chat, self.failed_text(item), reply_markup=kb)
 
     # ---------- вибір відео з черги ----------
     def queue_keyboard(self, page: int = 0, per: int = 8) -> dict | None:

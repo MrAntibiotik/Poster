@@ -84,7 +84,14 @@ class RetryTest(FlowBase):
         self.assertIsNone(self.app.scheduler.retry_at(self.item["id"]))
         self.assertEqual(self.app.scheduler.failed_items(), [])
         self.say("/failed")
-        self.assertIn("Невдалих публікацій немає", self.app.bot.tg.sent[-1][1])
+        last = self.app.bot.tg.sent[-1]
+        self.assertIn("Невдалих публікацій немає", last[1])
+        self.assertIn("Проігноровані (1)", json.dumps(last[2], ensure_ascii=False))
+        self.button("ig:0")
+        self.assertIn("ru:", json.dumps(self.app.bot.tg.sent[-1][2]))
+        self.button(f"ru:{self.item['id']}")
+        self.assertEqual(len(self.app.scheduler.failed_items()), 1)  # повернулось до невдалих
+        self.assertEqual(self.app.scheduler.failed_items(ignored=True), [])
 
 
 if __name__ == "__main__":

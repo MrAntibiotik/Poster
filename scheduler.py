@@ -274,12 +274,13 @@ class Scheduler:
         r = self.db.one("SELECT slot_at FROM slots WHERE state='retry' AND item_id=?", (item_id,))
         return r["slot_at"] if r else None
 
-    def failed_items(self, days: int = 30) -> list[dict]:
-        """Шортси, що не вийшли хоча б на одну увімкнену платформу (без «ігнорованих»)."""
+    def failed_items(self, days: int = 30, ignored: bool = False) -> list[dict]:
+        """Шортси, що не вийшли хоча б на одну увімкнену платформу.
+        ignored=False — без проігнорованих; ignored=True — лише проігноровані."""
         out = []
         for item in self.db.items("status IN ('failed','posted') AND (posted_at IS NULL OR posted_at>=?)",
                                   (now_ts() - days * 86400,), order="id DESC"):
-            if self.db.get(f"ignored:{item['id']}"):
+            if bool(self.db.get(f"ignored:{item['id']}")) != ignored:
                 continue
             errs = {p: r for p, r in item["results"].items()
                     if r.get("status") != "ok" and p in self.app.platforms and p not in item["disabled"]}
