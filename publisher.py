@@ -97,6 +97,7 @@ class Publisher:
             db.event(item_id, "publish_failed", {"title": meta.yt_title, "failed": failed})
         db.set(f"ignored:{item_id}", None)
         app.bot.refresh(item_id)
+        db.set("last_activity", now_ts())  # після публікації ПК ще кілька хвилин не засне
         if ok and hasattr(app.bot, "drop_all_texts"):
             app.bot.drop_all_texts(item_id)  # назва й хештеги вже в підписі відео — окреме повідомлення не потрібне
         if failed and hasattr(app.bot, "notify_failed"):

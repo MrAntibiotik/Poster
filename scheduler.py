@@ -383,6 +383,9 @@ class Scheduler:
             item = self.db.get_item(s["item_id"]) if s["item_id"] else None
             if not item or item["slot_at"] != s["slot_at"] or item["status"] not in ("notified", "approved"):
                 self.db.set_slot(s["slot_at"], state="done")
+            elif item["status"] == "approved" and (self.cfg.get("power") or {}).get("hold_during_stream") \
+                    and self.stream_reason(now):
+                continue  # чекаємо кінця стріму
             elif item["status"] == "approved":  # підтвердили після слоту — публікуємо одразу
                 self.db.set_slot(s["slot_at"], state="done")
                 log.info("#%s підтверджено після слоту — публікую зараз", item["id"])
@@ -396,6 +399,12 @@ class Scheduler:
             item = self.db.get_item(s["item_id"]) if s["item_id"] else None
             if not item or item["slot_at"] != s["slot_at"]:
                 self.db.set_slot(s["slot_at"], state="done")
+                continue
+            if item["status"] == "approved" and (self.cfg.get("power") or {}).get("hold_during_stream") \
+                    and self.stream_reason(now):
+                self.db.set_slot(s["slot_at"], state="waiting")
+                log.info("Стрім — публікацію #%s відкладено до його завершення", item["id"])
+                self.app.bot.send(f"🎮 Йде стрім — публікацію #{item['id']} відкладено, опублікую одразу після нього.")
                 continue
             if item["status"] == "approved":
                 late = now - s["slot_at"]
@@ -599,9 +608,22 @@ class Scheduler:
             out.add(r["slot_at"] - before)
         return sorted(t for t in out if t > now + 60)
 
+    def stream_reason(self, now: int) -> str | None:
+        """Режим стріму (кнопка «🎮 Стрім») або запущена програма для стріму / гра."""
+        until = int(self.db.get("stream_until") or 0)
+        if until > now:
+            return f"🎮 режим стріму до {fmt_slot(self.cfg, until)}"
+        import power as pw
+        apps = {a.lower() for a in (self.cfg.get("power") or {}).get("no_sleep_apps") or []}
+        found = sorted(apps & pw.running_processes())
+        return f"🎮 запущено {', '.join(found)}" if found else None
+
     def busy_reason(self, now: int) -> str | None:
         """Чому ПК не можна приспати (None — можна)."""
         power = self.cfg.get("power") or {}
+        stream = self.stream_reason(now)
+        if stream:
+            return stream
         before = int(power.get("wake_before_minutes", 5)) * 60
         if self.db.items("status IN ('notified','publishing')"):
             return "шортс чекає на підтвердження або публікується"
@@ -623,6 +645,10 @@ class Scheduler:
             return "відкрито діалог у Telegram"
         if self.db.q("SELECT key FROM kv WHERE key LIKE 'pcmd:%'"):
             return "виконується дія з панелі"
+        last = int(self.db.get("last_activity") or 0)
+        quiet = int(power.get("quiet_minutes", 5)) * 60
+        if now - last < quiet:
+            return f"чекаю {int(power.get('quiet_minutes', 5))} хв тиші після вашої дії / публікації"
         return None
 
     def maybe_sleep(self, now: int) -> None:

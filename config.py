@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.12-36"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.12-37"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -33,7 +33,13 @@ DEFAULTS: dict = {
     # skip — у кінець черги, auto — опублікувати самому з поточною назвою й хештегами
     "on_missed_approval": "wait",
     # Сон між слотами (Windows): прокидатися за N хв до публікації, засинати, коли роботи немає
-    "power": {"sleep_between_slots": False, "wake_before_minutes": 5},
+    "power": {"sleep_between_slots": False, "wake_before_minutes": 5,
+              "quiet_minutes": 5,           # не засинати, поки минуло менше N хв від вашої дії в боті / публікації
+              "hold_during_stream": False,  # під час стріму публікацію відкласти до його завершення
+              # Поки запущена будь-яка з цих програм — ПК не засне (стрім, гра)
+              "no_sleep_apps": ["obs64.exe", "obs32.exe", "obs.exe", "Streamlabs OBS.exe", "Streamlabs Desktop.exe",
+                                "XSplit.Core.exe", "Twitch Studio.exe", "PRISMLiveStudio.exe", "vMix64.exe",
+                                "WorldOfTanks.exe", "wgc.exe", "lgc.exe"]},
     "max_skips": 3,
     "ready_status": "ready_to_post",
     # Хештеги, що ЗАВЖДИ додаються в кінець назви (YouTube) і підписів (TikTok / Instagram / Facebook)

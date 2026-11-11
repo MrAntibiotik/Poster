@@ -141,7 +141,9 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <div class="card"><h2>Розклад</h2><div id="pauseState" class="big"></div>
         <div class="row"><button class="btn" id="bPause"></button></div>
         <p class="muted small">На паузі нові шортси не надсилаються, а слоти минають порожніми.</p>
-        <p class="small" id="powerInfo"></p></div>
+        <p class="small" id="powerInfo"></p>
+        <div class="row"><button class="btn" data-act="stream" data-hours="4">🎮 Стрім 4 год</button>
+          <button class="btn hidden" data-act="stream" data-hours="0" id="bStreamOff">⏹ Вимкнути стрім</button></div></div>
       <div class="card"><h2>Режим</h2><div id="modeState" class="big"></div>
         <div class="row"><button class="btn" id="bMode"></button></div>
         <p class="muted small">У тестовому режимі все працює, але публікації лише імітуються.</p></div>
@@ -353,7 +355,14 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
         і ніхто ним не користувався, — програма сама приспить його. Якщо ж ви за комп'ютером, він засне за звичайними
         налаштуваннями сну Windows (раджу «Переводити в сон через 30 хв»).</p>
       <label class="check"><input type="checkbox" data-set="power.sleep_between_slots"> Увімкнути сон між слотами</label>
-      <label class="f">Прокидатися за, хв до публікації</label><input type="number" min="3" max="60" data-set="power.wake_before_minutes" style="max-width:160px">
+      <div class="two">
+        <div><label class="f">Прокидатися за, хв до публікації</label><input type="number" min="3" max="60" data-set="power.wake_before_minutes"></div>
+        <div><label class="f">Засинати не раніше ніж через, хв після публікації / вашої дії в боті</label><input type="number" min="1" max="120" data-set="power.quiet_minutes"></div>
+      </div>
+      <h3>🎮 Стрім і гра</h3>
+      <p class="small">Поки запущена будь-яка з цих програм — ПК <b>не засне</b> (ні сам, ні через програму). Також у боті є кнопка «🎮 Стрім» — не спати N годин.</p>
+      <label class="f">Програми (через кому)</label><textarea data-set="power.no_sleep_apps" rows="2"></textarea>
+      <label class="check"><input type="checkbox" data-set="power.hold_during_stream"> Під час стріму <b>не публікувати</b> — відкласти до його завершення (щоб завантаження не забирало інтернет у стріму)</label>
       <label class="f">Якщо я не підтвердив шортс до часу слоту</label>
       <select data-set="on_missed_approval">
         <option value="wait">⏳ Чекати — опублікувати одразу після «🚀» (ПК не засне, поки не опублікує)</option>
@@ -542,8 +551,9 @@ async function refresh(){
   $("#botState").textContent = s.running ? "🟢 Працює" : "🔴 Зупинено";
   $("#bStart").disabled = s.running; $("#bStop").disabled = !s.running; $("#bRestart").disabled = !s.running;
   $("#pauseState").textContent = s.paused ? "⏸ На паузі" : "▶️ Активний";
-  $("#powerInfo").textContent = s.power.on ? "💤 Сон між слотами увімкнено" + (s.power.next_wake ? " · пробудження " + s.power.next_wake : "") +
-    (s.power.state ? " · зараз: " + s.power.state : "") : "";
+  $("#bStreamOff").classList.toggle("hidden", !s.stream_until);
+  $("#powerInfo").textContent = (s.stream_until ? "🎮 Режим стріму до " + s.stream_until + ". " : "") + (s.power.on ? "💤 Сон між слотами увімкнено" + (s.power.next_wake ? " · пробудження " + s.power.next_wake : "") +
+    (s.power.state ? " · зараз: " + s.power.state : "") : "");
   $("#bPause").textContent = s.paused ? "▶️ Продовжити" : "⏸ Пауза"; $("#bPause").dataset.act = s.paused ? "resume" : "pause";
   $("#modeState").textContent = s.dry_run ? "🧪 Тестовий" : "🚀 Бойовий";
   $("#bMode").textContent = s.dry_run ? "🚀 Увімкнути бойовий" : "🧪 Повернути тестовий";
@@ -701,6 +711,7 @@ document.addEventListener("click", ev => {
   if (b.dataset.act) {
     const name = b.dataset.act, body = {name};
     if (name === "testslot") body.minutes = +$("#testMin").value || 10;
+    if (name === "stream") body.hours = +b.dataset.hours;
     if (name === "stop" && !confirm("Зупинити бота? Сповіщення і публікації не працюватимуть, доки не запустите знову.")) return;
     if (name === "testslot" && body.minutes < 7) { body.minutes = 7; $("#testMin").value = 7; toast("Найменше — 7 хв: бот має встигнути надіслати шортс і дочекатися відповіді"); }
     if (SLOW[name]) $$(`button[data-act="${name}"]`).forEach(x => { if (x !== b) x.disabled = true; });

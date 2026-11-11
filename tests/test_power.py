@@ -8,6 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import power  # noqa: E402
+
+_orig_procs = power.running_processes
 from tests.test_flow import FlowBase  # noqa: E402
 
 
@@ -43,6 +45,10 @@ class MissedApprovalTest(FlowBase):
 
 
 class SleepPlanTest(FlowBase):
+    def tearDown(self):
+        power.running_processes = _orig_procs
+        super().tearDown()
+
     def test_wake_times_and_busy(self):
         self.cfg["power"] = {"sleep_between_slots": True, "wake_before_minutes": 5, "idle_minutes": 10}
         sch = self.app.scheduler
@@ -60,6 +66,42 @@ class SleepPlanTest(FlowBase):
         self.make_short("a")
         self.app.scheduler.tick(self.ts(11, "09:55"))
         self.assertEqual(len(self.app.db.items("status='notified'")), 1)
+
+    def test_quiet_after_activity_and_stream(self):
+        self.cfg["power"] = {"sleep_between_slots": True, "wake_before_minutes": 5, "quiet_minutes": 5,
+                             "no_sleep_apps": []}
+        sch, db = self.app.scheduler, self.app.db
+        sch.ensure_slots(self.ts(11, "08:00"))
+        db.set("last_activity", self.ts(11, "10:58"))
+        self.assertIn("тиші", sch.busy_reason(self.ts(11, "11:01")))
+        self.assertIsNone(sch.busy_reason(self.ts(11, "11:04")))
+        db.set("stream_until", self.ts(11, "15:00"))
+        self.assertIn("режим стріму", sch.busy_reason(self.ts(11, "11:04")))
+        power.running_processes = lambda: {"obs64.exe"}
+        self.cfg["power"]["no_sleep_apps"] = ["OBS64.exe"]
+        db.set("stream_until", None)
+        self.assertIn("obs64.exe", sch.busy_reason(self.ts(11, "11:04")))
+
+    def test_hold_publishing_during_stream(self):
+        self.cfg["power"] = {"hold_during_stream": True, "no_sleep_apps": []}
+        self.make_short("a")
+        sch, db = self.app.scheduler, self.app.db
+        sch.tick(self.ts(11, "09:00"))
+        item = db.items("status='notified'")[0]
+        db.update_item(item["id"], status="approved")
+        db.set("stream_until", self.ts(11, "12:00"))
+        sch.tick(self.ts(11, "10:00"))
+        self.assertEqual(db.get_item(item["id"])["status"], "approved")  # чекає кінця стріму
+        sch.tick(self.ts(11, "12:01"))
+        self.assertEqual(db.get_item(item["id"])["status"], "posted")
+
+    def test_stream_button(self):
+        self.app.bot.handle({"update_id": 1, "message": {"message_id": 7, "text": "🎮 Стрім",
+                                                          "chat": {"id": 42, "type": "private"}}})
+        self.assertIn("Режим стріму", self.app.bot.tg.sent[-1][1])
+        self.app.bot.handle({"update_id": 2, "callback_query": {
+            "id": "c", "data": "stm:4", "message": {"message_id": 999, "chat": {"id": 42}, "text": ""}}})
+        self.assertGreater(int(self.app.db.get("stream_until")), 0)
 
     def test_wake_script(self):
         s = power.wake_script([self.ts(11, "09:55")], r"C:\py\pythonw.exe")

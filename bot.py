@@ -39,6 +39,7 @@ HELP_ADMIN = (
     "/stats — аналітика по платформах, /top — лідери тижня\n"
     "/platforms — увімкнути / вимкнути платформи для всіх шортсів\n"
     "/failed — невдалі публікації: причина, повтор зараз / пізніше / у вільний слот\n"
+    "/stream — режим стріму: ПК не засне (і за бажанням публікації чекають кінця стріму)\n"
     "/menu — показати кнопки\n"
     "/cancel — скасувати введення назви"
 )
@@ -50,7 +51,7 @@ HELP_VIEWER = (
 BTN = {
     "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
     "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
-    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed",
+    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed", "🎮 Стрім": "/stream",
 }
 VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
 
@@ -133,11 +134,31 @@ class Bot:
         if self.role(chat_id) == "admin":
             pause = "▶️ Продовжити" if self.paused() else "⏸ Пауза"
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня", "🧪 Тест-слот"],
-                    ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "❓ Довідка"]]
+                    ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "🎮 Стрім", "❓ Довідка"]]
         else:
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня"]]
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
                 "is_persistent": True}
+
+    def stream_text(self) -> tuple[str, dict]:
+        now = now_ts()
+        until = int(self.db.get("stream_until") or 0)
+        sch = self.app.scheduler
+        auto = sch.stream_reason(now) if until <= now else None
+        power = self.cfg.get("power") or {}
+        lines = ["🎮 <b>Режим стріму</b>"]
+        if until > now:
+            lines.append(f"Увімкнено до <b>{fmt_slot(self.cfg, until)}</b> — ПК не засне.")
+        elif auto:
+            lines.append(f"Зараз {esc(auto[2:])} — ПК не засне, поки програма працює.")
+        else:
+            lines.append("Вимкнено. ПК не засинає й тоді, коли запущено OBS / Streamlabs / гру.")
+        lines.append("Публікації під час стріму: " + ("⏸ чекають кінця стріму" if power.get("hold_during_stream")
+                                                     else "▶️ йдуть за розкладом") + " (змінити — у панелі).")
+        rows = [[{"text": f"{h} год", "callback_data": f"stm:{h}"} for h in (2, 4, 6, 10)]]
+        if until > now:
+            rows.append([{"text": "⏹ Вимкнути режим стріму", "callback_data": "stm:0"}])
+        return "\n".join(lines), {"inline_keyboard": rows}
 
     def platforms_text(self) -> tuple[str, dict]:
         lines = ["🔌 <b>Платформи</b> — куди публікувати всі шортси",
@@ -535,6 +556,7 @@ class Bot:
                 log.exception("Помилка обробки оновлення %s", u.get("update_id"))
 
     def handle(self, u: dict) -> None:
+        self.db.set("last_activity", now_ts())  # ви щось робите в боті — ПК не засне
         if "callback_query" in u:
             cq = u["callback_query"]
             chat = ((cq.get("message") or {}).get("chat") or {}).get("id")
@@ -651,6 +673,20 @@ class Bot:
                 self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
             except TelegramError as e:
                 log.debug("edit platforms: %s", e)
+            return
+        if action == "stm":
+            hours = target
+            if hours:
+                self.db.set("stream_until", now_ts() + hours * 3600)
+                answer(f"🎮 Режим стріму на {hours} год")
+            else:
+                self.db.set("stream_until", None)
+                answer("Режим стріму вимкнено")
+            text, kb = self.stream_text()
+            try:
+                self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
+            except TelegramError as e:
+                log.debug("edit stream: %s", e)
             return
         if action == "ig":
             answer("⏳ Готую відео…")
@@ -1466,6 +1502,11 @@ class Bot:
             self.db.set("paused", None)
             self.db.event(None, "resumed", {"by": chat})
             self.send("▶️ Розклад відновлено.", keyboard=True)
+        elif cmd == "/stream":
+            if role != "admin":
+                return reply("⛔ Лише для адміністратора.", False)
+            text, kb = self.stream_text()
+            reply(text, kb=kb)
         elif cmd == "/failed":
             self._bg(self.failed_list, chat)
         elif cmd == "/platforms":

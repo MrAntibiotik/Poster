@@ -66,7 +66,8 @@ FIELDS = {
     "ai.enabled": "bool", "ai.model": "str", "ai.hashtags_count": "int", "ai.channel_description": "str",
     "ai.extra_prompt": "str",
     "on_missed_approval": "missed", "power.sleep_between_slots": "bool",
-    "power.wake_before_minutes": "int",
+    "power.wake_before_minutes": "int", "power.quiet_minutes": "int", "power.hold_during_stream": "bool",
+    "power.no_sleep_apps": "applist",
 }
 
 
@@ -99,6 +100,9 @@ def coerce(kind: str, value):
         return v
     if kind == "time":
         return _hm(value)
+    if kind == "applist":
+        items = value if isinstance(value, list) else re.split(r"[,;\n]+", str(value))
+        return [x.strip() for x in items if x.strip()]
     if kind == "missed":
         if value not in ("wait", "skip", "auto"):
             raise ValueError("wait / skip / auto")
@@ -356,6 +360,10 @@ class Panel:
             on = bool(data.get("on"))
             self.save_settings({f"platforms.{key}.enabled": on})
             return f"{NAMES[key]}: {'увімкнено' if on else 'вимкнено'}"
+        if name == "stream":
+            hours = int(data.get("hours") or 0)
+            self.db.set("stream_until", now_ts() + hours * 3600 if hours > 0 else None)
+            return f"🎮 Режим стріму на {hours} год — ПК не засне" if hours > 0 else "Режим стріму вимкнено"
         if name == "power_allow":
             import power
             return power.allow_wake_timers()
@@ -688,6 +696,7 @@ class Panel:
         settings["regenerate_command"] = cmd_to_text(settings["regenerate_command"])
         settings["auto_meta.hashtags"] = tagmap_to_text(settings["auto_meta.hashtags"])
         settings["always_hashtags.tags"] = " ".join(settings["always_hashtags.tags"] or [])
+        settings["power.no_sleep_apps"] = ", ".join(settings["power.no_sleep_apps"] or [])
         secrets_ = {n: {"set": bool(v), "value": v if n in PUBLIC_IDS else mask(v), "label": SECRET_LABELS.get(n, n)}
                     for n, v in cfg["secrets"].items()}
 
@@ -764,6 +773,8 @@ class Panel:
             "health_time": fmt_slot(cfg, int(db.get("health_ts")), now) if db.get("health_ts") else None,
             "ready_info": self.count_shorts(cfg["paths"]["ready"]),
             "failed": self.failed_state(cfg, now),
+            "stream_until": fmt_slot(cfg, int(db.get("stream_until")), now)
+            if int(db.get("stream_until") or 0) > now else "",
             "power": {"on": bool((cfg.get("power") or {}).get("sleep_between_slots")),
                       "state": db.get("power_state") or "",
                       "next_wake": fmt_when(cfg, int(db.get("power_next_wake")), now)

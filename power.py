@@ -32,6 +32,27 @@ def idle_seconds() -> float:
     return (ctypes.windll.kernel32.GetTickCount() - info.dwTime) / 1000.0
 
 
+_proc_cache: tuple[float, set[str]] = (0.0, set())
+
+
+def running_processes() -> set[str]:
+    """Імена запущених програм (у нижньому регістрі), кеш 60 с."""
+    import time
+    global _proc_cache
+    if not WIN:
+        return set()
+    if time.time() - _proc_cache[0] < 60:
+        return _proc_cache[1]
+    try:
+        r = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, errors="replace",
+                           timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        names = {line.split('","')[0].strip('"').lower() for line in r.stdout.splitlines() if line.startswith('"')}
+    except Exception:  # noqa: BLE001
+        names = set()
+    _proc_cache = (time.time(), names)
+    return names
+
+
 def keep_awake(on: bool) -> None:
     """Поки бот чимось зайнятий — Windows не засне сама (екран може згаснути)."""
     if not WIN:
