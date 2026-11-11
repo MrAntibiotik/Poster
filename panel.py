@@ -255,6 +255,7 @@ class Panel:
             sec = self.cfg["secrets"]
             if not sec["TELEGRAM_BOT_TOKEN"] or not sec["TELEGRAM_CHAT_ID"]:
                 raise ValueError("Спершу впишіть токен бота і свій chat_id: вкладка «✈️ Telegram і доступ» → Зберегти")
+        self._owner_cache = (0, None)
         if name == "start":
             if not control.start_bot(port):
                 raise ValueError("Бот не запустився. " + self.last_error())
@@ -262,11 +263,13 @@ class Panel:
             return "Бот запущено"
         if name == "stop":
             if not control.stop_bot(self.db, port):
-                raise ValueError("Бот не зупинився за 40 с")
+                raise ValueError("Бот не зупинився. Закрийте вікно бота або в Диспетчері завдань завершіть "
+                                 "процеси pythonw.exe / python.exe, потім натисніть «Запустити».")
             return "Бот зупинено"
         if name == "restart":
             if not control.stop_bot(self.db, port):
-                raise ValueError("Бот не зупинився за 40 с")
+                raise ValueError("Бот не зупинився. Закрийте вікно бота або в Диспетчері завдань завершіть "
+                                 "процеси pythonw.exe / python.exe, потім натисніть «Запустити».")
             time.sleep(1)
             if not control.start_bot(port):
                 raise ValueError("Бот не запустився. " + self.last_error())
@@ -606,8 +609,17 @@ class Panel:
                     log_tail = log_tail.replace(v, mask(v))
             log_tail = "\n".join(log_tail.splitlines()[-120:])
 
+        running = control.is_running(cfg["lock_port"])
+        owner = None
+        if running:  # пошук процесу на Windows запускає PowerShell — не частіше ніж раз на 20 с
+            cached = getattr(self, "_owner_cache", (0, None))
+            if time.time() - cached[0] > 20:
+                cached = (time.time(), control.port_owner(cfg["lock_port"]))
+                self._owner_cache = cached
+            owner = cached[1]
         return {
-            "running": control.is_running(cfg["lock_port"]),
+            "running": running,
+            "foreign_bot": owner["cmd"] if control.is_foreign(owner) else None,
             "paused": db.get("paused") == "1",
             "dry_run": bool(cfg.get("dry_run")),
             "restart_needed": self.restart_needed,
@@ -713,7 +725,8 @@ def make_handler(panel: Panel):
                                   {"Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; "
                                                               "script-src 'self' 'unsafe-inline'; img-src 'self' data:"})
             if self.path == "/api/session":
-                return self.json({"authed": self.authed(), "has_password": panel.has_password()})
+                from config import VERSION
+                return self.json({"authed": self.authed(), "has_password": panel.has_password(), "version": VERSION})
             if self.path == "/api/state":
                 if not self.authed():
                     return self.json({"error": "auth"}, 401)
@@ -813,14 +826,30 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
     if port:
         panel.port = port
     url = f"http://127.0.0.1:{panel.port}/"
+    from config import VERSION
+    pid_file = Path(panel.cfg["paths"]["data"]) / "panel.pid"
+    httpd = None
+    for attempt in range(2):
+        try:
+            httpd = ThreadingHTTPServer(("127.0.0.1", panel.port), make_handler(panel))
+            break
+        except OSError:
+            # Порт зайнятий старою копією панелі (напр. після оновлення) — закриваємо її і пробуємо ще раз
+            old = int(pid_file.read_text().strip() or 0) if pid_file.exists() else 0
+            if attempt == 0 and old and old != os.getpid():
+                log.info("Закриваю попередню копію панелі (PID %s)", old)
+                control.kill(old)
+                time.sleep(1.5)
+                continue
+            log.info("Панель уже відкрита — відкриваю браузер")
+            if open_browser:
+                webbrowser.open(url)
+            return 0
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", panel.port), make_handler(panel))
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
     except OSError:
-        log.info("Панель уже відкрита — відкриваю браузер")
-        if open_browser:
-            webbrowser.open(url)
-        return 0
-    log.info("Панель керування: %s", url)
+        pass
+    log.info("Панель керування %s: %s", VERSION, url)
     if sys.stdout:
         print(f"Панель керування: {url}  (Ctrl+C — закрити)")
     if open_browser:

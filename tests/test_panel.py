@@ -72,7 +72,9 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(st, 200)
 
     def test_auth_and_protection(self):
-        self.assertEqual(self.req("GET", "/api/session")[1], {"authed": False, "has_password": False})
+        sess = self.req("GET", "/api/session")[1]
+        self.assertEqual((sess["authed"], sess["has_password"]), (False, False))
+        self.assertTrue(sess["version"])
         self.assertEqual(self.req("GET", "/api/state")[0], 401)
         self.assertEqual(self.req("GET", "/", host="evil.example:80")[0], 403)          # DNS rebinding
         self.assertEqual(self.req("POST", "/api/setup", {"password": "x1234"}, header=False)[0], 403)  # CSRF

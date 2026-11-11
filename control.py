@@ -52,24 +52,91 @@ def start_bot(port: int, window: bool = False, wait: int = 30) -> bool:
     return False
 
 
-def stop_bot(db, port: int, wait: int = 20) -> bool:
-    """Спершу м'яко (прапорець у БД, служба помічає його за кілька секунд), потім примусово за PID."""
+def port_owner(port: int) -> dict | None:
+    """Який процес тримає порт-замок бота: {'pid', 'cmd'} (щоб знайти бота, навіть запущеного з іншої папки)."""
+    try:
+        if WIN:
+            ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+                  f"$c = Get-NetTCPConnection -LocalPort {int(port)} -State Listen -ErrorAction SilentlyContinue | "
+                  "Select-Object -First 1; if ($c) { $p = Get-CimInstance Win32_Process -Filter "
+                  "\"ProcessId=$($c.OwningProcess)\"; \"$($c.OwningProcess)|$($p.CommandLine)\" }")
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=30,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            line = (r.stdout or "").strip().splitlines()
+            if not line or "|" not in line[-1]:
+                return None
+            pid, cmd = line[-1].split("|", 1)
+            return {"pid": int(pid), "cmd": cmd.strip()}
+        pid = _linux_port_pid(int(port))
+        if not pid:
+            return None
+        try:
+            cmd = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace").strip()
+        except OSError:
+            cmd = ""
+        return {"pid": pid, "cmd": cmd}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _linux_port_pid(port: int) -> int | None:
+    """Linux/macOS-налагодження: процес, що слухає порт (через /proc, без зовнішніх утиліт)."""
+    inode = None
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            for line in Path(table).read_text().splitlines()[1:]:
+                f = line.split()
+                if f[3] == "0A" and int(f[1].split(":")[1], 16) == port:  # 0A = LISTEN
+                    inode = f[9]
+                    break
+        except OSError:
+            continue
+        if inode:
+            break
+    if not inode:
+        return None
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            for fd in (proc / "fd").iterdir():
+                if os.readlink(fd) == f"socket:[{inode}]":
+                    return int(proc.name)
+        except OSError:
+            continue
+    return None
+
+
+def is_foreign(owner: dict | None) -> bool:
+    """Бот запущено з іншої папки (інша копія програми)."""
+    if not owner or not owner.get("cmd"):
+        return False
+    return str(ROOT).lower() not in owner["cmd"].lower().replace("/", "\\" if WIN else "/")
+
+
+def stop_bot(db, port: int, wait: int = 15) -> bool:
+    """Спершу м'яко (прапорець у БД), потім примусово: за PID із БД, а якщо не допомогло —
+    процес, що тримає порт (так зупиняється і бот, запущений з іншої папки)."""
     if not is_running(port):
         return True
-    db.set("control", "stop")
-    for _ in range(wait * 2):
-        time.sleep(0.5)
-        if not is_running(port):
-            return True
-    pid = int(db.get("pid") or 0)
-    if pid:
+    owner = port_owner(port)
+    if not is_foreign(owner):
+        db.set("control", "stop")
+        for _ in range(wait * 2):
+            time.sleep(0.5)
+            if not is_running(port):
+                return True
+    for pid in (int(db.get("pid") or 0), (owner or {}).get("pid") or 0, (port_owner(port) or {}).get("pid") or 0):
+        if not pid or pid == os.getpid():
+            continue
         kill(pid)
-        for _ in range(20):
+        for _ in range(16):
             time.sleep(0.5)
             if not is_running(port):
                 db.set("control", None)
                 return True
-    return False
+    return not is_running(port)
 
 
 def kill(pid: int) -> None:

@@ -92,7 +92,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 <div id="app" class="hidden">
 <header>
   <div class="bar">
-    <div class="logo">🎬 poster</div>
+    <div class="logo">🎬 poster <span id="ver" class="muted small" style="font-weight:400"></span></div>
     <span id="hBot" class="pill"></span><span id="hMode" class="pill"></span><span id="hPause" class="pill hidden"></span>
   </div>
   <nav id="tabs">
@@ -110,6 +110,9 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 <main>
   <div id="tgBanner" class="banner hidden">⚠️ Бот ще не налаштований: впишіть токен бота і свій chat_id.
     <button class="btn" id="goTg">✈️ Налаштувати Telegram</button></div>
+  <div id="foreignBanner" class="banner hidden"><span>⚠️ Працює <b>інша копія бота</b> — з іншої папки:
+    <code id="foreignCmd" class="small"></code>. Вона заважає цій (налаштування, YouTube, кнопки панелі на неї не діють).</span>
+    <button class="btn" data-act="restart">🔁 Зупинити її і запустити цю</button></div>
   <div id="pathBanner" class="banner hidden"><span id="pathText"></span>
     <button class="btn" id="goSched">📂 Виправити папки</button></div>
   <div id="restartBanner" class="banner hidden">⚠️ Налаштування змінено — перезапустіть бота, щоб вони набули чинності.
@@ -402,6 +405,7 @@ async function run(fn, btn, slow){
 /* ---------- вхід ---------- */
 async function boot(){
   const s = await api("/api/session");
+  if (s.version) $("#ver").textContent = "версія " + s.version;
   if (s.authed) return showApp();
   showAuth(s.has_password);
 }
@@ -449,6 +453,8 @@ async function refresh(){
   pill($("#hMode"), s.dry_run ? "Тестовий режим" : "Бойовий режим", s.dry_run ? "warn" : "ok");
   pill($("#hPause"), "Розклад на паузі", "warn"); $("#hPause").classList.toggle("hidden", !s.paused);
   $("#restartBanner").classList.toggle("hidden", !(s.restart_needed && s.running));
+  $("#foreignBanner").classList.toggle("hidden", !s.foreign_bot);
+  $("#foreignCmd").textContent = s.foreign_bot || "";
   $("#pathBanner").classList.toggle("hidden", !s.path_problems.length);
   $("#pathText").textContent = "⚠️ Неправильні папки — бот не запуститься: " + s.path_problems.join("; ");
   $("#tgBanner").classList.toggle("hidden", s.secrets.TELEGRAM_BOT_TOKEN.set && s.secrets.TELEGRAM_CHAT_ID.set);
