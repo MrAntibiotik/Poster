@@ -163,6 +163,9 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
         <div class="row"><button class="btn" data-open="ready">📂 Папка ready</button>
           <button class="btn" data-open="posted">📂 Папка posted</button></div></div>
     </div>
+    <div class="card" id="failedCard"><h2>⚠️ Невдалі публікації <span id="failedCount" class="pill"></span></h2>
+      <p class="muted small">Повтор публікує лише туди, де не вийшло. Бот виконає його протягом 1–2 хвилин.</p>
+      <table><tbody id="failedRows"></tbody></table></div>
     <div class="card"><h2>Останні публікації</h2><table><tbody id="posted"></tbody></table></div>
   </section>
 
@@ -499,6 +502,18 @@ async function refresh(){
     `знайдено відео: <b>${ri.total}</b>, готових до публікації: <b>${ri.ready}</b>${ri.games.length ? " · ігри: " + ri.games.map(esc).join(", ") : ""}` +
     (ri.no_json ? `<br><span class="muted">з них без json: ${ri.no_json} — назву й хештеги програма створить сама${s.settings["auto_meta.enabled"] ? "" : " (зараз вимкнено!)"}</span>` : "");
   $("#queue").innerHTML = s.queue.map(i => `<li>#${i.id} ${i.game ? "[" + esc(i.game) + "] " : ""}${esc(i.name)}${i.when ? ` → <b>${esc(i.when)}</b>` : ""}${i.skips ? ` <span class="pill warn">пропусків: ${i.skips}</span>` : ""}</li>`).join("") || '<li class="muted">черга порожня — покладіть шортси в папку ready</li>';
+  const fl = s.failed || [];
+  $("#failedCount").textContent = fl.filter(f => !f.ignored).length + (fl.some(f => f.ignored) ? " + 🙈 " + fl.filter(f => f.ignored).length : "");
+  $("#failedRows").innerHTML = fl.map(f => `<tr><td>${f.ignored ? "🙈 " : ""}<b>#${f.id}</b> ${esc(f.name)}${f.exists ? "" : ' <span class="pill warn">файл не знайдено</span>'}
+      <div class="small">${Object.entries(f.errors).map(([p, e]) => `❌ <b>${esc(p)}</b>: ${esc(e)}`).join("<br>")}</div>
+      ${f.ok.length ? `<div class="small muted">✅ Вийшло: ${f.ok.map(esc).join(", ")}</div>` : ""}
+      ${f.retry ? `<div class="small">🔁 Повтор: <b>${esc(f.retry)}</b></div>` : ""}</td>
+    <td><div class="row">
+      <button class="btn primary" data-fail="${f.id}" data-op="now">🔁 Зараз</button>
+      <button class="btn" data-fail="${f.id}" data-op="slot">📦 У вільний слот</button>
+      ${f.ignored ? `<button class="btn" data-fail="${f.id}" data-op="unignore">↩️ Повернути</button>`
+                  : `<button class="btn" data-fail="${f.id}" data-op="ignore">✖️ Ігнорувати</button>`}
+    </div></td></tr>`).join("") || '<tr><td class="muted">немає — усе опубліковано ✅</td></tr>';
   $("#posted").innerHTML = s.posted.map(i => `<tr><td>${esc(i.when)}</td><td>${esc(i.name)}</td><td>${
     Object.entries(i.links).map(([p, u]) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(s.platforms[p].name)}</a>` : esc(s.platforms[p].name)).join(" · ")}${
     Object.keys(i.errors).length ? ' <span class="pill bad">помилки: ' + Object.keys(i.errors).map(p => esc(s.platforms[p].name)).join(", ") + "</span>" : ""}</td></tr>`).join("") || '<tr><td class="muted">ще нічого</td></tr>';
@@ -559,6 +574,8 @@ document.addEventListener("click", ev => {
     run(() => api("/api/users", {chat_id:+id, role:b.dataset.adduser}), b).then(() => $("#newUser").value = "");
   } else if (b.hasAttribute("data-toggle-pw")) {
     ev.preventDefault(); const i = b.previousElementSibling; i.type = i.type === "password" ? "text" : "password";
+  } else if (b.dataset.fail) {
+    run(() => api("/api/action", {name: "failed", id: +b.dataset.fail, op: b.dataset.op}), b);
   } else if (b.dataset.pick) {
     pickFolder(b.dataset.pick, b);
   } else if (b.hasAttribute("data-save-settings")) {

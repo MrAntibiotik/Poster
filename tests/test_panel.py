@@ -198,6 +198,31 @@ class PanelTest(unittest.TestCase):
         if not panel_mod.control.WIN:
             self.assertEqual(self.req("POST", "/api/pick_folder", {})[1], {"path": None, "native": False})
 
+    def test_failed_block_and_actions(self):
+        self.login()
+        db = self.panel.db
+        mp4 = self.tmp / "ready" / "a.mp4"
+        mp4.parent.mkdir(parents=True, exist_ok=True)
+        mp4.write_bytes(b"0")
+        js = mp4.with_suffix(".json")
+        js.write_text('{"status": "ready_to_post"}', encoding="utf-8")
+        item_id = db.add_item(str(mp4), str(js), "WoT")
+        import time
+        db.update_item(item_id, status="posted", posted_at=int(time.time()),
+                       results={"youtube": {"status": "ok", "url": "u"},
+                                "instagram": {"status": "error", "error": "ProcessingFailedError"}})
+        db.set(f"ignored:{item_id}", "1")
+        f = self.req("GET", "/api/state")[1]["failed"]
+        self.assertEqual((f[0]["id"], f[0]["ignored"]), (item_id, True))
+        self.assertIn("ProcessingFailedError", f[0]["errors"]["Instagram"])
+        self.assertEqual(self.req("POST", "/api/action", {"name": "failed", "id": item_id, "op": "unignore"})[0], 200)
+        self.assertFalse(self.req("GET", "/api/state")[1]["failed"][0]["ignored"])
+        st, r = self.req("POST", "/api/action", {"name": "failed", "id": item_id, "op": "now"})
+        self.assertEqual(st, 200, r)
+        self.assertIn("Повтор:", r["message"])
+        self.assertEqual(len(db.q("SELECT * FROM slots WHERE state='retry' AND item_id=?", (item_id,))), 1)
+        self.assertTrue(self.req("GET", "/api/state")[1]["failed"][0]["retry"])
+
     def test_youtube_secret_upload(self):
         self.login()
         self.assertEqual(self.req("POST", "/api/youtube/secret", {"content": "{}"})[0], 400)

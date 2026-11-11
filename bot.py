@@ -841,7 +841,21 @@ class Bot:
         self.refresh(item_id)
 
     def _item_card(self, chat: int, item: dict, kb: dict, prefix: str = "") -> None:
-        """Картка шортса з самим відео (як перед публікацією): підпис — назва, причина, кнопки."""
+        """Картка шортса з самим відео. Що б не сталося — користувач отримає хоча б текст із кнопками."""
+        try:
+            self._item_card_inner(chat, item, kb, prefix)
+        except Exception as e:  # noqa: BLE001
+            log.exception("Картка #%s", item.get("id"))
+            errs = "; ".join(f"{NAMES.get(p, p)}: {str(r.get('error', ''))[:150]}"
+                             for p, r in (item.get("results") or {}).items() if r.get("status") != "ok")
+            text = (f"{prefix}⚠️ Шортс #{item.get('id')} ({Path(item.get('mp4') or '').stem})\n"
+                    f"{errs or 'причина невідома'}\n(картку з відео не вдалося показати: {str(e)[:150]})")
+            try:
+                self.tg.send_message(chat, text, reply_markup=kb, html=False)
+            except Exception as e2:  # noqa: BLE001
+                log.error("Навіть текстову картку #%s не надіслано: %s", item.get("id"), e2)
+
+    def _item_card_inner(self, chat: int, item: dict, kb: dict, prefix: str = "") -> None:
         cap = ""
         for n in (300, 150, 80, 40):
             cap = prefix + self.failed_text(item, err_len=n)

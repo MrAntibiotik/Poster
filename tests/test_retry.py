@@ -98,5 +98,17 @@ class RetryTest(FlowBase):
         self.assertEqual(self.app.scheduler.failed_items(ignored=True), [])
 
 
+class CardFallbackTest(RetryTest):
+    def test_card_falls_back_to_text(self):
+        def boom(*a, **k):
+            raise ValueError("щось зламалось")
+        self.app.bot.failed_text = boom
+        self.app.bot.tg.sent.clear()
+        self.app.bot.handle({"update_id": 9, "message": {"text": "/failed", "chat": {"id": 42, "type": "private"}}})
+        last = self.app.bot.tg.sent[-1]
+        self.assertIn("картку з відео не вдалося показати", last[1])
+        self.assertIn("rf:", json.dumps(last[2]))  # кнопки на місці
+
+
 if __name__ == "__main__":
     unittest.main()

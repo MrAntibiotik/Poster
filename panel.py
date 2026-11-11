@@ -331,6 +331,26 @@ class Panel:
                 raise ValueError("Невідомо що відкрити")
             control.open_path(target)
             return "Відкрито"
+        if name == "failed":
+            item_id, op = int(data.get("id")), str(data.get("op"))
+            sched = self._sched()
+            item = self.db.get_item(item_id)
+            if not item or item["status"] not in ("failed", "posted"):
+                raise ValueError("Цього шортса вже немає серед невдалих")
+            if op == "ignore":
+                self.db.set(f"ignored:{item_id}", "1")
+                self.db.x("DELETE FROM slots WHERE state='retry' AND item_id=?", (item_id,))
+                return "Проігноровано"
+            if op == "unignore":
+                self.db.set(f"ignored:{item_id}", None)
+                return "Повернуто до невдалих"
+            if op in ("now", "slot"):
+                self.db.set(f"ignored:{item_id}", None)
+                ts = sched.retry_soon(item_id) if op == "now" else sched.reserve_retry(item_id)
+                from config import fmt_when
+                tail = "" if control.is_running(self.cfg["lock_port"]) else " (бот зараз зупинений — запустіть його)"
+                return f"Повтор: {fmt_when(self.cfg, ts)}{tail}"
+            raise ValueError("Невідома дія")
         if name == "ai_test":
             import ai
             from scheduler import find_videos
@@ -565,6 +585,35 @@ class Panel:
             log.warning("PowerShell-діалог: %s", e)
         return None
 
+    def _sched(self):
+        from platforms import build_platforms
+        from scheduler import Scheduler
+        app = types.SimpleNamespace(cfg=self.cfg, db=self.db, platforms={k: None for k in build_platforms(self.cfg)})
+        sched = Scheduler(app)
+        app.scheduler = sched
+        return sched
+
+    def failed_state(self, cfg: dict, now: int) -> list[dict]:
+        from config import fmt_when
+        try:
+            sched = self._sched()
+            rows = [(i, False) for i in sched.failed_items()] + [(i, True) for i in sched.failed_items(ignored=True)]
+        except Exception as e:  # noqa: BLE001
+            log.warning("failed_state: %s", e)
+            return []
+        out = []
+        for item, ignored in rows[:30]:
+            when = sched.retry_at(item["id"])
+            out.append({
+                "id": item["id"], "name": Path(item["mp4"]).stem, "ignored": ignored,
+                "exists": Path(item["mp4"]).exists(),
+                "errors": {NAMES.get(p, p): str(r.get("error", ""))[:200] for p, r in item["errors"].items()}
+                or ({"—": "не опубліковано ніде"} if item["status"] == "failed" else {}),
+                "ok": [NAMES.get(p, p) for p, r in item["results"].items() if r.get("status") == "ok"],
+                "retry": fmt_when(cfg, when, now) if when else "",
+            })
+        return out
+
     # ---------------- стан для сторінки ----------------
     def state(self) -> dict:
         cfg = self.reload()
@@ -649,6 +698,7 @@ class Panel:
             "users": users, "jobs": self.jobs, "log": log_tail,
             "health_time": fmt_slot(cfg, int(db.get("health_ts")), now) if db.get("health_ts") else None,
             "ready_info": self.count_shorts(cfg["paths"]["ready"]),
+            "failed": self.failed_state(cfg, now),
             "path_problems": self.path_problems(cfg),
             "root": str(self.root), "now": local_dt(cfg, now).strftime("%d.%m.%Y %H:%M"),
         }

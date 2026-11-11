@@ -270,6 +270,13 @@ class Scheduler:
         self.db.event(item_id, "retry_planned", {"at": ts})
         return ts
 
+    def retry_soon(self, item_id: int) -> int:
+        """Повтор якнайшвидше (для панелі: службу запускає планувальник протягом ~1–2 хв)."""
+        ts = (now_ts() + 90) // 60 * 60 + 60
+        while self.db.slot(ts):
+            ts += 60
+        return self.reserve_retry(item_id, ts)
+
     def retry_at(self, item_id: int) -> int | None:
         r = self.db.one("SELECT slot_at FROM slots WHERE state='retry' AND item_id=?", (item_id,))
         return r["slot_at"] if r else None
