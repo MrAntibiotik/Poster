@@ -575,8 +575,8 @@ class Bot:
                 log.debug("edit platforms: %s", e)
             return
         if action == "ig":
-            answer()
-            return self.ignored_list(chat)
+            answer("⏳ Готую відео…")
+            return self._bg(self.ignored_list, chat)
         if action in ("rf", "rt", "rq", "ri", "ru"):
             return self.retry_button(chat, target, action, cq, answer)
         if action in ("qp", "qi", "qt", "qf", "qd"):
@@ -853,6 +853,7 @@ class Bot:
         path = item["mp4"]
         if not Path(path).exists():
             return self.say(chat, cap + "\n<i>(файл відео не знайдено)</i>", reply_markup=kb)
+        self.typing(chat)
         try:
             video = media.telegram_copy(path, self.cfg)
             info = media.probe(video, self.cfg["ffprobe"])
@@ -862,6 +863,19 @@ class Bot:
             log.warning("Картка #%s без відео: %s", item["id"], e)
             self.say(chat, cap, reply_markup=kb)
 
+    def _bg(self, fn, *args) -> None:
+        """Довгі дії (стискання відео) — у фоні, щоб бот одразу відповідав на інші кнопки."""
+        if getattr(self.app.publisher, "sync", False):
+            return fn(*args)
+        threading.Thread(target=fn, args=args, daemon=True, name=fn.__name__).start()
+
+    def typing(self, chat: int, action: str = "upload_video") -> None:
+        """Індикатор «надсилає відео…» у чаті, поки готується копія для Telegram."""
+        try:
+            self.tg.call("sendChatAction", chat_id=chat, action=action)
+        except Exception as e:  # noqa: BLE001
+            log.debug("sendChatAction: %s", e)
+
     def failed_list(self, chat: int) -> None:
         items = self.app.scheduler.failed_items()
         ignored = self.app.scheduler.failed_items(ignored=True)
@@ -869,7 +883,8 @@ class Bot:
               if ignored else None)
         if not items:
             return self.say(chat, "✅ Невдалих публікацій немає.", reply_markup=kb)
-        self.say(chat, f"⚠️ <b>Невдалі публікації: {len(items)}</b>" + (" (показано 10)" if len(items) > 10 else ""))
+        self.say(chat, f"⚠️ <b>Невдалі публікації: {len(items)}</b>" + (" (показано 10)" if len(items) > 10 else "")
+                       + "\n⏳ Відео надсилаються — великі файли готуються до хвилини.")
         for item in items[:10]:
             self._item_card(chat, item, self.retry_keyboard(item["id"]))
         if kb:
@@ -880,7 +895,8 @@ class Bot:
         if not items:
             return self.say(chat, "Проігнорованих відео немає.", html_mode=False)
         self.say(chat, f"🙈 <b>Проігноровані: {len(items)}</b> — бот про них не нагадує"
-                       + (" (показано 10)" if len(items) > 10 else ""))
+                       + (" (показано 10)" if len(items) > 10 else "")
+                       + "\n⏳ Відео надсилаються — великі файли готуються до хвилини.")
         for item in items[:10]:
             kb = {"inline_keyboard": [[{"text": "↩️ Повернути до невдалих", "callback_data": f"ru:{item['id']}"}],
                                       [{"text": "🔁 Повторити зараз", "callback_data": f"rf:{item['id']}"}]]}
@@ -1207,7 +1223,7 @@ class Bot:
             self.db.event(None, "resumed", {"by": chat})
             self.send("▶️ Розклад відновлено.", keyboard=True)
         elif cmd == "/failed":
-            self.failed_list(chat)
+            self._bg(self.failed_list, chat)
         elif cmd == "/platforms":
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)
