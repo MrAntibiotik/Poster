@@ -21,6 +21,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import types
 import time
 import webbrowser
 from http.cookies import SimpleCookie
@@ -592,8 +593,12 @@ class Panel:
         tokens["meta"] = {"connected": bool(cfg["secrets"]["META_PAGE_TOKEN"])}
 
         db = self.db
-        queue = [{"id": i["id"], "name": Path(i["mp4"]).stem, "game": i["game"], "skips": i["skips"]}
-                 for i in db.queue()[:30]]
+        from config import fmt_when
+        from scheduler import Scheduler
+        sched = Scheduler(types.SimpleNamespace(cfg=cfg, db=db, app=None))
+        queue = [{"id": i["id"], "name": Path(i["mp4"]).stem, "game": i["game"], "skips": i["skips"],
+                  "when": fmt_when(cfg, ts, now) if ts else ""}
+                 for i, ts in sched.projection(now)[:30]]
         current = [{"id": i["id"], "name": Path(i["mp4"]).stem, "status": i["status"],
                     "slot": fmt_slot(cfg, i["slot_at"], now) if i["slot_at"] else ""}
                    for i in db.items("status IN ('notified','approved','publishing','failed')", order="slot_at")]

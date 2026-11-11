@@ -54,8 +54,10 @@ def daily_report(app, now: int | None = None, stats: dict | None = None) -> str:
     queue = db.queue()
     waiting = db.items("status IN ('notified','approved')", order="slot_at")
     lines.append(f"\n📦 <b>Відкладено (у черзі): {len(queue)}</b>")
-    for it in queue[:5]:
-        lines.append(f"• {esc(_title(it))}" + (f" (пропусків: {it['skips']})" if it["skips"] else ""))
+    from config import fmt_when
+    for it, ts in app.scheduler.projection(now)[:5]:
+        when = f" → {fmt_when(cfg, ts, now)}" if ts else ""
+        lines.append(f"• {esc(_title(it))}{when}" + (f" (пропусків: {it['skips']})" if it["skips"] else ""))
     if len(queue) > 5:
         lines.append(f"… і ще {len(queue) - 5}")
     upcoming = app.scheduler.upcoming(now, 6)

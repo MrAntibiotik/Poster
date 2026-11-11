@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import NAMES, ConfigError, enabled_platforms, ensure_dirs, fmt_slot, load_config, now_ts, setup_logging  # noqa: E402
+from config import NAMES, ConfigError, enabled_platforms, ensure_dirs, fmt_slot, fmt_when, load_config, now_ts, setup_logging  # noqa: E402
 from db import DB  # noqa: E402
 from platforms import build_platforms, get_class  # noqa: E402
 
@@ -56,10 +56,14 @@ class App:
         for it in active:
             slot = fmt_slot(self.cfg, it["slot_at"], now) if it["slot_at"] else ""
             lines.append(f"▶️ #{it['id']} {esc(Path(it['mp4']).stem)} — {st_names[it['status']]} {slot}")
-        for n, it in enumerate(queue[:25], 1):
+        plan = self.scheduler.projection(now)
+        for n, (it, ts) in enumerate(plan[:25], 1):
             game = f"[{esc(it['game'])}] " if it["game"] else ""
             sk = f" (пропусків: {it['skips']})" if it["skips"] else ""
-            lines.append(f"{n}. #{it['id']} {game}{esc(Path(it['mp4']).stem)}{sk}")
+            when = f" → <b>{fmt_when(self.cfg, ts, now)}</b>" if ts else ""
+            lines.append(f"{n}. #{it['id']} {game}{esc(Path(it['mp4']).stem)}{when}{sk}")
+        if plan and plan[0][1] is None and self.db.get("paused") == "1":
+            lines.append("⏸ Розклад на паузі — час не призначається")
         if len(queue) > 25:
             lines.append(f"… і ще {len(queue) - 25}")
         failed = self.db.items("status='failed'")

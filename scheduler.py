@@ -1,6 +1,7 @@
 """Розклад і черга: сканування ready/, слоти, сповіщення за годину, пропуски, звіти."""
 from __future__ import annotations
 
+import html
 import logging
 import threading
 import time
@@ -8,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import media
-from config import fmt_slot, local_dt, now_ts
+from config import fmt_slot, fmt_when, local_dt, now_ts
 from meta import auto_meta_json, json_status, load_meta, move_pair, read_json, write_json
 
 log = logging.getLogger("scheduler")
@@ -102,7 +103,53 @@ class Scheduler:
                 added.append(item_id)
                 self.db.event(item_id, "queued", {"file": Path(path).name})
                 log.info("У чергу додано #%s: %s", item_id, path)
+        if added:
+            self.announce_queued(added)
         return added
+
+    def announce_queued(self, item_ids: list[int]) -> None:
+        plan = {it["id"]: ts for it, ts in self.projection()}
+        paused = self.db.get("paused") == "1"
+        lines = [f"📥 <b>Нові шортси в черзі: {len(item_ids)}</b>"]
+        for item_id in item_ids[:15]:
+            item = self.db.get_item(item_id)
+            ts = plan.get(item_id)
+            when = fmt_when(self.cfg, ts) if ts else "—"
+            lines.append(f"• #{item_id} {html.escape(Path(item['mp4']).stem)} → <b>{when}</b>")
+        if len(item_ids) > 15:
+            lines.append(f"… і ще {len(item_ids) - 15}")
+        lines.append("⏸ Розклад на паузі — час зсунеться після «Продовжити»." if paused else
+                     f"За {self.cfg['notify_before_minutes']} хв до часу прийде шортс із кнопкою «🚀 Опублікувати».")
+        self.app.bot.send("\n".join(lines), html_mode=True)
+
+    # ---------- розклад наперед ----------
+    def future_slots(self, now: int, count: int) -> list[int]:
+        """Найближчі вільні слоти (у т.ч. наступних днів і позапланові) — для розкладу черги."""
+        if count <= 0:
+            return []
+        min_lead = int(self.cfg["min_notify_lead_minutes"]) * 60
+        rows = self.db.q("SELECT slot_at, state, item_id FROM slots WHERE slot_at>?", (now + min_lead,))
+        taken = {r["slot_at"] for r in rows if r["state"] != "pending" or r["item_id"]}
+        free = {r["slot_at"] for r in rows if r["state"] == "pending" and not r["item_id"]}
+        today = local_dt(self.cfg, now).date()
+        for d in range(400):  # до ~1 року наперед
+            day = today + timedelta(days=d)
+            for ts in self._day_slots(day):
+                if ts > now + min_lead and ts not in taken:
+                    free.add(ts)
+            # слоти з БД (сьогодні/завтра, позапланові) вже враховано; далі дні лише пізніші
+            if d >= 1 and len(free) >= count:
+                break
+        return sorted(free)[:count]
+
+    def projection(self, now: int | None = None) -> list[tuple[dict, int | None]]:
+        """Черга з часом публікації: перше відео — у найближчий вільний слот, друге — у наступний…"""
+        now = now or now_ts()
+        queue = self.db.queue()
+        if self.db.get("paused") == "1":
+            return [(it, None) for it in queue]
+        slots = self.future_slots(now, len(queue))
+        return [(it, slots[i] if i < len(slots) else None) for i, it in enumerate(queue)]
 
     # ---------- слоти ----------
     def _day_slots(self, day) -> list[int]:

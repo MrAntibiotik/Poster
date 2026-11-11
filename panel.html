@@ -498,7 +498,7 @@ async function refresh(){
   $("#readyInfo").innerHTML = !ri.exists ? '<span style="color:var(--bad)">папки не існує — оберіть іншу</span>' :
     `знайдено відео: <b>${ri.total}</b>, готових до публікації: <b>${ri.ready}</b>${ri.games.length ? " · ігри: " + ri.games.map(esc).join(", ") : ""}` +
     (ri.no_json ? `<br><span class="muted">з них без json: ${ri.no_json} — назву й хештеги програма створить сама${s.settings["auto_meta.enabled"] ? "" : " (зараз вимкнено!)"}</span>` : "");
-  $("#queue").innerHTML = s.queue.map(i => `<li>#${i.id} ${i.game ? "[" + esc(i.game) + "] " : ""}${esc(i.name)}${i.skips ? ` <span class="pill warn">пропусків: ${i.skips}</span>` : ""}</li>`).join("") || '<li class="muted">черга порожня — покладіть шортси в папку ready</li>';
+  $("#queue").innerHTML = s.queue.map(i => `<li>#${i.id} ${i.game ? "[" + esc(i.game) + "] " : ""}${esc(i.name)}${i.when ? ` → <b>${esc(i.when)}</b>` : ""}${i.skips ? ` <span class="pill warn">пропусків: ${i.skips}</span>` : ""}</li>`).join("") || '<li class="muted">черга порожня — покладіть шортси в папку ready</li>';
   $("#posted").innerHTML = s.posted.map(i => `<tr><td>${esc(i.when)}</td><td>${esc(i.name)}</td><td>${
     Object.entries(i.links).map(([p, u]) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(s.platforms[p].name)}</a>` : esc(s.platforms[p].name)).join(" · ")}${
     Object.keys(i.errors).length ? ' <span class="pill bad">помилки: ' + Object.keys(i.errors).map(p => esc(s.platforms[p].name)).join(", ") + "</span>" : ""}</td></tr>`).join("") || '<tr><td class="muted">ще нічого</td></tr>';
