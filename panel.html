@@ -64,7 +64,20 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 .list li{margin:4px 0}
 .pw{display:flex;gap:6px} .pw input{flex:1}
 .modal{position:fixed;inset:0;background:rgba(10,12,20,.55);z-index:30;display:flex;align-items:center;justify-content:center;padding:16px}
-.modal .card{width:100%;max-width:640px;max-height:90vh;display:flex;flex-direction:column;margin:0}
+.shorts{display:grid;gap:12px}
+.short{display:flex;gap:14px;border:1px solid var(--line);border-radius:10px;padding:10px;align-items:flex-start;flex-wrap:wrap}
+.short video{width:150px;aspect-ratio:9/16;background:#000;border-radius:8px;object-fit:contain;flex:none}
+.short .info{flex:1;min-width:220px}
+.short .t{font-weight:600;word-break:break-word}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+button.chip{font:inherit;font-size:13px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer;background:var(--ok-bg);color:var(--ok)}
+button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-through}
+.qrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:7px 0;border-bottom:1px solid var(--line)}
+.qrow .n{flex:1;min-width:180px;word-break:break-word}
+.qrow .btn{padding:4px 10px;font-size:13px}
+.out{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;margin-top:10px;max-height:520px;overflow:auto;font-size:14px}
+#imVideo{width:100%;max-height:46vh;background:#000;border-radius:8px}
+.modal .card{width:100%;max-width:640px;max-height:92vh;display:flex;flex-direction:column;margin:0;overflow:auto}
 .fslist{overflow:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0;min-height:200px;max-height:45vh}
 .fslist button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:none;color:var(--text);padding:8px 12px;font:inherit;cursor:pointer}
 .fslist button:hover{background:var(--chip)}
@@ -137,6 +150,19 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
         <p class="muted small" id="autoJob"></p></div>
     </div>
 
+    <div class="card" id="reqCard"><h2>👥 Запити на доступ до бота</h2><table><tbody id="reqRows"></tbody></table></div>
+
+    <div class="card"><h2>🎬 Шортси в роботі <span id="workCount" class="pill"></span></h2>
+      <p class="muted small">Те саме, що картки в Telegram: перегляд відео, назва й хештеги, час, платформи, публікація. Дії виконує бот — він має бути запущений.</p>
+      <div class="shorts" id="work"></div></div>
+
+    <div class="card"><h2>📊 Звіти й аналітика</h2>
+      <div class="row"><button class="btn" data-report="report">📊 Звіт за день</button>
+        <button class="btn" data-report="stats">📈 Аналітика</button>
+        <button class="btn" data-report="top">🏆 Топ тижня</button>
+        <label class="small"><input type="checkbox" id="repSend"> також надіслати в Telegram</label></div>
+      <div class="out hidden" id="repOut"></div></div>
+
     <div class="card"><h2>🧪 Тест</h2>
       <div class="row">Позаплановий слот через <input id="testMin" type="number" min="7" max="180" value="10" style="width:80px"> хв
         <button class="btn primary" data-act="testslot">Створити тестовий слот</button>
@@ -153,13 +179,13 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
     </div>
 
     <div class="grid">
-      <div class="card"><h2>Зараз у роботі</h2><ul id="current" class="list"></ul>
-        <h3>Найближчі слоти</h3><ul id="upcoming" class="list"></ul></div>
+      <div class="card"><h2>🕐 Найближчі слоти</h2><ul id="upcoming" class="list"></ul>
+        <p class="muted small">Стан розкладу — те саме, що «🕐 Статус» у боті.</p></div>
       <div class="card"><h2>Черга <span id="qCount" class="pill"></span></h2>
         <div class="folder"><div style="flex:1;min-width:0"><div class="small muted">📁 Папка з готовими шортсами</div>
           <div class="fspath" id="readyPath"></div><div class="small" id="readyInfo"></div></div>
           <button class="btn primary" data-pick="paths.ready">📂 Обрати папку…</button></div>
-        <ol id="queue" class="list"></ol>
+        <div id="queue"></div>
         <div class="row"><button class="btn" data-open="ready">📂 Папка ready</button>
           <button class="btn" data-open="posted">📂 Папка posted</button></div></div>
     </div>
@@ -387,6 +413,25 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
     <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn" id="fsCancel">Скасувати</button><button class="btn primary" id="fsOk">Обрати цю папку</button></div>
   </div>
 </div>
+<div class="modal hidden" id="itemModal" role="dialog" aria-modal="true" aria-labelledby="imTitle">
+  <div class="card">
+    <h2 id="imTitle">🎬 Шортс</h2>
+    <video id="imVideo" controls preload="metadata" playsinline></video>
+    <label class="f" for="imName">Назва (до 100 символів)</label>
+    <input type="text" id="imName" maxlength="100">
+    <div class="small muted" id="imAlways"></div>
+    <label class="f" for="imTags">Хештеги через пробіл (можна без #; «-» — без хештегів)</label>
+    <input type="text" id="imTags">
+    <label class="f" for="imWhen">Коли публікувати</label>
+    <select id="imWhen"></select>
+    <input type="datetime-local" id="imCustom" class="hidden" style="margin-top:6px">
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button class="btn" id="imCancel">Скасувати</button>
+      <button class="btn" id="imSave">💾 Зберегти</button>
+      <button class="btn primary" id="imPub">🚀 Підтвердити публікацію</button></div>
+    <p class="muted small" id="imNote"></p>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -491,17 +536,27 @@ async function refresh(){
   $("#platTable").innerHTML = Object.entries(s.platforms).map(([k, p]) => `<tr><td><b>${esc(p.name)}</b></td>
     <td>${p.enabled ? '<span class="pill ok">увімкнено</span>' : '<span class="pill">вимкнено</span>'}</td>
     <td>${conn[k] ? '<span class="pill ok">підключено</span>' : '<span class="pill bad">не підключено</span>'}</td>
-    <td class="small muted">${esc(p.health || "")}</td></tr>`).join("");
+    <td class="small muted">${esc(p.health || "")}</td>
+    <td><button class="btn" data-plat="${k}" data-on="${p.enabled ? 0 : 1}">${p.enabled ? "🚫 Вимкнути" : "✅ Увімкнути"}</button></td></tr>`).join("");
 
-  const st = {notified:"⏳ чекає підтвердження", approved:"👍 підтверджено", publishing:"⏫ публікується", failed:"❌ не опубліковано"};
-  $("#current").innerHTML = s.current.map(i => `<li>#${i.id} ${esc(i.name)} — ${st[i.status] || i.status} ${esc(i.slot)}</li>`).join("") || '<li class="muted">нічого</li>';
+  renderWork(s);
   $("#upcoming").innerHTML = s.upcoming.map(u => `<li>${esc(u.slot)}${u.manual ? " (тестовий)" : ""} — ${u.item ? "#" + u.item : "вільний"}</li>`).join("") || '<li class="muted">—</li>';
   $("#qCount").textContent = s.queue.length;
   const ri = s.ready_info; $("#readyPath").textContent = ri.path;
   $("#readyInfo").innerHTML = !ri.exists ? '<span style="color:var(--bad)">папки не існує — оберіть іншу</span>' :
     `знайдено відео: <b>${ri.total}</b>, готових до публікації: <b>${ri.ready}</b>${ri.games.length ? " · ігри: " + ri.games.map(esc).join(", ") : ""}` +
     (ri.no_json ? `<br><span class="muted">з них без json: ${ri.no_json} — назву й хештеги програма створить сама${s.settings["auto_meta.enabled"] ? "" : " (зараз вимкнено!)"}</span>` : "");
-  $("#queue").innerHTML = s.queue.map(i => `<li>#${i.id} ${i.game ? "[" + esc(i.game) + "] " : ""}${esc(i.name)}${i.when ? ` → <b>${esc(i.when)}</b>` : ""}${i.skips ? ` <span class="pill warn">пропусків: ${i.skips}</span>` : ""}</li>`).join("") || '<li class="muted">черга порожня — покладіть шортси в папку ready</li>';
+  setHTML("#queue", s.queue_items.map(i => `<div class="qrow"><span class="n">#${i.id} ${i.game ? "[" + esc(i.game) + "] " : ""}${esc(i.title)}${i.when ? ` → <b>${esc(i.when)}</b>` : ""}${i.skips ? ` <span class="pill warn">пропусків: ${i.skips}</span>` : ""}</span>
+      <button class="btn" data-edit="${i.id}" title="Переглянути відео, змінити назву, обрати час">🎬 Відкрити</button>
+      <button class="btn" data-iop="first" data-id="${i.id}" title="Першим у черзі">⬆️</button>
+      <button class="btn danger" data-iop="remove" data-id="${i.id}" title="Прибрати з черги (у папку skipped)">🗑</button></div>`).join("") || '<p class="muted">черга порожня — покладіть шортси в папку ready</p>');
+  $("#reqCard").classList.toggle("hidden", !s.pending_users.length);
+  setHTML("#reqRows", s.pending_users.map(u => `<tr><td>${esc(u.name || "")}</td><td>${u.chat_id}</td><td><div class="row">
+      <button class="btn" data-user="${u.chat_id}" data-role="viewer">👁 Сповіщення</button>
+      <button class="btn" data-user="${u.chat_id}" data-role="admin">🛠 Адмін</button>
+      <button class="btn danger" data-user="${u.chat_id}" data-role="blocked">❌ Відхилити</button></div></td></tr>`).join(""));
+  if (s.jobs.report) { const j = s.jobs.report, o = $("#repOut"); o.classList.remove("hidden");
+    const html = j.state === "ok" ? tgHtml(j.message) : esc(jobText(j)); if (o.dataset.h !== html) { o.dataset.h = html; o.innerHTML = html; } }
   const fl = s.failed || [];
   $("#failedCount").textContent = fl.filter(f => !f.ignored).length + (fl.some(f => f.ignored) ? " + 🙈 " + fl.filter(f => f.ignored).length : "");
   $("#failedRows").innerHTML = fl.map(f => `<tr><td>${f.ignored ? "🙈 " : ""}<b>#${f.id}</b> ${esc(f.name)}${f.exists ? "" : ' <span class="pill warn">файл не знайдено</span>'}
@@ -554,6 +609,68 @@ function fillForms(s){
     if (el.type !== "password" && v && v.set) el.value = v.value; });
 }
 
+/* ---------- шортси: картки, черга, редактор ---------- */
+const ST = {notified:"⏳ Чекає підтвердження", approved:"👍 Підтверджено", publishing:"⏫ Публікується…"};
+const SHORTN = {youtube:"YouTube", instagram:"Instagram", facebook:"Facebook", tiktok:"TikTok"};
+function setHTML(sel, html){ const el = $(sel); if (el.dataset.h !== html) { el.dataset.h = html; el.innerHTML = html; } }
+function tgHtml(t){  // лише безпечні теги Telegram: b, i, u, s, code, pre, a href=http(s)
+  let h = esc(t);
+  h = h.replace(/&lt;(\/?)(b|i|u|s|code|pre)&gt;/g, "<$1$2>");
+  h = h.replace(/&lt;a href=&quot;(https?:\/\/[^"&]+?)&quot;&gt;/g, '<a href="$1" target="_blank" rel="noopener">').replace(/&lt;\/a&gt;/g, "</a>");
+  return h;
+}
+function renderWork(s){
+  $("#workCount").textContent = s.work.length;
+  const plats = Object.entries(s.platforms).filter(([k, p]) => p.enabled);
+  setHTML("#work", s.work.map(i => `<div class="short">
+    ${i.exists ? `<video src="/api/video?id=${i.id}" controls preload="metadata" playsinline></video>` : '<div class="pill warn">файл не знайдено</div>'}
+    <div class="info"><div class="t">#${i.id} ${esc(i.title)}</div>
+      <div class="small muted">${esc(i.tags)} ${esc(i.always)}</div>
+      <div style="margin-top:6px"><b>${ST[i.status] || esc(i.status)}</b> · 🕐 ${esc(i.when || "—")}${i.edited.length ? ` <span class="pill">змінено: ${esc(i.edited.join(", "))}</span>` : ""}</div>
+      <div class="chips">${plats.map(([k]) => `<button class="chip ${i.disabled.includes(k) ? "off" : ""}" data-iop="toggle" data-id="${i.id}" data-platform="${k}" title="Увімкнути/вимкнути для цього шортса" ${i.status === "publishing" ? "disabled" : ""}>${SHORTN[k] || k}</button>`).join("")}</div>
+      ${i.status === "publishing" ? "" : `<div class="row">
+        <button class="btn primary" data-edit="${i.id}">${i.status === "notified" ? "🚀 Опублікувати…" : "✏️ Назва, хештеги, час"}</button>
+        <button class="btn" data-iop="publish" data-when="now" data-id="${i.id}">⚡ Зараз</button>
+        ${i.status === "approved" ? `<button class="btn" data-iop="unapprove" data-id="${i.id}">↩️ Скасувати підтвердження</button>` : ""}
+        ${s.can_regen ? `<button class="btn" data-iop="regen" data-id="${i.id}">🔄 Перегенерувати тексти</button>` : ""}</div>`}
+    </div></div>`).join("") || '<p class="muted">Зараз нічого не чекає. Шортс з’явиться тут за годину до свого слоту — або відкрийте будь-яке відео з черги нижче й опублікуйте коли завгодно.</p>');
+}
+let EDIT = null;
+function openEditor(id){
+  const it = [...S.work, ...S.queue_items].find(x => x.id === id); if (!it) return toast("Шортса вже немає", "err");
+  EDIT = it;
+  $("#imTitle").textContent = `🎬 Шортс #${it.id}` + (it.status === "queued" ? " (у черзі)" : "");
+  $("#imVideo").src = `/api/video?id=${it.id}`;
+  $("#imName").value = it.title; $("#imTags").value = it.tags;
+  $("#imAlways").textContent = it.always ? "У кінець назви й підписів автоматично додаються: " + it.always : "";
+  const opts = [];
+  if (it.ts) opts.push(`<option value="keep">✅ Залишити: ${esc(it.when)}</option>`);
+  opts.push(`<option value="now">⚡ Зараз</option>`);
+  S.free_slots.filter(f => f.ts !== it.ts).forEach(f => opts.push(`<option value="${f.ts}">📦 ${esc(f.label)}</option>`));
+  opts.push(`<option value="custom">⌨️ Свій час…</option>`);
+  $("#imWhen").innerHTML = opts.join(""); $("#imCustom").classList.add("hidden"); $("#imCustom").value = "";
+  $("#imNote").textContent = it.status === "queued"
+    ? "«Зберегти» з обраним часом — шортс стане в розклад і чекатиме підтвердження (картка прийде в Telegram). «Підтвердити» — опублікується в обраний час без додаткових питань."
+    : "«Зберегти» — лише змінити тексти/час. «Підтвердити» — шортс опублікується в обраний час.";
+  $("#itemModal").classList.remove("hidden");
+}
+function closeEditor(){ $("#itemModal").classList.add("hidden"); $("#imVideo").pause(); $("#imVideo").removeAttribute("src"); $("#imVideo").load(); EDIT = null; }
+$("#imWhen").addEventListener("change", () => $("#imCustom").classList.toggle("hidden", $("#imWhen").value !== "custom"));
+$("#imCancel").addEventListener("click", closeEditor);
+$("#itemModal").addEventListener("click", ev => { if (ev.target.id === "itemModal") closeEditor(); });
+async function submitEditor(op, btn){
+  if (!EDIT) return;
+  let when = $("#imWhen").value;
+  if (when === "custom") { const v = $("#imCustom").value; if (!v) return toast("Оберіть дату й час", "err");
+    when = Math.floor(new Date(v).getTime() / 1000); }
+  if (op === "save" && when === "now") return toast("«Зараз» — це публікація: натисніть «Підтвердити»", "err");
+  const body = {name:"item", op, id: EDIT.id, title: $("#imName").value, tags: $("#imTags").value, when};
+  const j = await run(() => api("/api/action", body), btn, op === "publish" ? "Передаю боту…" : null);
+  if (j) closeEditor();
+}
+$("#imSave").addEventListener("click", ev => submitEditor("save", ev.target));
+$("#imPub").addEventListener("click", ev => submitEditor("publish", ev.target));
+
 /* ---------- кнопки ---------- */
 document.addEventListener("click", ev => {
   const b = ev.target.closest("button"); if (!b) return;
@@ -574,6 +691,19 @@ document.addEventListener("click", ev => {
     run(() => api("/api/users", {chat_id:+id, role:b.dataset.adduser}), b).then(() => $("#newUser").value = "");
   } else if (b.hasAttribute("data-toggle-pw")) {
     ev.preventDefault(); const i = b.previousElementSibling; i.type = i.type === "password" ? "text" : "password";
+  } else if (b.dataset.edit) {
+    openEditor(+b.dataset.edit);
+  } else if (b.dataset.iop) {
+    const op = b.dataset.iop, body = {name:"item", op, id:+b.dataset.id};
+    if (op === "remove" && !confirm("Прибрати відео з черги? Файл буде перенесено в папку skipped.")) return;
+    if (op === "publish") { if (!confirm("Опублікувати шортс #" + body.id + " зараз?")) return; body.when = "now"; }
+    if (b.dataset.platform) body.platform = b.dataset.platform;
+    run(() => api("/api/action", body), b, op === "regen" ? "Перегенеровую…" : null);
+  } else if (b.dataset.report) {
+    $("#repOut").classList.remove("hidden"); $("#repOut").dataset.h = ""; $("#repOut").textContent = "⏳ Збираю дані…";
+    run(() => api("/api/action", {name:"report", kind:b.dataset.report, send:$("#repSend").checked}), b);
+  } else if (b.dataset.plat) {
+    run(() => api("/api/action", {name:"platform", key:b.dataset.plat, on: b.dataset.on === "1"}), b);
   } else if (b.dataset.fail) {
     run(() => api("/api/action", {name: "failed", id: +b.dataset.fail, op: b.dataset.op}), b);
   } else if (b.dataset.pick) {

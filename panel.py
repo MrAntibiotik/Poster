@@ -331,6 +331,22 @@ class Panel:
                 raise ValueError("Невідомо що відкрити")
             control.open_path(target)
             return "Відкрито"
+        if name == "item":
+            cmd = {k: data.get(k) for k in ("op", "id", "title", "tags", "when", "platform") if k in data}
+            return self.bot_call(cmd, 180 if cmd.get("op") in ("publish", "save", "regen") else 40)
+        if name == "report":
+            kind = data.get("kind")
+            if kind not in ("report", "stats", "top"):
+                raise ValueError("kind")
+            self.job("report", lambda: self.bot_call({"op": kind, "send": bool(data.get("send"))}, 300))
+            return "Збираю дані…"
+        if name == "platform":
+            key = data.get("key")
+            if key not in PLATFORMS:
+                raise ValueError("Невідома платформа")
+            on = bool(data.get("on"))
+            self.save_settings({f"platforms.{key}.enabled": on})
+            return f"{NAMES[key]}: {'увімкнено' if on else 'вимкнено'}"
         if name == "failed":
             item_id, op = int(data.get("id")), str(data.get("op"))
             sched = self._sched()
@@ -585,6 +601,43 @@ class Panel:
             log.warning("PowerShell-діалог: %s", e)
         return None
 
+    def bot_call(self, cmd: dict, timeout: int = 40) -> str:
+        """Передає дію запущеному боту (через базу) і чекає на результат."""
+        if not control.is_running(self.cfg["lock_port"]):
+            raise ValueError("Бот зупинений — спершу натисніть «▶️ Запустити»")
+        cid = secrets.token_hex(8)
+        self.db.set(f"pcmd:{cid}", json.dumps(cmd, ensure_ascii=False))
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            raw = self.db.get(f"pres:{cid}")
+            if raw:
+                self.db.x("DELETE FROM kv WHERE key=?", (f"pres:{cid}",))
+                res = json.loads(raw)
+                if not res.get("ok"):
+                    raise ValueError(res.get("message") or "Помилка")
+                return res.get("message") or "Готово"
+            time.sleep(0.3)
+        if self.db.get(f"pcmd:{cid}") is not None:
+            self.db.x("DELETE FROM kv WHERE key=?", (f"pcmd:{cid}",))
+            raise ValueError("Бот не взяв команду — перезапустіть його (стара версія не вміє виконувати дії з панелі)")
+        raise ValueError("Бот ще виконує дію — оновіть сторінку за хвилину")
+
+    def item_view(self, cfg: dict, item: dict, now: int, ts: int | None = None) -> dict:
+        from meta import PostMeta, load_meta
+        try:
+            meta = load_meta(item["json"], item["title_override"])
+        except Exception:  # noqa: BLE001
+            meta = PostMeta(yt_title=item["title_override"] or Path(item["mp4"]).stem)
+        conf = cfg.get("always_hashtags") or {}
+        always = {t.lower() for t in conf.get("tags") or []}
+        from config import fmt_when
+        ts = ts if ts is not None else item["slot_at"]
+        return {"id": item["id"], "name": Path(item["mp4"]).stem, "game": item["game"], "status": item["status"],
+                "title": meta.yt_title, "tags": " ".join(t for t in meta.hashtags if t.lower() not in always),
+                "always": " ".join(conf.get("tags") or []), "when": fmt_when(cfg, ts, now) if ts else "",
+                "ts": ts or 0, "disabled": item["disabled"], "skips": item["skips"], "edited": item["edited"],
+                "exists": Path(item["mp4"]).exists()}
+
     def _sched(self):
         from platforms import build_platforms
         from scheduler import Scheduler
@@ -699,6 +752,13 @@ class Panel:
             "health_time": fmt_slot(cfg, int(db.get("health_ts")), now) if db.get("health_ts") else None,
             "ready_info": self.count_shorts(cfg["paths"]["ready"]),
             "failed": self.failed_state(cfg, now),
+            "work": [self.item_view(cfg, i, now) for i in
+                     db.items("status IN ('notified','approved','publishing')", order="slot_at")],
+            "queue_items": [self.item_view(cfg, i, now, ts or 0) for i, ts in sched.projection(now)[:40]],
+            "free_slots": [{"ts": t, "label": fmt_when(cfg, t, now)} for t in sched.future_slots(now, 10)],
+            "pending_users": [u for u in users if u["role"] == "pending"],
+            "can_regen": bool(cfg.get("regenerate_command")) or bool(cfg.get("ai", {}).get("enabled")
+                                                                     and cfg["secrets"].get("GEMINI_API_KEY")),
             "path_problems": self.path_problems(cfg),
             "root": str(self.root), "now": local_dt(cfg, now).strftime("%d.%m.%Y %H:%M"),
         }
@@ -802,7 +862,54 @@ def make_handler(panel: Panel):
                 except Exception as e:  # noqa: BLE001
                     log.exception("state")
                     return self.json({"error": str(e)}, 500)
+            if self.path.startswith("/api/video?"):
+                if not self.authed():
+                    return self._send(401, b"auth", "text/plain")
+                return self.video()
             return self._send(404, b"Not found", "text/plain")
+
+        def video(self):
+            from urllib.parse import parse_qs, urlparse
+            try:
+                item = panel.db.get_item(int(parse_qs(urlparse(self.path).query)["id"][0]))
+                path = Path(item["mp4"])
+                size = path.stat().st_size
+            except (KeyError, ValueError, TypeError, OSError):
+                return self._send(404, b"Not found", "text/plain")
+            start, end, code = 0, size - 1, 200
+            m = re.match(r"bytes=(\d*)-(\d*)$", self.headers.get("Range") or "")
+            if m and (m.group(1) or m.group(2)):
+                if m.group(1):
+                    start = int(m.group(1))
+                    end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+                else:
+                    start = max(0, size - int(m.group(2)))
+                if start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+                code = 206
+            self.send_response(code)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Cache-Control", "private, max-age=600")
+            if code == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            try:
+                with open(path, "rb") as f:
+                    f.seek(start)
+                    left = end - start + 1
+                    while left > 0:
+                        chunk = f.read(min(256 * 1024, left))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        left -= len(chunk)
+            except (ConnectionError, OSError):
+                pass  # браузер перервав завантаження (перемотування) — це нормально
 
         # ---- POST ----
         def do_POST(self):  # noqa: N802

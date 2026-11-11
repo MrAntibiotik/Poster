@@ -154,6 +154,7 @@ def run_service(cfg: dict) -> int:
         return 2
     app.db.set("pid", os.getpid())
     app.bot.setup_commands()
+    app.bot.start_panel_worker()
     from config import VERSION
     log.info("Версія %s", VERSION)
     log.info("poster запущено. Платформи: %s. dry_run=%s", list(app.platforms), cfg.get("dry_run"))
