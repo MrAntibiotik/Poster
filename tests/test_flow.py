@@ -152,7 +152,9 @@ class FlowTest(FlowBase):
         item = self.app.db.get_item(item["id"])
         self.assertEqual(item["status"], "approved")
         self.assertEqual(item["disabled"], ["facebook"])
-        self.assertEqual(item["title_override"], "Нова назва")
+        from meta import load_meta
+        self.assertEqual(load_meta(item["json"]).yt_title, "Нова назва")  # для всіх платформ, не лише YouTube
+        self.assertTrue(load_meta(item["json"]).instagram_text.startswith("Нова назва"))
 
         sch.tick(self.ts(11, "13:00"))
         item = self.app.db.get_item(item["id"])

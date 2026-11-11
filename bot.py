@@ -1103,7 +1103,12 @@ class Bot:
                 return self.say(chat, "Цей шортс уже неактуальний — назву не змінено.", html_mode=False)
             title = re.sub(r"\s+", " ", text)[:100]
             edited = [x for x in item["edited"] if x != "назву"] + ["назву"]
-            self.db.update_item(item_id, title_override=title, edited=edited)
+            try:  # назва — для всіх платформ (YouTube, TikTok, Instagram, Facebook), хештеги лишаються
+                apply_manual(item["json"], title, self._raw_meta(item).hashtags)
+                self.db.update_item(item_id, title_override=None, edited=edited)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Назва #%s лише для YouTube: %s", item_id, e)
+                self.db.update_item(item_id, title_override=title, edited=edited)
             self.db.event(item_id, "edited", {"title": title})
             self.refresh(item_id)  # нова назва — у підписі відео
             return self.cleanup(chat)

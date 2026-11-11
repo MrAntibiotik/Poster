@@ -117,6 +117,17 @@ def load_meta(json_path: str | Path, title_override: str | None = None) -> PostM
     ig_text = _with_hashtags(ig_text or title, ig_tags or hashtags)
     fb_text = _with_hashtags(fb_text, fb_tags or ig_tags or hashtags) if fb_text else ig_text
 
+    if title_override and title_override.strip() != title:
+        # назва, змінена вручну, — у підписах усіх платформ, а не лише на YouTube
+        new = title_override.strip()
+
+        def retitle(text: str) -> str:
+            if title and title in text:
+                return text.replace(title, new, 1)
+            tags = " ".join(HASHTAG_RE.findall(text or ""))
+            return f"{new}\n\n{tags}".strip()
+        tt_text, ig_text, fb_text = retitle(tt_text), retitle(ig_text), retitle(fb_text)
+
     return PostMeta(
         yt_title=(title_override or title).strip(),
         yt_description=desc,
