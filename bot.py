@@ -216,10 +216,12 @@ class Bot:
             text = re.sub(r"<[^>]*$", "", text)
         return text
 
-    def texts(self, item: dict, meta: PostMeta | None = None) -> str:
+    def texts(self, item: dict, meta: PostMeta | None = None, quality: str = "") -> str:
         meta = meta or self._meta(item)
         private = "" if self.cfg["platforms"]["tiktok"].get("public") else " (приватно)"
         parts = [f"📝 Тексти для шортса #{item['id']}"]
+        if quality:
+            parts.append(quality)
         if "tiktok" in self.app.platforms:
             parts.append(f"🎵 <b>TikTok</b>{private}:\n{esc(meta.tiktok_text[:1300])}")
         same = meta.facebook_text == meta.instagram_text
@@ -249,7 +251,15 @@ class Bot:
         """Надсилає сам шортс (відеоповідомлення) + тексти всім отримувачам; кнопки — лише адміністраторам."""
         item = self.db.get_item(item_id)
         meta = self._meta(item)
-        caption, kb, texts = self.caption(item, meta), self.keyboard(item), self.texts(item, meta)
+        try:
+            q = media.quality(item["mp4"], self.cfg["ffprobe"])
+            qline = f"📐 <b>Оригінал:</b> {esc(media.quality_line(q))}\nНа платформи завантажується саме він — без перекодування."
+            if q["size_mb"] * 1024 * 1024 > media.TG_LIMIT:
+                qline += ("\nℹ️ У цьому чаті — копія, стиснута до 50 МБ (ліміт Telegram для ботів); "
+                          "на YouTube/TikTok/Instagram/Facebook іде оригінал.")
+        except OSError:
+            qline = ""
+        caption, kb, texts = self.caption(item, meta), self.keyboard(item), self.texts(item, meta, qline)
         admins = self.admins()
         self.db.clear_tg_msgs(item_id)
         video, info, file_id, video_error = None, {}, None, None

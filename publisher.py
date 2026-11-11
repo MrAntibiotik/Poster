@@ -112,6 +112,12 @@ class Publisher:
                     r = {"id": f"dry-{key}-{item['id']}", "url": f"https://example.com/{key}/{item['id']}",
                          "note": "dry_run: реальної публікації не було"}
                 else:
+                    previews = Path(app.cfg["paths"]["data"]) / "previews"
+                    if previews in Path(item["mp4"]).parents:
+                        raise RuntimeError("спроба опублікувати стиснуту прев'ю-копію замість оригіналу — зупинено")
+                    if i == 1:
+                        log.info("#%s %s: завантажую оригінал без змін: %s (%.1f МБ)", item["id"], key,
+                                 item["mp4"], Path(item["mp4"]).stat().st_size / 1024 / 1024)
                     r = plat.publish(item["mp4"], meta)
                 log.info("#%s %s: опубліковано %s", item["id"], key, r.get("url"))
                 return {"status": "ok", "attempts": i, "published_at": now_ts(), **r}
