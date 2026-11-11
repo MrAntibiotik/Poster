@@ -85,5 +85,26 @@ class FlowTest(FlowBase):
         self.assertEqual(self.app.db.get_item(item["id"])["status"], "posted")
 
 
+class PrivacyTest(FlowBase):
+    def test_private_marks_and_note(self):
+        self.cfg["platforms"]["youtube"]["privacy"] = "private"
+        self.cfg["dry_run"] = False
+
+        class YT:
+            def publish(s, path, meta):
+                return {"id": "v1", "url": "https://youtube.com/shorts/v1", "privacy": "private",
+                        "note": "YouTube зробив відео «приватне»…"}
+        self.app.platforms = {"youtube": YT()}
+        self.make_short("a")
+        self.app.scheduler.tick(self.ts(11, "12:00"))
+        cap = [s for s in self.app.bot.tg.sent if s[0] == "video"][0][1]
+        self.assertIn("YT ✅🔒", cap)
+        item = self.app.db.items("status='notified'")[0]
+        self.press(f"pub:{item['id']}", item)
+        self.app.scheduler.tick(self.ts(11, "13:00"))
+        self.assertIn("🔒 приватне", self.app.bot.tg.edits[-1][1])
+        self.assertTrue(any("YouTube зробив відео" in s[1] for s in self.app.bot.tg.sent if s[0] == "text"))
+
+
 if __name__ == "__main__":
     unittest.main()

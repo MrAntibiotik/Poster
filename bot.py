@@ -183,7 +183,16 @@ class Bot:
         return " ".join(conf.get("tags") or []) if conf.get("in_title", True) else ""
 
     def _platform_line(self, item: dict) -> str:
-        parts = [f"{SHORT[p]} {'🚫' if p in item['disabled'] else '✅'}" for p in enabled_platforms(self.cfg)]
+        def mark(p: str) -> str:
+            if p in item["disabled"]:
+                return "🚫"
+            if p == "youtube":
+                priv = self.cfg["platforms"]["youtube"].get("privacy", "public")
+                return {"private": "✅🔒", "unlisted": "✅🔗"}.get(priv, "✅")
+            if p == "tiktok" and not self.cfg["platforms"]["tiktok"].get("public"):
+                return "✅🔒"
+            return "✅"
+        parts = [f"{SHORT[p]} {mark(p)}" for p in enabled_platforms(self.cfg)]
         return " ".join(parts) or "—"
 
     def _status_block(self, item: dict) -> str:
@@ -221,7 +230,8 @@ class Bot:
             if not r:
                 continue
             if r.get("status") == "ok":
-                lock = " 🔒 приватно" if r.get("privacy") == "SELF_ONLY" else ""
+                lock = {"SELF_ONLY": " 🔒 приватно", "private": " 🔒 приватне",
+                        "unlisted": " 🔗 за посиланням"}.get(r.get("privacy"), "")
                 link = f'<a href="{esc(r["url"])}">{NAMES[p]}</a>' if r.get("url") else f"{NAMES[p]} ✅"
                 lines.append(f"{SHORT[p]}: {link}{lock}")
             else:

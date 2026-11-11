@@ -133,7 +133,7 @@ class FlowTest(FlowBase):
         cap = vids[0][1]
         self.assertIn("🎬 <b>Титул a</b>", cap)
         self.assertIn("#wot #танки", cap)
-        self.assertIn("🕐 Слот: 13:00 | Платформи: YT ✅ TT ✅ IG ✅ FB ✅", cap)
+        self.assertIn("🕐 Слот: 13:00 | Платформи: YT ✅ TT ✅🔒 IG ✅ FB ✅", cap)
         texts = tg.sent[-1]
         self.assertIn("Текст для TikTok", texts[1])
         self.assertIn("Текст для Instagram", texts[1])

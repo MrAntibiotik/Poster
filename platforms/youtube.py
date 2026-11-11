@@ -8,6 +8,8 @@ from .base import Platform, PublishError, TokenExpired
 
 log = logging.getLogger("youtube")
 
+PRIVACY_UA = {"public": "відкрите", "unlisted": "за посиланням", "private": "приватне"}
+
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
@@ -119,10 +121,13 @@ class YouTube(Platform):
                 fd.close()
         vid = resp["id"]
         out = {"id": vid, "url": f"https://youtube.com/shorts/{vid}"}
-        real = (resp.get("status") or {}).get("privacyStatus")
-        if real and real != privacy:
-            out["note"] = (f"YouTube встановив статус «{real}» замість «{privacy}» — "
-                           "ймовірно, API-проєкт ще не пройшов аудит (див. інструкцію)")
+        real = (resp.get("status") or {}).get("privacyStatus") or privacy
+        out["privacy"] = real
+        if real != privacy:
+            out["note"] = (f"YouTube зробив відео «{PRIVACY_UA.get(real, real)}», хоча в налаштуваннях "
+                           f"«{PRIVACY_UA.get(privacy, privacy)}». Так Google робить для API-проєктів без аудиту: "
+                           "подайте форму YouTube API Services Audit (https://support.google.com/youtube/contact/yt_api_form), "
+                           "а поки відкривайте відео вручну в YouTube Studio → Контент → Видимість.")
         return out
 
     def get_views(self, result: dict) -> int | None:
