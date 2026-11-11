@@ -196,8 +196,11 @@ class Bot:
         head = f"🎬 <b>{esc(meta.yt_title)}</b>"
         tags = esc(" ".join(meta.hashtags))
         hint = ""
-        if meta.auto and "назву" not in item["edited"] and item["status"] in ("notified", "approved"):
-            hint = "\nℹ️ Назва з імені файлу — змінити: «✏️ Ввести назву вручну»"
+        if item["status"] in ("notified", "approved") and "назву" not in item["edited"]:
+            if meta.ai:
+                hint = "\n🤖 Тексти від ШІ — перевірте; інший варіант: «🔄 Перегенерувати тексти»"
+            elif meta.auto:
+                hint = "\nℹ️ Назва з імені файлу — змінити: «✏️ Ввести назву вручну»"
         tail = (f"🕐 Слот: {slot} | Платформи: {self._platform_line(item)}\n\n"
                 f"{self._status_block(item)}{hint}")
         text = "\n".join(x for x in (head, tags, tail) if x)
@@ -458,12 +461,33 @@ class Bot:
                                  reply_markup={"force_reply": True, "input_field_placeholder": "Нова назва"})
             answer()
         elif action == "regen":
-            if not self.cfg.get("regenerate_command"):
-                return answer("Не налаштовано команду перегенерації (панель → Розклад і папки)", True)
-            answer("Перегенеровую тексти…")
-            threading.Thread(target=self._regen, args=(item_id,), daemon=True).start()
+            import ai
+            if self.cfg.get("regenerate_command"):
+                answer("Перегенеровую тексти…")
+                threading.Thread(target=self._regen, args=(item_id,), daemon=True).start()
+            elif ai.enabled(self.cfg):
+                answer("🤖 ШІ пише новий варіант…")
+                threading.Thread(target=self._regen_ai, args=(item_id,), daemon=True).start()
+            else:
+                return answer("Підключіть безкоштовне ШІ: панель керування → 🤖 ШІ", True)
         else:
             answer()
+
+    def _regen_ai(self, item_id: int) -> None:
+        import ai
+        item = self.db.get_item(item_id)
+        try:
+            result = ai.generate(self.cfg, item["mp4"], item["game"])
+            ai.apply_to_json(item["json"], result)
+        except Exception as e:  # noqa: BLE001
+            log.error("ШІ-перегенерація #%s: %s", item_id, e)
+            self.send(f"❌ ШІ не змогло перегенерувати тексти #{item_id}: {e}")
+            return
+        item = self.db.get_item(item_id)
+        edited = [x for x in item["edited"] if x not in ("назву", "тексти")] + ["тексти"]
+        self.db.update_item(item_id, title_override=None, edited=edited)
+        self.db.event(item_id, "edited", "regen-ai")
+        self.refresh(item_id, texts=True)
 
     def _regen(self, item_id: int) -> None:
         item = self.db.get_item(item_id)

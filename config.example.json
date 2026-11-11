@@ -28,6 +28,14 @@
   "regenerate_command": ["python", "D:/Shorts/generate_meta.py", "--force", "{mp4}"],
   "regenerate_cwd": "D:/Shorts",
 
+  "ai": {
+    "enabled": true,
+    "model": "gemini-3.5-flash",
+    "hashtags_count": 5,
+    "channel_description": "український ігровий YouTube-канал",
+    "extra_prompt": ""
+  },
+
   "ffmpeg": "ffmpeg",
   "ffprobe": "ffprobe",
 

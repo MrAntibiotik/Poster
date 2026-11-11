@@ -33,6 +33,7 @@ class Scheduler:
         self._last_scan = 0
         self._stats_thread: threading.Thread | None = None
         self._health_thread: threading.Thread | None = None
+        self._ai_thread: threading.Thread | None = None
         self._health_started = False
 
     # ------------------------------------------------------------------
@@ -52,6 +53,7 @@ class Scheduler:
         self.maybe_daily_report(now)
         self.maybe_stats(now)
         self.maybe_health_check(now)
+        self.maybe_ai()
 
     # ---------- черга ----------
     def scan(self, now: int | None = None) -> list[int]:
@@ -283,6 +285,47 @@ class Scheduler:
         else:
             self._stats_thread = threading.Thread(target=work, daemon=True, name="stats")
             self._stats_thread.start()
+
+    # ---------- тексти від ШІ ----------
+    def maybe_ai(self) -> None:
+        """Шортсам із текстами «з імені файлу» замовляє тексти в ШІ (у фоні, до сповіщення)."""
+        import ai
+        if not ai.enabled(self.cfg) or (self._ai_thread and self._ai_thread.is_alive()):
+            return
+        todo = []
+        for item in self.db.items("status IN ('queued','notified')"):
+            if int(self.db.get(f"ai_tries:{item['id']}") or 0) >= 3:
+                continue
+            try:
+                data = read_json(item["json"])
+            except (OSError, ValueError):
+                continue
+            if data.get("auto_generated") and not data.get("ai_generated"):
+                todo.append(item)
+        if not todo:
+            return
+
+        def work():
+            for item in todo[:5]:
+                key = f"ai_tries:{item['id']}"
+                self.db.set(key, int(self.db.get(key) or 0) + 1)
+                try:
+                    if ai.enrich(self.cfg, item):
+                        self.db.event(item["id"], "ai_texts")
+                        fresh = self.db.get_item(item["id"])
+                        if fresh and fresh["status"] in ("notified", "approved"):
+                            self.app.bot.refresh(item["id"], texts=True)
+                except ai.AIError as e:
+                    log.warning("ШІ для #%s: %s", item["id"], e)
+                    if "ліміт" in str(e):
+                        break
+                except Exception:  # noqa: BLE001
+                    log.exception("ШІ для #%s", item["id"])
+        if getattr(self.app.publisher, "sync", False):
+            work()
+        else:
+            self._ai_thread = threading.Thread(target=work, daemon=True, name="ai")
+            self._ai_thread.start()
 
     # ---------- перевірка токенів ----------
     def maybe_health_check(self, now: int) -> None:

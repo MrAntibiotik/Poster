@@ -43,7 +43,7 @@ PUBLIC_IDS = {"TELEGRAM_CHAT_ID", "FB_PAGE_ID", "IG_USER_ID", "META_APP_ID", "TI
 SECRET_LABELS = {
     "TELEGRAM_BOT_TOKEN": "Токен бота", "TELEGRAM_CHAT_ID": "Головні адміністратори (chat_id)",
     "META_APP_ID": "App ID", "META_APP_SECRET": "App Secret", "META_PAGE_TOKEN": "Токен сторінки",
-    "META_IG_TOKEN": "Окремий токен Instagram", "FB_PAGE_ID": "ID сторінки Facebook",
+    "META_IG_TOKEN": "Окремий токен Instagram", "GEMINI_API_KEY": "Ключ Gemini API", "FB_PAGE_ID": "ID сторінки Facebook",
     "IG_USER_ID": "ID акаунта Instagram", "TIKTOK_CLIENT_KEY": "Client key", "TIKTOK_CLIENT_SECRET": "Client secret",
 }
 
@@ -61,6 +61,8 @@ FIELDS = {
     "platforms.facebook.enabled": "bool",
     "platforms.tiktok.enabled": "bool", "platforms.tiktok.public": "bool", "platforms.tiktok.redirect_uri": "str",
     "auto_meta.enabled": "bool", "auto_meta.hashtags": "tagmap",
+    "ai.enabled": "bool", "ai.model": "str", "ai.hashtags_count": "int", "ai.channel_description": "str",
+    "ai.extra_prompt": "str",
 }
 
 
@@ -309,6 +311,22 @@ class Panel:
                 raise ValueError("Невідомо що відкрити")
             control.open_path(target)
             return "Відкрито"
+        if name == "ai_test":
+            import ai
+            from scheduler import find_videos
+            cfg = self.cfg
+            videos = find_videos(Path(cfg["paths"]["ready"])) if Path(cfg["paths"]["ready"]).is_dir() else []
+            if not videos:
+                raise ValueError("У папці з шортсами немає відео для проби")
+            mp4 = videos[0]
+            game = mp4.parent.name if mp4.parent != Path(cfg["paths"]["ready"]) else ""
+
+            def run():
+                r = ai.generate(cfg, mp4, game)
+                return (f"Відео: {mp4.name}\n\nНазва: {r['title']}\nХештеги: {' '.join(r['hashtags'])}\n\n"
+                        f"Опис: {r['description']}\n\nTikTok: {r['tiktok']}\n\nInstagram:\n{r['instagram']}")
+            self.job("ai_test", run)
+            return "ШІ пише тексти для першого відео…"
         if name == "retry":
             raise ValueError("Повтор — командою /retry N у Telegram")
         raise ValueError(f"Невідома дія {name}")

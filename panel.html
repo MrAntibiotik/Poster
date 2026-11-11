@@ -98,6 +98,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
     <button data-tab="yt">▶️ YouTube</button>
     <button data-tab="meta">📸 Instagram + Facebook</button>
     <button data-tab="tt">🎵 TikTok</button>
+    <button data-tab="ai">🤖 ШІ</button>
     <button data-tab="sched">🗓 Розклад і папки</button>
     <button data-tab="log">📄 Журнал</button>
     <button data-tab="sec">🔐 Безпека</button>
@@ -256,6 +257,32 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
       <label class="check"><input type="checkbox" data-set="platforms.tiktok.enabled"> Публікувати в TikTok</label>
       <label class="check"><input type="checkbox" data-set="platforms.tiktok.public"> Публічно (лише після аудиту застосунку TikTok; до того — приватно, відкриваєте вручну)</label>
       <div class="row"><button class="btn primary" data-save-settings>Зберегти</button></div>
+    </div>
+  </section>
+
+  <!-- ================= ШІ ================= -->
+  <section data-page="ai" class="hidden">
+    <div class="card"><h2>🤖 Назви й хештеги від безкоштовного ШІ <span id="aiStatus" class="pill"></span></h2>
+      <p class="small">Для відео без json програма бере кілька кадрів із шортса і просить <b>Google Gemini</b> (безкоштовний тариф)
+        придумати назву, опис, хештеги та підписи для TikTok / Instagram. Поки ШІ не підключено або воно недоступне — назва береться з імені файлу.
+        У Telegram кнопка «🔄 Перегенерувати тексти» просить у ШІ новий варіант.</p>
+      <ol class="steps small"><li>Відкрийте <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio → Get API key</a>, увійдіть у Google-акаунт.</li>
+        <li>Натисніть <b>Create API key</b> і скопіюйте ключ сюди. Картка не потрібна.</li></ol>
+      <label class="f">Ключ Gemini API</label>
+      <div class="pw"><input type="password" data-secret="GEMINI_API_KEY" autocomplete="off"><button class="btn" data-toggle-pw>👁</button></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-secrets="ai">Зберегти ключ</button>
+        <button class="btn" data-act="ai_test">🧪 Спробувати на першому відео</button></div>
+      <pre id="aiJob" class="hidden"></pre>
+      <h3>Налаштування</h3>
+      <label class="check"><input type="checkbox" data-set="ai.enabled"> Використовувати ШІ для відео без json</label>
+      <div class="two"><div><label class="f">Кількість хештегів</label><input type="number" min="1" max="15" data-set="ai.hashtags_count"></div>
+        <div><label class="f">Модель Gemini</label><input type="text" data-set="ai.model"></div></div>
+      <label class="f">Опис каналу (ШІ підлаштує стиль)</label><input type="text" data-set="ai.channel_description">
+      <label class="f">Додаткові побажання (необов'язково)</label>
+      <textarea data-set="ai.extra_prompt" rows="2" placeholder="Напр.: жартівливий тон, згадувати назву танка, якщо видно"></textarea>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
+      <p class="muted small">Безкоштовний тариф Google має ліміти запитів (кілька шортсів на день вкладаються з запасом).
+        Google може використовувати дані безкоштовного тарифу для покращення своїх сервісів — надсилаються лише кадри гри й назва файлу.</p>
     </div>
   </section>
 
@@ -462,6 +489,9 @@ async function refresh(){
   const tt = tok.tiktok;
   pill($("#ttStatus"), tt.connected ? "підключено" + (tt.refresh_expires ? " до " + tt.refresh_expires : "") : "не підключено", tt.connected ? "ok" : "bad");
   $("#ttJob").textContent = jobText(s.jobs.tiktok_auth);
+  showJob("#aiJob", s.jobs.ai_test);
+  const aiOn = sec.GEMINI_API_KEY.set && s.settings["ai.enabled"];
+  pill($("#aiStatus"), aiOn ? "увімкнено" : (sec.GEMINI_API_KEY.set ? "вимкнено" : "немає ключа"), aiOn ? "ok" : "warn");
 
   if ($("#logFollow").checked) { const box = $("#logBox"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
     box.textContent = s.log || "журнал порожній"; if (atEnd) box.scrollTop = box.scrollHeight; }

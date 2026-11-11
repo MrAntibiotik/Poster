@@ -22,6 +22,7 @@ class PostMeta:
     facebook_text: str = ""
     game: str = ""
     auto: bool = False  # тексти створено автоматично з імені файлу
+    ai: bool = False    # тексти написало ШІ
 
 
 def read_json(path: str | Path) -> dict:
@@ -125,7 +126,8 @@ def load_meta(json_path: str | Path, title_override: str | None = None) -> PostM
         instagram_text=ig_text,
         facebook_text=fb_text,
         game=str(data.get("game") or Path(json_path).parent.name),
-        auto=bool(data.get("auto_generated")),
+        auto=bool(data.get("auto_generated")) and not data.get("ai_generated"),
+        ai=bool(data.get("ai_generated")),
     )
 
 

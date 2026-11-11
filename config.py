@@ -39,6 +39,16 @@ DEFAULTS: dict = {
     "scan_interval_seconds": 60,
     "regenerate_command": [],
     "regenerate_cwd": "",
+    # Безкоштовне ШІ (Google Gemini) для назв, хештегів і текстів; ключ — GEMINI_API_KEY у .env
+    "ai": {
+        "enabled": True,
+        "model": "gemini-3.5-flash",
+        "hashtags_count": 5,
+        "frames": 4,
+        "temperature": 0.9,
+        "channel_description": "український ігровий YouTube-канал",
+        "extra_prompt": "",
+    },
     "ffmpeg": "ffmpeg",
     "ffprobe": "ffprobe",
     "dry_run": False,
@@ -90,6 +100,7 @@ SECRETS = {
     "IG_USER_ID": ("meta", "ig_user_id"),
     "TIKTOK_CLIENT_KEY": ("tiktok", "client_key"),
     "TIKTOK_CLIENT_SECRET": ("tiktok", "client_secret"),
+    "GEMINI_API_KEY": ("ai", "api_key"),
 }
 
 
