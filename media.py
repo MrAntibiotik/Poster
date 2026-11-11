@@ -191,39 +191,45 @@ def quality_line(q: dict) -> str:
 
 
 def telegram_copy(path: str, cfg: dict) -> str:
-    """Що показати в Telegram: оригінал, якщо ≤ 50 МБ (ліміт Bot API).
+    """Що показати в Telegram: швидка копія 720p (налаштування telegram.preview_height, 0 — оригінал).
 
-    Інакше — копія найкращої якості, що вміщується в 50 МБ: роздільність як в оригіналі (до 1080p),
-    та сама частота кадрів, максимальний бітрейт. На платформи завжди йде оригінал, не ця копія.
+    Це лише попередній перегляд для бота. На платформи завжди йде оригінал, не ця копія.
     """
-    if os.path.getsize(path) <= TG_LIMIT:
-        return path
+    limit_h = int((cfg.get("telegram") or {}).get("preview_height", 720) or 0)
+    size = os.path.getsize(path)
+    q = quality(path, cfg["ffprobe"])
+    short_side = min(q.get("width") or 1080, q.get("height") or 1920) or 1080
+    target = min(short_side, limit_h) if limit_h else short_side
+    if size <= TG_LIMIT and target >= short_side:
+        return path  # і так маленьке — надсилаємо як є
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}".encode()).hexdigest()[:10]
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_tg.mp4"
     if out.exists() and 0 < out.stat().st_size <= TG_LIMIT:
         return str(out)
 
-    q = quality(path, cfg["ffprobe"])
     dur = max(1, q.get("duration") or probe(path, cfg["ffprobe"]).get("duration") or 60)
-    audio_k = 160
+    audio_k = 128
     budget = int(TG_LIMIT * 8 * 0.94 / dur / 1000) - audio_k  # кбіт/с на відео, щоб уміститися в 50 МБ
     src_k = int((q.get("mbps") or 0) * 1000) or 50_000
-    kbps = max(400, min(budget, src_k, 16_000))
-    short_side = min(q.get("width") or 1080, q.get("height") or 1920) or 1080
-    target = min(short_side, 1080 if kbps >= 2500 else 720)  # дуже довге відео — 720p, щоб не «сипалось»
+    cap = 4_000 if target <= 720 else 16_000
+    kbps = max(400, min(budget, src_k, cap))
+    if kbps < 2500 and target > 720:
+        target = 720  # дуже довге відео — 720p, щоб не «сипалось»
     vf = ["-vf", f"scale='if(gt(iw,ih),-2,{target})':'if(gt(iw,ih),{target},-2)':flags=lanczos"] \
         if target < short_side else []
-    log.info("Файл %s (%.0f МБ) > 50 МБ — готую копію для Telegram: %sp, %s кбіт/с (публікується оригінал)",
-             path, q.get("size_mb", 0), target, kbps)
+    log.info("Готую копію для Telegram: %s → %sp, %s кбіт/с (на платформи йде оригінал)", path, target, kbps)
     for _ in range(4):
         args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), *vf,
-                "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-pix_fmt", "yuv420p",
+                "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p",
                 "-b:v", f"{kbps}k", "-maxrate", f"{int(kbps * 1.1)}k", "-bufsize", f"{kbps * 2}k",
                 "-c:a", "aac", "-b:a", f"{audio_k}k", "-movflags", "+faststart", str(out)]
         r = run_hidden(args, timeout=1800)
         if r.returncode != 0:
+            if size <= TG_LIMIT:
+                log.warning("Копія для Telegram не вдалася, надсилаю оригінал: %s", r.stderr.decode(errors="ignore")[-200:])
+                return path
             raise MediaError(f"ffmpeg: {r.stderr.decode(errors='ignore')[-300:]}")
         if out.stat().st_size <= TG_LIMIT:
             return str(out)

@@ -377,7 +377,10 @@ class Bot:
         try:
             q = media.quality(item["mp4"], self.cfg["ffprobe"])
             qline = f"📐 <b>Оригінал:</b> {esc(media.quality_line(q))}\nНа платформи завантажується саме він — без перекодування."
-            if q["size_mb"] * 1024 * 1024 > media.TG_LIMIT:
+            ph = int((self.cfg.get("telegram") or {}).get("preview_height", 720) or 0)
+            if ph and min(q.get("width") or 0, q.get("height") or 0) > ph:
+                qline += f"\nℹ️ У цьому чаті — швидка копія {ph}p; на платформи іде оригінал."
+            elif q["size_mb"] * 1024 * 1024 > media.TG_LIMIT:
                 qline += ("\nℹ️ У цьому чаті — копія, стиснута до 50 МБ (ліміт Telegram для ботів); "
                           "на YouTube/TikTok/Instagram/Facebook іде оригінал.")
         except OSError:
