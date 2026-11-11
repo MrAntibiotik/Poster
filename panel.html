@@ -140,7 +140,8 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
           <button class="btn" data-act="restart" id="bRestart">🔁 Перезапустити</button></div></div>
       <div class="card"><h2>Розклад</h2><div id="pauseState" class="big"></div>
         <div class="row"><button class="btn" id="bPause"></button></div>
-        <p class="muted small">На паузі нові шортси не надсилаються, а слоти минають порожніми.</p></div>
+        <p class="muted small">На паузі нові шортси не надсилаються, а слоти минають порожніми.</p>
+        <p class="small" id="powerInfo"></p></div>
       <div class="card"><h2>Режим</h2><div id="modeState" class="big"></div>
         <div class="row"><button class="btn" id="bMode"></button></div>
         <p class="muted small">У тестовому режимі все працює, але публікації лише імітуються.</p></div>
@@ -346,6 +347,24 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <label class="check"><input type="checkbox" data-set="ask_texts_before_publish"> Після «🚀 Опублікувати» бот питає <b>назву й хештеги</b> — публікація лише після відповіді</label>
       <label class="check"><input type="checkbox" data-set="publish_on_approve"> Публікувати одразу після підтвердження (а не в час слоту)</label>
     </div>
+    <div class="card"><h2>💤 Сон між слотами (щоб ПК не працював цілодобово)</h2>
+      <p class="small">ПК <b>спить</b> і сам прокидається за кілька хвилин до кожної публікації (і до щоденного звіту).
+        Поки шортс чекає на «🚀 Опублікувати» або публікується — ПК <b>не засне</b>. Коли все зроблено, а ПК розбудила програма
+        і ніхто ним не користувався, — програма сама приспить його. Якщо ж ви за комп'ютером, він засне за звичайними
+        налаштуваннями сну Windows (раджу «Переводити в сон через 30 хв»).</p>
+      <label class="check"><input type="checkbox" data-set="power.sleep_between_slots"> Увімкнути сон між слотами</label>
+      <label class="f">Прокидатися за, хв до публікації</label><input type="number" min="3" max="60" data-set="power.wake_before_minutes" style="max-width:160px">
+      <label class="f">Якщо я не підтвердив шортс до часу слоту</label>
+      <select data-set="on_missed_approval">
+        <option value="wait">⏳ Чекати — опублікувати одразу після «🚀» (ПК не засне, поки не опублікує)</option>
+        <option value="auto">🚀 Опублікувати автоматично з поточною назвою й хештегами</option>
+        <option value="skip">⏭ Пропустити — шортс у кінець черги</option></select>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button>
+        <button class="btn" data-act="power_allow">⏰ Дозволити таймери пробудження у Windows</button></div>
+      <p class="muted small">Важливо: ПК має бути у <b>сні</b>, а не вимкнений. Кнопку «Дозволити таймери пробудження» натисніть один раз
+        (або вручну: Електроживлення → Змінити параметри схеми → Додаткові → Сон → Дозволити таймери пробудження → Увімкнути).
+        Ноутбук із закритою кришкою прокинеться лише якщо в налаштуваннях кришки обрано «Сон».</p>
+    </div>
     <div class="card"><h2>#️⃣ Обов'язкові хештеги</h2>
       <p class="muted small">Завжди додаються в кінець назви — незалежно від того, що введено в Telegram. Дублі прибираються;
         якщо назва YouTube виходить довшою за 100 символів, скорочується текст, а не хештеги.</p>
@@ -523,6 +542,8 @@ async function refresh(){
   $("#botState").textContent = s.running ? "🟢 Працює" : "🔴 Зупинено";
   $("#bStart").disabled = s.running; $("#bStop").disabled = !s.running; $("#bRestart").disabled = !s.running;
   $("#pauseState").textContent = s.paused ? "⏸ На паузі" : "▶️ Активний";
+  $("#powerInfo").textContent = s.power.on ? "💤 Сон між слотами увімкнено" + (s.power.next_wake ? " · пробудження " + s.power.next_wake : "") +
+    (s.power.state ? " · зараз: " + s.power.state : "") : "";
   $("#bPause").textContent = s.paused ? "▶️ Продовжити" : "⏸ Пауза"; $("#bPause").dataset.act = s.paused ? "resume" : "pause";
   $("#modeState").textContent = s.dry_run ? "🧪 Тестовий" : "🚀 Бойовий";
   $("#bMode").textContent = s.dry_run ? "🚀 Увімкнути бойовий" : "🧪 Повернути тестовий";

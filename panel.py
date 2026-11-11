@@ -65,6 +65,8 @@ FIELDS = {
     "always_hashtags.tags": "taglist", "always_hashtags.in_title": "bool", "always_hashtags.in_captions": "bool",
     "ai.enabled": "bool", "ai.model": "str", "ai.hashtags_count": "int", "ai.channel_description": "str",
     "ai.extra_prompt": "str",
+    "on_missed_approval": "missed", "power.sleep_between_slots": "bool",
+    "power.wake_before_minutes": "int",
 }
 
 
@@ -97,6 +99,10 @@ def coerce(kind: str, value):
         return v
     if kind == "time":
         return _hm(value)
+    if kind == "missed":
+        if value not in ("wait", "skip", "auto"):
+            raise ValueError("wait / skip / auto")
+        return value
     if kind == "privacy":
         if value not in ("public", "unlisted", "private"):
             raise ValueError("public / unlisted / private")
@@ -200,6 +206,9 @@ class Panel:
             tmp.unlink(missing_ok=True)
             raise ValueError(str(e)) from e
         os.replace(tmp, path)
+        if patch.get("power.sleep_between_slots") is False:
+            import power
+            threading.Thread(target=power.remove_wake_task, daemon=True).start()
         self.reload()  # бот підхопить зміни сам протягом ~15 с, перезапуск не потрібен
 
     def save_secrets(self, values: dict) -> None:
@@ -347,6 +356,9 @@ class Panel:
             on = bool(data.get("on"))
             self.save_settings({f"platforms.{key}.enabled": on})
             return f"{NAMES[key]}: {'увімкнено' if on else 'вимкнено'}"
+        if name == "power_allow":
+            import power
+            return power.allow_wake_timers()
         if name == "failed":
             item_id, op = int(data.get("id")), str(data.get("op"))
             sched = self._sched()
@@ -752,6 +764,10 @@ class Panel:
             "health_time": fmt_slot(cfg, int(db.get("health_ts")), now) if db.get("health_ts") else None,
             "ready_info": self.count_shorts(cfg["paths"]["ready"]),
             "failed": self.failed_state(cfg, now),
+            "power": {"on": bool((cfg.get("power") or {}).get("sleep_between_slots")),
+                      "state": db.get("power_state") or "",
+                      "next_wake": fmt_when(cfg, int(db.get("power_next_wake")), now)
+                      if db.get("power_next_wake") and int(db.get("power_next_wake")) > now else ""},
             "work": [self.item_view(cfg, i, now) for i in
                      db.items("status IN ('notified','approved','publishing')", order="slot_at")],
             "queue_items": [self.item_view(cfg, i, now, ts or 0) for i, ts in sched.projection(now)[:40]],

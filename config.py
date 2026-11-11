@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.12-35"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.12-36"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -29,6 +29,11 @@ DEFAULTS: dict = {
     # Після «🚀 Опублікувати» бот питає назву й хештеги; публікація — лише після відповіді
     "ask_texts_before_publish": False,
     "catchup_minutes": 120,
+    # Якщо шортс не підтвердили до слоту: wait — чекати й опублікувати одразу після «🚀» (ПК не засне),
+    # skip — у кінець черги, auto — опублікувати самому з поточною назвою й хештегами
+    "on_missed_approval": "wait",
+    # Сон між слотами (Windows): прокидатися за N хв до публікації, засинати, коли роботи немає
+    "power": {"sleep_between_slots": False, "wake_before_minutes": 5},
     "max_skips": 3,
     "ready_status": "ready_to_post",
     # Хештеги, що ЗАВЖДИ додаються в кінець назви (YouTube) і підписів (TikTok / Instagram / Facebook)

@@ -68,6 +68,7 @@ class FlowBase(unittest.TestCase):
             "telegram": {"bot_token": "123:abc", "chat_id": "42"},
             "reports": {"daily_time": "22:30", "stats_after_hours": 24},
             "always_hashtags": {"tags": []},
+            "on_missed_approval": "skip",  # більшість тестів перевіряють пропуск; wait/auto — у test_power
         }
         (self.tmp / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
         for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):

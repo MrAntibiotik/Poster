@@ -327,6 +327,9 @@ class Bot:
         slot = fmt_slot(self.cfg, item["slot_at"]) if item["slot_at"] else "—"
         edited = f"\n✏️ Змінено: {', '.join(item['edited'])}" if item["edited"] else ""
         if st == "notified":
+            if item["slot_at"] and item["slot_at"] <= now_ts():
+                return (f"⏳ Слот {slot} минув — чекаю на «🚀 Опублікувати», після нього публікую одразу "
+                        f"(або «🕐 Змінити час»){edited}")
             return f"⏳ Очікує підтвердження до {slot}{edited}"
         if st == "approved":
             return f"👍 Підтверджено — публікація о {slot}{edited}"

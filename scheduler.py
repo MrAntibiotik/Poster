@@ -63,6 +63,8 @@ class Scheduler:
         self._health_thread: threading.Thread | None = None
         self._ai_thread: threading.Thread | None = None
         self._health_started = False
+        self._awake_since = time.time()
+        self._wake_key = ""
 
     # ------------------------------------------------------------------
     def tick(self, now: int | None = None) -> None:
@@ -84,6 +86,7 @@ class Scheduler:
         self.maybe_stats(now)
         self.maybe_health_check(now)
         self.maybe_ai()
+        self.maybe_sleep(now)
         try:
             self.app.bot.purge_expired()
         except Exception as e:  # noqa: BLE001
@@ -376,6 +379,14 @@ class Scheduler:
             if item and item["status"] in ("failed", "posted"):
                 log.info("Повторна публікація #%s за розкладом", item["id"])
                 self.app.publisher.start(item["id"])
+        for s in self.db.q("SELECT * FROM slots WHERE state='waiting' ORDER BY slot_at"):
+            item = self.db.get_item(s["item_id"]) if s["item_id"] else None
+            if not item or item["slot_at"] != s["slot_at"] or item["status"] not in ("notified", "approved"):
+                self.db.set_slot(s["slot_at"], state="done")
+            elif item["status"] == "approved":  # підтвердили після слоту — публікуємо одразу
+                self.db.set_slot(s["slot_at"], state="done")
+                log.info("#%s підтверджено після слоту — публікую зараз", item["id"])
+                self.app.publisher.start(item["id"])
         for s in self.db.q("SELECT * FROM slots WHERE state IN ('pending','notified') AND slot_at<=? "
                            "ORDER BY slot_at", (now,)):
             if s["state"] == "pending":
@@ -399,8 +410,21 @@ class Scheduler:
                     self.app.bot.refresh(item["id"])
                     self.db.update_item(item["id"], note=None)
             elif item["status"] == "notified":
-                self.db.set_slot(s["slot_at"], state="skipped")
-                self.skip(item)
+                mode = self.cfg.get("on_missed_approval", "wait")
+                if mode == "auto":
+                    self.db.set_slot(s["slot_at"], state="done")
+                    self.db.update_item(item["id"], status="approved")
+                    self.db.event(item["id"], "approved", {"by": "auto"})
+                    log.info("Слот %s: #%s не підтверджено — публікую автоматично", fmt_slot(self.cfg, s["slot_at"]), item["id"])
+                    self.app.publisher.start(item["id"])
+                elif mode == "wait":
+                    self.db.set_slot(s["slot_at"], state="waiting")
+                    self.db.event(item["id"], "waiting", {"slot": s["slot_at"]})
+                    log.info("Слот %s: #%s чекає на підтвердження", fmt_slot(self.cfg, s["slot_at"]), item["id"])
+                    self.app.bot.refresh(item["id"])
+                else:
+                    self.db.set_slot(s["slot_at"], state="skipped")
+                    self.skip(item)
             else:
                 self.db.set_slot(s["slot_at"], state="done")
 
@@ -439,6 +463,8 @@ class Scheduler:
             return  # пауза: нові шортси не надсилаються, слоти минають порожніми
         lead = int(self.cfg["notify_before_minutes"]) * 60
         min_lead = int(self.cfg["min_notify_lead_minutes"]) * 60
+        if (self.cfg.get("power") or {}).get("sleep_between_slots"):
+            min_lead = 60  # ПК прокидається за 5 хв — сповіщення має встигнути
         for s in self.db.q("SELECT * FROM slots WHERE state='pending' AND slot_at>? AND slot_at<=? "
                            "ORDER BY slot_at", (now + min_lead, now + lead)):
             item = self._next_item()
@@ -557,6 +583,86 @@ class Scheduler:
             self._ai_thread.start()
 
     # ---------- перевірка токенів ----------
+    # ---------- сон між слотами ----------
+    def wake_times(self, now: int, days: int = 3) -> list[int]:
+        """Коли прокидатися: за N хв до кожного слоту (наступні дні), повторів і щоденного звіту."""
+        before = int((self.cfg.get("power") or {}).get("wake_before_minutes", 5)) * 60
+        out = set()
+        today = local_dt(self.cfg, now).date()
+        for d in range(days):
+            for ts in self._day_slots(today + timedelta(days=d)):
+                out.add(ts - before)
+            h, m = map(int, self.cfg["reports"]["daily_time"].split(":"))
+            day = today + timedelta(days=d)
+            out.add(int(datetime(day.year, day.month, day.day, h, m, tzinfo=self.cfg["tz"]).timestamp()) - 60)
+        for r in self.db.q("SELECT slot_at FROM slots WHERE slot_at>? AND state IN ('pending','notified','retry')", (now,)):
+            out.add(r["slot_at"] - before)
+        return sorted(t for t in out if t > now + 60)
+
+    def busy_reason(self, now: int) -> str | None:
+        """Чому ПК не можна приспати (None — можна)."""
+        power = self.cfg.get("power") or {}
+        before = int(power.get("wake_before_minutes", 5)) * 60
+        if self.db.items("status IN ('notified','publishing')"):
+            return "шортс чекає на підтвердження або публікується"
+        if self.app.publisher.active:
+            return "триває публікація"
+        soon = self.db.one("SELECT slot_at FROM slots WHERE slot_at>? AND slot_at<=? AND state IN ('pending','notified','retry')",
+                           (now - 60, now + before + 600))
+        if soon:
+            return "скоро слот"
+        h, m = map(int, self.cfg["reports"]["daily_time"].split(":"))
+        dt = local_dt(self.cfg, now)
+        rep = int(dt.replace(hour=h, minute=m, second=0, microsecond=0).timestamp())
+        if rep - 600 <= now and self.db.get("daily_report_day") != dt.strftime("%Y-%m-%d"):
+            return "скоро щоденний звіт"
+        for t in (self._stats_thread, self._health_thread, self._ai_thread):
+            if t and t.is_alive():
+                return "збирається статистика / перевірка"
+        if self.db.q("SELECT key FROM kv WHERE key LIKE 'dialog:%' AND value IS NOT NULL"):
+            return "відкрито діалог у Telegram"
+        if self.db.q("SELECT key FROM kv WHERE key LIKE 'pcmd:%'"):
+            return "виконується дія з панелі"
+        return None
+
+    def maybe_sleep(self, now: int) -> None:
+        power = self.cfg.get("power") or {}
+        import power as pw
+        if not power.get("sleep_between_slots") or not pw.WIN:
+            return
+        times = self.wake_times(now)
+        key = ",".join(map(str, times[:20]))
+        if key != self._wake_key:  # розклад пробуджень змінився — оновлюємо завдання Windows
+            try:
+                pw.set_wake_times(times)
+                self._wake_key = key
+                self.db.set("power_next_wake", times[0] if times else None)
+            except Exception as e:  # noqa: BLE001
+                log.error("Не вдалося записати пробудження: %s", e)
+                self.db.set("power_state", f"помилка пробудження: {str(e)[:200]}")
+                return
+        reason = self.busy_reason(now)
+        pw.keep_awake(bool(reason))  # зайнятий — Windows не засне сама
+        if reason:
+            self.db.set("power_state", reason)
+            return
+        # Приспати самі — лише якщо ПК розбудили ми і відтоді ним ніхто не користувався.
+        # Якщо ви за комп'ютером (чи дивитесь відео) — засинає за звичайними налаштуваннями Windows.
+        awake = time.time() - self._awake_since
+        untouched = pw.idle_seconds() >= awake - 5
+        if not untouched or awake < 180:
+            self.db.set("power_state", "засне за налаштуваннями Windows" if not untouched else "щойно прокинувся")
+            return
+        self.db.set("power_state", "засинаю")
+        nxt = fmt_slot(self.cfg, times[0]) if times else "—"
+        log.info("💤 Засинаю. Наступне пробудження: %s", nxt)
+        self.db.set("power_next_wake", times[0] if times else None)
+        self.db.event(None, "sleep", {"wake": times[0] if times else None})
+        pw.sleep_now()
+        self._awake_since = time.time()  # сюди повертаємось після пробудження
+        log.info("☀️ Прокинувся")
+        self.db.set("power_state", "щойно прокинувся")
+
     def maybe_health_check(self, now: int) -> None:
         """Раз на день (і при запуску) перевіряє доступ до платформ, щоб про протерміновані
         токени дізнатися до слоту, а не під час публікації."""
