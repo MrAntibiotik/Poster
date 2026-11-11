@@ -62,7 +62,7 @@ class TimeTest(FlowBase):
         self.button(f"ts:{item['id']}:{ts}")
         it = self.app.db.get_item(item["id"])
         self.assertEqual((it["status"], it["slot_at"]), ("approved", ts))
-        self.assertIn("Публікація завтра 10:00", self.app.bot.tg.sent[-1][1])
+        self.assertIn("публікація о 12.11 10:00", self.app.bot.tg.edits[-1][1])
         # звільнений слот 13:00 одразу дістається наступному відео (b)
         config.FAKE_NOW = self.ts(11, "12:01")
         plan = self.app.scheduler.projection(self.ts(11, "12:01"))

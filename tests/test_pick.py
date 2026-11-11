@@ -63,14 +63,14 @@ class PickTest(FlowBase):
         self.say("Назва")
         self.say("-")
         self.assertEqual(self.app.db.get_item(e["id"])["status"], "approved")
-        self.assertIn("Публікація сьогодні 11:45", self.app.bot.tg.sent[-1][1])
+        self.assertIn("публікація о 11:45", self.app.bot.tg.edits[-1][1])
         self.app.scheduler.tick(self.ts(11, "11:45"))
         self.assertEqual(self.app.db.get_item(e["id"])["status"], "posted")
 
     def test_move_first_and_remove(self):
         c = self.item("c")
         self.button(f"qf:{c['id']}")
-        self.assertIn("першим у черзі", self.app.bot.tg.sent[-1][1])
+        self.assertIn("Першим у черзі", self.app.bot.tg.answers[-1])
         names = [Path(it["mp4"]).stem for it, _ in self.app.scheduler.projection(self.ts(11, "08:00"))]
         self.assertEqual(names[0], "c")
         b = self.item("b")

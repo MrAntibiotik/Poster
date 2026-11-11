@@ -47,7 +47,12 @@ class DialogTest(FlowBase):
         self.button(f"tk:{item['id']}")
         it = self.app.db.get_item(item["id"])
         self.assertEqual(it["status"], "approved")
-        self.assertIn("Готово", self.last())
+        # допоміжні повідомлення прибрано, статус — у підписі відео
+        tg = self.app.bot.tg
+        prompts = [i + 101 for i, m in enumerate(tg.sent) if m[0] == "text" and "Крок" in m[1]]
+        self.assertTrue(set(prompts) <= set(tg.deleted), (prompts, tg.deleted))
+        self.assertIn("Підтверджено — публікація о 13:00", tg.edits[-1][1])
+        self.assertFalse(any("Готово" in m[1] for m in tg.sent if m[0] == "text"))
         m = load_meta(mp4.with_suffix(".json"))
         self.assertEqual(m.yt_title, "Камбек на Прохорівці")
         self.assertEqual(m.hashtags, ["#wot", "#танки", "#shorts"])

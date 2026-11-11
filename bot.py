@@ -161,6 +161,45 @@ class Bot:
             log.error("Не вдалося надіслати повідомлення в Telegram (%s): %s", chat_id, e)
             return None
 
+    # ---------- тимчасові повідомлення (діалоги) — прибираються після завершення ----------
+    def tmp(self, chat_id: int, text: str, html_mode: bool = True, reply_markup=None):
+        msg = self.say(chat_id, text, html_mode, reply_markup)
+        self._track(chat_id, msg)
+        return msg
+
+    def _track(self, chat_id: int, msg) -> None:
+        mid = msg.get("message_id") if isinstance(msg, dict) else msg
+        if not mid:
+            return
+        key = f"trash:{chat_id}"
+        try:
+            ids = json.loads(self.db.get(key) or "[]")
+        except ValueError:
+            ids = []
+        ids.append(int(mid))
+        self.db.set(key, json.dumps(ids[-200:]))
+
+    def cleanup(self, chat_id: int) -> None:
+        """Видаляє кроки діалогу, відповіді на них і службові повідомлення — лишається лише відео шортса."""
+        key = f"trash:{chat_id}"
+        try:
+            ids = sorted(set(json.loads(self.db.get(key) or "[]")))
+        except ValueError:
+            ids = []
+        self.db.set(key, None)
+        for i in range(0, len(ids), 100):
+            try:
+                self.tg.call("deleteMessages", chat_id=chat_id, message_ids=ids[i:i + 100])
+            except Exception as e:  # noqa: BLE001 — старі повідомлення (>48 год) Telegram не видаляє
+                log.debug("deleteMessages: %s", e)
+
+    def _drop_texts(self, chat_id: int, item_id: int) -> None:
+        """Після підтвердження окреме повідомлення з текстами не потрібне — назва й хештеги в підписі відео."""
+        row = self.db.tg_msg(item_id, chat_id)
+        if row and row.get("text_msg_id"):
+            self._track(chat_id, row["text_msg_id"])
+            self.db.x("UPDATE tg_msgs SET text_msg_id=NULL WHERE item_id=? AND chat_id=?", (item_id, chat_id))
+
     def send(self, text: str, html_mode: bool = False, to: str = "admins", keyboard: bool = False) -> None:
         """to: 'admins' — службові повідомлення; 'all' — також глядачам (звіти, перегляди)."""
         for cid in (self.recipients() if to == "all" else self.admins()):
@@ -553,9 +592,9 @@ class Bot:
             answer(f"{NAMES[p]}: {'вимкнено' if p in disabled else 'увімкнено'}")
         elif action == "title":
             self.db.set(f"await_title:{chat}", item_id)
-            self.tg.send_message(chat, f"✏️ Надішліть нову назву для YouTube (шортс #{item_id}, "
-                                       "до 100 символів). /cancel — скасувати",
-                                 reply_markup={"force_reply": True, "input_field_placeholder": "Нова назва"})
+            self._track(chat, self.tg.send_message(
+                chat, f"✏️ Надішліть нову назву для YouTube (шортс #{item_id}, до 100 символів). /cancel — скасувати",
+                reply_markup={"force_reply": True, "input_field_placeholder": "Нова назва"}))
             answer()
         elif action == "regen":
             import ai
@@ -590,7 +629,7 @@ class Bot:
             [{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}"}]]}
         always = self._always_line()
         note = f"\nℹ️ У кінець назви автоматично додаються: {esc(always)}" if always else ""
-        self.say(chat, f"✍️ <b>Крок 1/2.</b> Надішліть <b>назву</b> для шортса #{item_id}.\n"
+        self.tmp(chat, f"✍️ <b>Крок 1/2.</b> Надішліть <b>назву</b> для шортса #{item_id}.\n"
                        f"Зараз: <i>{esc(meta.yt_title)}</i>{note}", reply_markup=kb)
 
     def _ask_tags(self, chat: int, item_id: int) -> None:
@@ -600,7 +639,7 @@ class Bot:
         kb = {"inline_keyboard": [
             [{"text": f"Залишити: {current[:40]}", "callback_data": f"keep:{item_id}:tags"}],
             [{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}"}]]}
-        self.say(chat, "#️⃣ <b>Крок 2/2.</b> Надішліть <b>хештеги</b> через пробіл — можна з # або без "
+        self.tmp(chat, "#️⃣ <b>Крок 2/2.</b> Надішліть <b>хештеги</b> через пробіл — можна з # або без "
                        "(напр.: <code>wot танки shorts</code>). «-» — без хештегів.", reply_markup=kb)
 
     def _dialog_item(self, chat: int, item_id: int, allow_approved: bool = False,
@@ -609,7 +648,7 @@ class Bot:
         ok = ("queued",) if allow_queued else ("notified", "approved") if allow_approved else ("notified",)
         if not item or item["status"] not in ok:
             self.dialog_set(chat, None)
-            self.say(chat, "Цей шортс уже неактуальний (слот минув або його опубліковано).", html_mode=False)
+            self.tmp(chat, "Цей шортс уже неактуальний (слот минув або його опубліковано).", html_mode=False)
             return None
         return item
 
@@ -624,12 +663,12 @@ class Bot:
         if st["step"] == "title":
             title = re.sub(r"\s+", " ", text).strip()[:100]
             if not title:
-                return self.say(chat, "Назва порожня — надішліть текст.", html_mode=False)
+                return self.tmp(chat, "Назва порожня — надішліть текст.", html_mode=False)
             self.dialog_set(chat, {**st, "step": "tags", "title": title})
             return self._ask_tags(chat, item["id"])
         tags = parse_hashtags(text)
         if text.strip() not in ("-", "—") and not tags:
-            return self.say(chat, "Не бачу хештегів — надішліть слова через пробіл або «-».", html_mode=False)
+            return self.tmp(chat, "Не бачу хештегів — надішліть слова через пробіл або «-».", html_mode=False)
         if st["step"] == "tags":
             return self._dialog_finish(chat, item, st.get("title"), tags)
 
@@ -637,8 +676,8 @@ class Bot:
         st = self.dialog_get(chat)
         if action == "dlgx":
             self.dialog_set(chat, None)
-            answer("Скасовано")
-            return self.say(chat, "Скасовано. Шортс чекає на «🚀 Опублікувати» до свого слоту.", html_mode=False)
+            answer("Скасовано. Шортс чекає на «🚀 Опублікувати» до свого слоту.", True)
+            return self.cleanup(chat)
         if not st or st.get("item") != item_id:
             return answer("Цей запит уже неактуальний", True)
         item = self._dialog_item(chat, item_id)
@@ -661,11 +700,11 @@ class Bot:
             apply_manual(item["json"], title, tags)
         except Exception as e:  # noqa: BLE001
             log.error("Не вдалося записати тексти #%s: %s", item_id, e)
-            return self.say(chat, f"❌ Не вдалося зберегти тексти: {e}", html_mode=False)
+            return self.tmp(chat, f"❌ Не вдалося зберегти тексти: {e}", html_mode=False)
         edited = [x for x in item["edited"] if x not in ("назву", "тексти")] + ["назву", "хештеги"]
         self.db.update_item(item_id, title_override=None, edited=edited)
         if len(tags) > 15:
-            self.say(chat, "⚠️ YouTube ігнорує всі хештеги, якщо їх більше 15.", html_mode=False)
+            self.tmp(chat, "⚠️ YouTube ігнорує всі хештеги, якщо їх більше 15.", html_mode=False)
         preset = (self.dialog_get(chat) or {}).get("preset")
         st = {"item": item_id, "step": "time", "mode": "dialog", "title": title, "tags": tags}
         self.dialog_set(chat, st)
@@ -715,15 +754,14 @@ class Bot:
             self.db.update_item(target, qpos=self.db.first_qpos())
             plan = {it["id"]: ts for it, ts in self.app.scheduler.projection()}
             when = fmt_when(self.cfg, plan[target]) if plan.get(target) else "—"
-            answer("Першим у черзі")
-            return self.say(chat, f"⬆️ #{target} тепер першим у черзі → <b>{when}</b>")
+            return answer(f"⬆️ Першим у черзі → {when}", True)
         if action == "qd":
             from meta import move_pair
             mp4, js = move_pair(item["mp4"], item["json"], Path(self.cfg["paths"]["skipped"]))
             self.db.update_item(target, status="skipped", mp4=mp4, json=js, note="прибрано вручну")
             self.db.event(target, "removed", {"by": chat})
-            answer("Прибрано")
-            return self.say(chat, f"🗑 #{target} прибрано з черги — файл у папці skipped.", html_mode=False)
+            answer("🗑 Прибрано з черги — файл у папці skipped", True)
+            return self.cleanup(chat)
         answer()
 
     def _queue_card(self, chat: int, item: dict) -> None:
@@ -739,11 +777,11 @@ class Bot:
         try:
             video = media.telegram_copy(item["mp4"], self.cfg)
             info = media.probe(video, self.cfg["ffprobe"])
-            self.tg.send_video(chat, video, cap, kb, width=info.get("width"), height=info.get("height"),
-                               duration=info.get("duration"))
+            self._track(chat, self.tg.send_video(chat, video, cap, kb, width=info.get("width"),
+                                                 height=info.get("height"), duration=info.get("duration")))
         except (media.MediaError, TelegramError, OSError) as e:
             log.warning("Картка #%s без відео: %s", item["id"], e)
-            self.say(chat, cap, reply_markup=kb)
+            self.tmp(chat, cap, reply_markup=kb)
 
     def _pick_from_queue(self, chat: int, item: dict, choice, answer=None) -> None:
         """Відео з черги на обраний час (або зараз): сповіщення з кнопками, далі — назва й хештеги."""
@@ -756,7 +794,7 @@ class Bot:
             except ValueError as e:
                 if answer:
                     answer(str(e), True)
-                return self.say(chat, f"⚠️ {e}. Оберіть інший час.", html_mode=False)
+                return self.tmp(chat, f"⚠️ {e}. Оберіть інший час.", html_mode=False)
             if answer:
                 answer("Час обрано")
         self.db.update_item(item_id, status="notified", note=None)
@@ -790,7 +828,7 @@ class Bot:
         head = ("🕐 <b>Крок 3/3. Коли публікуємо?</b>" if dialog else
                 f"🕐 <b>Коли опублікувати шортс #{item_id}?</b>" if item["status"] == "queued" else
                 f"🕐 <b>Новий час для шортса #{item_id}</b>")
-        self.say(chat, f"{head}\nОберіть вільний слот, «Свій час» (напр. <code>завтра 18:30</code>) або «Зараз».",
+        self.tmp(chat, f"{head}\nОберіть вільний слот, «Свій час» (напр. <code>завтра 18:30</code>) або «Зараз».",
                  reply_markup={"inline_keyboard": rows})
 
     def time_button(self, chat: int, item_id: int, action: str, rest: list, answer) -> None:
@@ -811,11 +849,12 @@ class Bot:
             return answer("Цей вибір уже неактуальний", True)
         if action == "tx":
             self.dialog_set(chat, None)
-            return answer("Скасовано")
+            answer("Скасовано")
+            return self.cleanup(chat)
         if action == "tc":
             self.dialog_set(chat, {**st, "step": "time_custom"})
             answer()
-            return self.say(chat, "⌨️ Напишіть дату й час: <code>18:30</code>, <code>завтра 18:30</code> "
+            return self.tmp(chat, "⌨️ Напишіть дату й час: <code>18:30</code>, <code>завтра 18:30</code> "
                                   "або <code>13.11 18:30</code>")
         if action == "tn":
             answer("Публікую зараз…")
@@ -834,7 +873,7 @@ class Bot:
         try:
             ts = parse_when(text, self.cfg)
         except ValueError as e:
-            return self.say(chat, f"⚠️ {e}", html_mode=False)
+            return self.tmp(chat, f"⚠️ {e}", html_mode=False)
         self._apply_time(chat, item, st, ts)
 
     def _apply_time(self, chat: int, item: dict, st: dict, choice, answer=None) -> None:
@@ -848,7 +887,7 @@ class Bot:
             except ValueError as e:
                 if answer:
                     answer(str(e), True)
-                return self.say(chat, f"⚠️ {e}. Оберіть інший час.", html_mode=False)
+                return self.tmp(chat, f"⚠️ {e}. Оберіть інший час.", html_mode=False)
             if answer:
                 answer("Час змінено")
         dialog = st.get("mode") == "dialog"
@@ -859,17 +898,12 @@ class Bot:
             if item["status"] == "notified":
                 self.db.update_item(item_id, status="approved")
                 self.db.event(item_id, "approved", {"by": chat, "title": st.get("title"), "hashtags": st.get("tags")})
+        if dialog:
+            self._drop_texts(chat, item_id)
+        self.cleanup(chat)
         if now_pub:
             self.app.scheduler.release_slot(item_id)
-            self.say(chat, f"✅ <b>Готово!</b> Публікую шортс #{item_id} зараз.")
-            return self.app.publisher.start(item_id)
-        when = fmt_when(self.cfg, item["slot_at"]) if item["slot_at"] else "—"
-        if dialog:
-            meta = self._meta(item)
-            self.say(chat, f"✅ <b>Готово!</b> Публікація {when}.\n🎬 {esc(meta.yt_title)}\n"
-                           f"{esc(' '.join(meta.hashtags))}")
-        else:
-            self.say(chat, f"🕐 Час шортса #{item_id}: <b>{when}</b>")
+            return self.app.publisher.start(item_id)  # підпис відео покаже «⏫ Публікується…» → «✅ Опубліковано»
         self.refresh(item_id, texts=dialog)
 
     def _regen_ai(self, item_id: int) -> None:
@@ -923,6 +957,8 @@ class Bot:
             return self.command(cmd, args, chat, role)
         if role != "admin":
             return self.say(chat, HELP_VIEWER, reply_markup=self.reply_keyboard(chat))
+        if self.dialog_get(chat) or self.db.get(f"await_title:{chat}"):
+            self._track(chat, m.get("message_id"))
         if self.dialog_get(chat):
             return self.dialog_answer(chat, text)
         await_id = self.db.get(f"await_title:{chat}")
@@ -931,14 +967,14 @@ class Bot:
             self.db.set(f"await_title:{chat}", None)
             item = self.db.get_item(item_id)
             if not item or item["status"] not in ("notified", "approved"):
+                self.cleanup(chat)
                 return self.say(chat, "Цей шортс уже неактуальний — назву не змінено.", html_mode=False)
             title = re.sub(r"\s+", " ", text)[:100]
             edited = [x for x in item["edited"] if x != "назву"] + ["назву"]
             self.db.update_item(item_id, title_override=title, edited=edited)
             self.db.event(item_id, "edited", {"title": title})
-            self.refresh(item_id)
-            note = " (обрізано до 100 символів)" if len(text) > 100 else ""
-            return self.say(chat, f"✅ Назву для #{item_id} змінено{note}: {title}", html_mode=False)
+            self.refresh(item_id)  # нова назва — у підписі відео
+            return self.cleanup(chat)
         self.say(chat, HELP_ADMIN, reply_markup=self.reply_keyboard(chat))
 
     def command(self, cmd: str, args: list[str], chat: int | None = None, role: str = "admin") -> None:
@@ -968,6 +1004,7 @@ class Bot:
         elif cmd == "/cancel":
             self.db.set(f"await_title:{chat}", None)
             self.db.set(f"dialog:{chat}", None)
+            self.cleanup(chat)
             reply("Скасовано.", False)
         elif cmd == "/queue":
             kb = self.queue_keyboard(0) if role == "admin" else None

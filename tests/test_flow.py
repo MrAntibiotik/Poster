@@ -25,6 +25,7 @@ from poster import App  # noqa: E402
 class FakeTG:
     def __init__(self):
         self.sent, self.edits, self.answers, self.msg_id = [], [], [], 100
+        self.deleted = []
 
     def _msg(self):
         self.msg_id += 1
@@ -48,6 +49,11 @@ class FakeTG:
 
     def answer_callback(self, cid, text="", alert=False):
         self.answers.append(text)
+
+    def call(self, method, **kw):
+        if method == "deleteMessages":
+            self.deleted.extend(kw["message_ids"])
+        return True
 
 
 class FlowBase(unittest.TestCase):
