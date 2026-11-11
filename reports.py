@@ -12,63 +12,150 @@ log = logging.getLogger("reports")
 esc = html.escape
 
 
+ICONS = {"youtube": "▶️", "tiktok": "🎵", "instagram": "📸", "facebook": "📘"}
+
+
+def explain_error(platform: str, error: str) -> tuple[str, str, str]:
+    """Технічна помилка → (ключ групи, зрозуміле пояснення, порада)."""
+    e = str(error or "")
+    low = e.lower()
+    name = NAMES.get(platform, platform)
+    if "токена tiktok" in low or ("авторизац" in low and platform == "tiktok"):
+        return "tt_auth", "TikTok не підключено", "підключіть у панелі або вимкніть у «🔌 Платформи»"
+    if "meta_page_token" in low or "meta_user_token" in low:
+        return "meta_token", "Instagram/Facebook: не було токена Meta", "перевірте в панелі «🔍 Перевірити всі підключення»"
+    if "авторизац" in low or "reauth" in low or "invalid_grant" in low or "oauth" in low and "expired" in low:
+        return f"auth_{platform}", f"{name}: потрібна повторна авторизація", f"панель → вкладка {name}"
+    if "processingfailed" in low or "request processing failed" in low:
+        return "ig_processing", f"{name} не зміг обробити відео", "повторіть — програма зробить сумісну копію"
+    if "winerror 2" in low or "winerror 3" in low or "no such file" in low or "cannot find the path" in low \
+            or "не знайдено" in low:
+        return "missing", "Файл відео не знайдено", "його перемістили чи видалили до публікації"
+    if "quota" in low or "квот" in low:
+        return f"quota_{platform}", f"{name}: вичерпано денну квоту", "повторіть завтра"
+    if "timeout" in low or "timed out" in low or "connection" in low:
+        return f"net_{platform}", f"{name}: проблема зі зв'язком", "повторіть пізніше"
+    short = e.split("\n")[0][:120]
+    return f"other_{platform}_{short[:40]}", f"{name}: {short}", ""
+
+
+def _clean_title(cfg: dict, item: dict | None, fallback: str = "") -> str:
+    """Назва без обов'язкових хештегів у кінці — щоб звіт читався легко."""
+    import re
+    title = _title(item) if item else fallback
+    title = re.sub(r"(\s+#[\wЀ-ӿ]+)+\s*$", "", title or "").strip()
+    return title or fallback or "без назви"
+
+
 def daily_report(app, now: int | None = None, stats: dict | None = None) -> str:
+    from config import fmt_when
     now = now or now_ts()
     cfg, db = app.cfg, app.db
     day = local_dt(cfg, now).date()
     start = int(datetime.combine(day, dtime(0, 0), cfg["tz"]).timestamp())
     end = int(datetime.combine(day + timedelta(days=1), dtime(0, 0), cfg["tz"]).timestamp())
     ev = db.events(start, end)
+    active = set(getattr(app, "platforms", {}) or PLATFORMS)
 
-    lines = [f"📊 <b>Підсумок за {day.strftime('%d.%m.%Y')}</b>"]
+    # шортси, з якими сьогодні щось відбувалося (публікація або спроба)
+    ids: list[int] = []
+    for e in ev:
+        if e["kind"] in ("published", "publish_failed", "platform_error") and e["item_id"] and e["item_id"] not in ids:
+            ids.append(e["item_id"])
+    items = {i: db.get_item(i) for i in ids}
+    items = {i: it for i, it in items.items() if it}
+    first_ts = {}
+    for e in ev:
+        if e["item_id"] in items and e["kind"] in ("published", "publish_failed"):
+            first_ts.setdefault(e["item_id"], e["ts"])
 
-    published = [e for e in ev if e["kind"] == "published"]
-    lines.append(f"\n✅ <b>Опубліковано: {len(published)}</b>")
-    for e in published:
-        d = e["details"] or {}
-        links = " ".join(f'<a href="{esc(u)}">{SHORT[p]}</a>' if u else SHORT[p]
-                         for p, u in (d.get("urls") or {}).items())
-        fail = f" | ❌ {', '.join(SHORT[p] for p in d.get('failed', []))}" if d.get("failed") else ""
-        lines.append(f"• {local_dt(cfg, e['ts']).strftime('%H:%M')} {esc(d.get('title', ''))} — {links}{fail}")
+    lines = [f"📊 <b>Підсумок дня · {day.strftime('%d.%m.%Y')}</b>"]
+    ok_items = [it for it in items.values() if any(r.get("status") == "ok" for r in it["results"].values())]
+    bad_items = [it for it in items.values() if it not in ok_items and it["status"] not in ("publishing",)]
+    total_posts = sum(1 for it in ok_items for r in it["results"].values() if r.get("status") == "ok")
+    head = f"🎬 Вийшло шортсів: <b>{len(ok_items)}</b> · публікацій на платформах: <b>{total_posts}</b>"
+    if bad_items:
+        head += f" · не вийшло: <b>{len(bad_items)}</b>"
+    lines.append(head)
 
+    problems: dict[str, dict] = {}
+    for it in sorted(items.values(), key=lambda x: first_ts.get(x["id"], 0)):
+        ok_parts, bad_parts = [], []
+        for p in PLATFORMS:
+            r = it["results"].get(p)
+            if not r or p in it["disabled"]:
+                continue
+            if r.get("status") == "ok":
+                u = r.get("url")
+                ok_parts.append(f'{ICONS[p]} <a href="{esc(u)}">{NAMES[p]}</a>' if u else f"{ICONS[p]} {NAMES[p]}")
+            elif p in active:
+                key, text, hint = explain_error(p, r.get("error", ""))
+                bad_parts.append(NAMES[p])
+                g = problems.setdefault(key, {"text": text, "hint": hint, "ids": []})
+                if it["id"] not in g["ids"]:
+                    g["ids"].append(it["id"])
+        t = it["posted_at"] or first_ts.get(it["id"])
+        when = local_dt(cfg, t).strftime("%H:%M") if t else ""
+        mark = "✅" if it in ok_items else "❌"
+        lines.append(f"\n{mark} <b>{esc(_clean_title(cfg, it))}</b> <i>#{it['id']}{', ' + when if when else ''}</i>")
+        if ok_parts:
+            lines.append("    " + " · ".join(ok_parts))
+        if bad_parts:
+            lines.append("    ❌ не вийшло: " + ", ".join(bad_parts))
+    if not items:
+        lines.append("\nСьогодні нічого не публікувалося.")
+
+    # помилки, які потім виправили повторні спроби
+    fixed = 0
+    for e in ev:
+        if e["kind"] == "platform_error" and e["item_id"] in items:
+            p = (e["details"] or {}).get("platform")
+            if (items[e["item_id"]]["results"].get(p) or {}).get("status") == "ok":
+                fixed += 1
+    if problems or fixed:
+        lines.append("\n⚠️ <b>Потребує уваги</b>" if problems else "\n⚠️ <b>Помилки</b>")
+        for g in problems.values():
+            n = len(g["ids"])
+            lines.append(f"• <b>{esc(g['text'])}</b>: {n} шортс{'и' if 1 < n < 5 else 'ів' if n >= 5 else ''} "
+                         f"({', '.join('#' + str(i) for i in g['ids'])})" + (f"\n   → {esc(g['hint'])}" if g["hint"] else ""))
+        if problems:
+            lines.append("  Повторити — «⚠️ Невдалі» в боті або в панелі.")
+        if fixed:
+            lines.append(f"🔁 Ще {fixed} помил{'ку' if fixed == 1 else 'ки' if fixed < 5 else 'ок'} "
+                         f"виправили повторні спроби — там усе вийшло.")
+
+    # розклад
     skipped = [e for e in ev if e["kind"] == "skipped"]
     moved = [e for e in ev if e["kind"] == "moved_to_skipped"]
     empty = [e for e in ev if e["kind"] == "empty_slot"]
-    lines.append(f"\n⏭ <b>Пропущено слотів: {len(skipped)}</b>" + (f" (порожніх слотів: {len(empty)})" if empty else ""))
-    for e in skipped:
-        d = e["details"] or {}
-        lines.append(f"• {esc(d.get('title', ''))} ({d.get('skips')}/{cfg['max_skips']})")
+    lines.append("\n🗓 <b>Розклад</b>")
+    if skipped:
+        names = ", ".join(esc(_clean_title(cfg, None, (e["details"] or {}).get("title", ""))) for e in skipped[:5])
+        lines.append(f"⏭ Без підтвердження пропущено: {len(skipped)} ({names}) — їх перенесено в кінець черги")
     for e in moved:
-        lines.append(f"• 🗑 {esc((e['details'] or {}).get('title', ''))} → skipped/")
-
-    errors = [e for e in ev if e["kind"] in ("platform_error", "publish_failed")]
-    lines.append(f"\n⚠️ <b>Помилки: {len(errors)}</b>")
-    for e in errors:
-        d = e["details"] or {}
-        if e["kind"] == "platform_error":
-            lines.append(f"• #{e['item_id']} {NAMES.get(d.get('platform'), d.get('platform'))}: "
-                         f"{esc(str(d.get('error', ''))[:150])}")
-        else:
-            lines.append(f"• #{e['item_id']} {esc(d.get('title', ''))}: не опубліковано ніде")
-
-    queue = db.queue()
-    waiting = db.items("status IN ('notified','approved')", order="slot_at")
-    lines.append(f"\n📦 <b>Відкладено (у черзі): {len(queue)}</b>")
-    from config import fmt_when
-    for it, ts in app.scheduler.projection(now)[:5]:
+        lines.append(f"🗑 {esc((e['details'] or {}).get('title', ''))} — пропущено 3 рази, перенесено в skipped/")
+    if empty:
+        lines.append(f"⬜ Порожніх слотів: {len(empty)} (у черзі не було відео)")
+    queue = app.scheduler.projection(now)
+    lines.append(f"📦 У черзі: <b>{len(queue)}</b>")
+    for it, ts in queue[:5]:
         when = f" → {fmt_when(cfg, ts, now)}" if ts else ""
-        lines.append(f"• {esc(_title(it))}{when}" + (f" (пропусків: {it['skips']})" if it["skips"] else ""))
+        lines.append(f"   • {esc(_clean_title(cfg, it))}{when}")
     if len(queue) > 5:
-        lines.append(f"… і ще {len(queue) - 5}")
-    upcoming = app.scheduler.upcoming(now, 6)
-    if upcoming or waiting:
-        lines.append("🗓 <b>Заплановано:</b> " + ", ".join(
-            fmt_slot(cfg, u["slot_at"], now) + (" ✅" if u["item_id"] else "") for u in upcoming))
+        lines.append(f"   … і ще {len(queue) - 5}")
+    waiting = db.items("status IN ('notified','approved')", order="slot_at")
+    for it in waiting:
+        st = "підтверджено" if it["status"] == "approved" else "чекає на «🚀 Опублікувати»"
+        lines.append(f"   • {esc(_clean_title(cfg, it))} → {fmt_slot(cfg, it['slot_at'], now) if it['slot_at'] else '—'} ({st})")
+    if not queue and not waiting:
+        free = app.scheduler.upcoming(now, 3)
+        if free:
+            lines.append("   Наступні слоти порожні — покладіть нові шортси в папку.")
     if stats:
         lines.append("")
         lines.append(analytics_text(app, stats, title=False))
     if cfg.get("dry_run"):
-        lines.append("🧪 Режим dry_run — реальних публікацій немає")
+        lines.append("\n🧪 Тестовий режим — реальних публікацій немає")
     return "\n".join(lines)
 
 

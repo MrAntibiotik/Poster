@@ -175,7 +175,7 @@ class FlowTest(FlowBase):
         sch.tick(self.ts(11, "22:31"))
         report = [s for s in tg.sent if s[0] == "text" and "Підсумок" in s[1]]
         self.assertEqual(len(report), 1)
-        self.assertIn("Опубліковано: 1", report[0][1])
+        self.assertIn("Вийшло шортсів: <b>1</b>", report[0][1])
 
         # Перегляди через 24 год
         sch.tick(self.ts(12, "13:05"))

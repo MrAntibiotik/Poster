@@ -58,8 +58,8 @@ class AnalyticsTest(FlowBase):
         self.tt.views.update({a["results"]["tiktok"]["id"]: 50, b["results"]["tiktok"]["id"]: 20})
         self.app.scheduler.tick(self.ts(11, "22:31"))
         r1 = self.reports()[-1]
-        self.assertIn("Опубліковано: 2", r1)
-        self.assertIn("Відкладено (у черзі): 0", r1)
+        self.assertIn("Вийшло шортсів: <b>2</b>", r1)
+        self.assertIn("У черзі: <b>0</b>", r1)
         self.assertIn("<b>YouTube</b>: 👥 1 000", r1)
         self.assertIn("👁 +1 200 · ❤️ +120 (шортси)", r1)  # опубліковані сьогодні — уся статистика за добу
         self.assertIn("<b>TikTok</b>: 👥 500", r1)
@@ -73,7 +73,7 @@ class AnalyticsTest(FlowBase):
         self.assertIn("👥 1 025 (+25)", r2)
         self.assertIn("👥 490 (−10)", r2)
         self.assertIn("👁 +600 · ❤️ +60 (шортси)", r2)
-        self.assertIn("Відкладено (у черзі): 1", r2)
+        self.assertIn("У черзі: <b>1</b>", r2)
 
         # лідери тижня (неділя 15.11.2026)
         self.app.scheduler.tick(self.ts(15, "22:31"))
