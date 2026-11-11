@@ -60,6 +60,13 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 .login{width:100%;max-width:360px}
 .list li{margin:4px 0}
 .pw{display:flex;gap:6px} .pw input{flex:1}
+.modal{position:fixed;inset:0;background:rgba(10,12,20,.55);z-index:30;display:flex;align-items:center;justify-content:center;padding:16px}
+.modal .card{width:100%;max-width:640px;max-height:90vh;display:flex;flex-direction:column;margin:0}
+.fslist{overflow:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0;min-height:200px;max-height:45vh}
+.fslist button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:none;color:var(--text);padding:8px 12px;font:inherit;cursor:pointer}
+.fslist button:hover{background:var(--chip)}
+.fspath{font-family:ui-monospace,Consolas,monospace;font-size:13px;word-break:break-all}
+.folder{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
 </style>
 </head>
 <body>
@@ -137,7 +144,11 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
     <div class="grid">
       <div class="card"><h2>Зараз у роботі</h2><ul id="current" class="list"></ul>
         <h3>Найближчі слоти</h3><ul id="upcoming" class="list"></ul></div>
-      <div class="card"><h2>Черга <span id="qCount" class="pill"></span></h2><ol id="queue" class="list"></ol>
+      <div class="card"><h2>Черга <span id="qCount" class="pill"></span></h2>
+        <div class="folder"><div style="flex:1;min-width:0"><div class="small muted">📁 Папка з готовими шортсами</div>
+          <div class="fspath" id="readyPath"></div><div class="small" id="readyInfo"></div></div>
+          <button class="btn primary" data-pick="paths.ready">📂 Обрати папку…</button></div>
+        <ol id="queue" class="list"></ol>
         <div class="row"><button class="btn" data-open="ready">📂 Папка ready</button>
           <button class="btn" data-open="posted">📂 Папка posted</button></div></div>
     </div>
@@ -174,7 +185,15 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
       <ol class="steps small"><li><a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> → новий проєкт → APIs & Services → Library → <b>YouTube Data API v3</b> → Enable.</li>
         <li>OAuth consent screen: External, додайте себе в Test users, потім <b>Publish app → In production</b> (інакше вхід злітає кожні 7 днів).</li>
         <li>Credentials → Create credentials → OAuth client ID → <b>Desktop app</b> → Download JSON.</li>
-        <li>Завантажте цей файл нижче й натисніть «Авторизувати» — увійдіть в акаунт каналу.</li></ol>
+        <li>Завантажте цей файл нижче й натисніть «Авторизувати» — відкриється вхід Google. Оберіть акаунт <b>каналу</b> (якщо канал — бренд-акаунт, оберіть саме його в списку).</li></ol>
+      <details class="small" style="margin:8px 0"><summary>Google показує попередження або помилку?</summary>
+        <ul class="steps">
+          <li><b>«Google не перевірив цей застосунок»</b> — це ваш власний застосунок, так і має бути: «Додатково» → «Перейти до … (небезпечно)» → дозволити.</li>
+          <li><b>«Доступ заблоковано: застосунок не пройшов перевірку»</b> — у OAuth consent screen додайте свою пошту в Test users або натисніть Publish app.</li>
+          <li><b>redirect_uri_mismatch</b> — створено клієнт типу «Web application». Потрібен <b>Desktop app</b>.</li>
+          <li><b>Вхід доводиться повторювати щотижня</b> — застосунок у режимі Testing; натисніть Publish app → In production.</li>
+          <li><b>Відео виходять приватними</b> — обмеження Google для API-проєктів без аудиту; подайте форму «YouTube API Services — Audit and Quota Extension».</li>
+        </ul></details>
       <label class="f">client_secret.json <span id="ytSecret" class="pill"></span></label>
       <div class="row"><input id="ytFile" type="file" accept=".json,application/json"><button class="btn" id="ytUpload">Завантажити</button></div>
       <div class="row" style="margin-top:12px"><button class="btn primary" id="ytAuth">🔑 Авторизувати YouTube</button><span id="ytJob" class="small"></span></div>
@@ -257,13 +276,15 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
       <label class="check"><input type="checkbox" data-set="publish_on_approve"> Публікувати одразу після натискання «Опублікувати» (а не в час слоту)</label>
     </div>
     <div class="card"><h2>📂 Папки й інструменти</h2>
-      <label class="f">Готові шортси (ready/&lt;Гра&gt;/*.mp4 + *.json)</label><input type="text" data-set="paths.ready">
-      <div class="two"><div><label class="f">Опубліковані</label><input type="text" data-set="paths.posted"></div>
-        <div><label class="f">Пропущені</label><input type="text" data-set="paths.skipped"></div></div>
+      <label class="f">Готові шортси (усередині — папки ігор: &lt;Гра&gt;/відео.mp4 + відео.json)</label>
+      <div class="pw"><input type="text" data-set="paths.ready"><button class="btn" data-pick="paths.ready">📂 Обрати…</button></div>
+      <div class="two"><div><label class="f">Опубліковані</label><div class="pw"><input type="text" data-set="paths.posted"><button class="btn" data-pick="paths.posted" title="Обрати папку">📂</button></div></div>
+        <div><label class="f">Пропущені</label><div class="pw"><input type="text" data-set="paths.skipped"><button class="btn" data-pick="paths.skipped" title="Обрати папку">📂</button></div></div></div>
       <label class="f">Статус у json, що означає «готово»</label><input type="text" data-set="ready_status">
       <label class="f">Команда «Перегенерувати тексти» (підстановки {mp4}, {json}, {game})</label>
       <input type="text" data-set="regenerate_command" placeholder='python D:/Shorts/generate_meta.py --force {mp4}'>
-      <label class="f">Робоча папка цієї команди</label><input type="text" data-set="regenerate_cwd">
+      <label class="f">Робоча папка цієї команди</label>
+      <div class="pw"><input type="text" data-set="regenerate_cwd"><button class="btn" data-pick="regenerate_cwd" title="Обрати папку">📂</button></div>
       <div class="two"><div><label class="f">ffmpeg</label><input type="text" data-set="ffmpeg"></div>
         <div><label class="f">ffprobe</label><input type="text" data-set="ffprobe"></div></div>
       <label class="f">Версія Graph API (Meta)</label><input type="text" data-set="graph_api_version" style="max-width:160px">
@@ -291,6 +312,17 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
       <div class="row"><button class="btn" id="logout">Вийти</button><button class="btn danger" id="shutdown">Закрити панель</button></div></div>
   </section>
 </main>
+</div>
+<div class="modal hidden" id="fsModal" role="dialog" aria-modal="true" aria-labelledby="fsTitle">
+  <div class="card">
+    <h2 id="fsTitle">📂 Оберіть папку</h2>
+    <div class="row small"><span class="muted">Диски:</span><span id="fsDrives" class="row"></span><button class="btn" id="fsHome">🏠 Домашня</button></div>
+    <div class="fspath" id="fsPath" style="margin-top:8px"></div>
+    <div class="fslist" id="fsList"></div>
+    <div class="small" id="fsInfo"></div>
+    <div class="row" style="margin-top:8px"><input id="fsNew" type="text" placeholder="Нова папка" style="max-width:200px"><button class="btn" id="fsMk">+ Створити</button></div>
+    <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn" id="fsCancel">Скасувати</button><button class="btn primary" id="fsOk">Обрати цю папку</button></div>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -393,6 +425,9 @@ async function refresh(){
   $("#current").innerHTML = s.current.map(i => `<li>#${i.id} ${esc(i.name)} — ${st[i.status] || i.status} ${esc(i.slot)}</li>`).join("") || '<li class="muted">нічого</li>';
   $("#upcoming").innerHTML = s.upcoming.map(u => `<li>${esc(u.slot)}${u.manual ? " (тестовий)" : ""} — ${u.item ? "#" + u.item : "вільний"}</li>`).join("") || '<li class="muted">—</li>';
   $("#qCount").textContent = s.queue.length;
+  const ri = s.ready_info; $("#readyPath").textContent = ri.path;
+  $("#readyInfo").innerHTML = !ri.exists ? '<span style="color:var(--bad)">папки не існує — оберіть іншу</span>' :
+    `знайдено шортсів: <b>${ri.total}</b>, готових до публікації: <b>${ri.ready}</b>${ri.games.length ? " · ігри: " + ri.games.map(esc).join(", ") : ""}`;
   $("#queue").innerHTML = s.queue.map(i => `<li>#${i.id} ${i.game ? "[" + esc(i.game) + "] " : ""}${esc(i.name)}${i.skips ? ` <span class="pill warn">пропусків: ${i.skips}</span>` : ""}</li>`).join("") || '<li class="muted">черга порожня — покладіть шортси в папку ready</li>';
   $("#posted").innerHTML = s.posted.map(i => `<tr><td>${esc(i.when)}</td><td>${esc(i.name)}</td><td>${
     Object.entries(i.links).map(([p, u]) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(s.platforms[p].name)}</a>` : esc(s.platforms[p].name)).join(" · ")}${
@@ -449,6 +484,8 @@ document.addEventListener("click", ev => {
     run(() => api("/api/users", {chat_id:+id, role:b.dataset.adduser}), b).then(() => $("#newUser").value = "");
   } else if (b.hasAttribute("data-toggle-pw")) {
     ev.preventDefault(); const i = b.previousElementSibling; i.type = i.type === "password" ? "text" : "password";
+  } else if (b.dataset.pick) {
+    pickFolder(b.dataset.pick, b);
   } else if (b.hasAttribute("data-save-settings")) {
     saveSettings(b);
   } else if (b.dataset.saveSecrets) {
@@ -520,6 +557,66 @@ $("#shutdown").addEventListener("click", async () => {
   await api("/api/shutdown", {}); clearInterval(timer);
   document.body.innerHTML = '<div class="center"><div class="card login"><div class="big">Панель закрито</div><p class="muted">Бот продовжує працювати. Щоб відкрити панель знову — запустіть panel.bat.</p></div></div>';
 });
+
+/* ---------- вибір папки ---------- */
+const PICK_NAMES = {"paths.ready": "папку з готовими шортсами", "paths.posted": "папку для опублікованих",
+  "paths.skipped": "папку для пропущених", "regenerate_cwd": "робочу папку команди"};
+let fsTarget = null, fsCur = "", fsSep = "/";
+async function pickFolder(key, btn){
+  const input = $(`[data-set="${key}"]`), initial = (input && input.value) || (S && S.settings[key]) || "";
+  if (btn) btn.disabled = true;
+  try {
+    if (S && S.windows) {
+      toast("Відкриваю вікно вибору папки… (якщо не видно — воно може бути за браузером)");
+      const j = await api("/api/pick_folder", {initial});
+      if (j.native) { if (j.path) await applyFolder(key, j.path); return; }
+    }
+    await openFs(key, initial);
+  } catch(e){ toast(e.message, "err"); }
+  finally { if (btn) btn.disabled = false; }
+}
+async function applyFolder(key, path){
+  await api("/api/settings", {[key]: path});
+  $$(`[data-set="${key}"]`).forEach(i => i.value = path);
+  let msg = "Збережено: " + path;
+  if (key === "paths.ready") { const f = await api("/api/fs", {path}); msg += `\nЗнайдено шортсів: ${f.shorts.total}, готових: ${f.shorts.ready}`; }
+  toast(msg, "okk"); await refresh();
+  if (S && S.running && confirm("Папку змінено. Перезапустити бота зараз, щоб він почав брати шортси з нової папки?"))
+    run(() => api("/api/action", {name: "restart"}));
+}
+async function openFs(key, path){
+  fsTarget = key; $("#fsTitle").textContent = "📂 Оберіть " + (PICK_NAMES[key] || "папку");
+  $("#fsModal").classList.remove("hidden"); await loadFs(path);
+}
+function joinPath(base, name){
+  const sep = base.includes("\\") ? "\\" : "/";
+  return base.endsWith(sep) ? base + name : base + sep + name;
+}
+async function loadFs(path){
+  try {
+    const j = await api("/api/fs", {path}); fsCur = j.path;
+    $("#fsPath").textContent = j.path;
+    $("#fsDrives").innerHTML = j.drives.map(d => `<button class="btn" data-fs="${esc(d)}">${esc(d)}</button>`).join("");
+    $("#fsHome").dataset.fs = j.home;
+    $("#fsList").innerHTML = (j.parent ? `<button data-fs="${esc(j.parent)}">⬆️ .. (вгору)</button>` : "") +
+      j.dirs.map(d => `<button data-fs="${esc(joinPath(j.path, d))}">📁 ${esc(d)}</button>`).join("") +
+      (j.dirs.length ? "" : '<div class="muted small" style="padding:10px">підпапок немає</div>');
+    const sh = j.shorts;
+    $("#fsInfo").innerHTML = fsTarget !== "paths.ready" ? "" : (sh.total
+      ? `✅ Тут шортсів: <b>${sh.total}</b>, готових: <b>${sh.ready}</b>${sh.games.length ? " · ігри: " + sh.games.map(esc).join(", ") : ""}`
+      : '<span class="muted">У цій папці (і її підпапках) шортсів mp4 + json не знайдено.</span>');
+  } catch(e){ toast(e.message, "err"); }
+}
+$("#fsModal").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-fs]"); if (b) { loadFs(b.dataset.fs); return; }
+  if (ev.target.id === "fsModal") $("#fsModal").classList.add("hidden");
+});
+$("#fsCancel").addEventListener("click", () => $("#fsModal").classList.add("hidden"));
+$("#fsOk").addEventListener("click", async () => { $("#fsModal").classList.add("hidden");
+  try { await applyFolder(fsTarget, fsCur); } catch(e){ toast(e.message, "err"); } });
+$("#fsMk").addEventListener("click", async () => { const name = $("#fsNew").value.trim(); if (!name) return;
+  try { const j = await api("/api/fs/mkdir", {path: fsCur, name}); $("#fsNew").value = ""; await loadFs(j.path); } catch(e){ toast(e.message, "err"); } });
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") $("#fsModal").classList.add("hidden"); });
 
 boot();
 </script>

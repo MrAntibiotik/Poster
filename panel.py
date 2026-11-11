@@ -373,6 +373,99 @@ class Panel:
         self.tiktok_flow = None
         return f"TikTok підключено (дозволи: {tok.get('scope')})"
 
+    # ---------------- папки ----------------
+    def count_shorts(self, folder: str | Path) -> dict:
+        """Скільки mp4 з парним json лежить у папці та її підпапках-іграх (і скільки з них готові)."""
+        folder = Path(folder)
+        ready_status = self.cfg["ready_status"]
+        info = {"path": str(folder), "exists": folder.is_dir(), "total": 0, "ready": 0, "games": []}
+        if not info["exists"]:
+            return info
+        games = set()
+        try:
+            files = list(folder.glob("*.mp4"))[:3000] + list(folder.glob("*/*.mp4"))[:3000]
+        except OSError:
+            return info
+        for mp4 in files:
+            js = mp4.with_suffix(".json")
+            if not js.exists():
+                continue
+            info["total"] += 1
+            if mp4.parent != folder:
+                games.add(mp4.parent.name)
+            try:
+                from meta import json_status, read_json
+                if json_status(read_json(js)) == ready_status:
+                    info["ready"] += 1
+            except (OSError, ValueError):
+                pass
+        info["games"] = sorted(games)
+        return info
+
+    def list_dir(self, path: str | None) -> dict:
+        p = Path(path).expanduser() if path else Path(self.cfg["paths"]["ready"])
+        p = (p if p.is_absolute() else self.root / p).resolve()
+        while not p.is_dir() and p != p.parent:
+            p = p.parent
+        if not p.is_dir():
+            p = Path.home()
+        try:
+            dirs = sorted((d.name for d in p.iterdir() if d.is_dir() and not d.name.startswith((".", "$"))),
+                          key=str.lower)[:500]
+        except OSError as e:
+            raise ValueError(f"Немає доступу до {p}: {e}") from e
+        drives = [f"{c}:\\" for c in "CDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.exists(f"{c}:\\")] if control.WIN else []
+        return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "dirs": dirs,
+                "drives": drives, "home": str(Path.home()), "shorts": self.count_shorts(p)}
+
+    def make_dir(self, path: str, name: str) -> dict:
+        name = name.strip()
+        if not name or re.search(r'[<>:"/\\|?*]', name):
+            raise ValueError("Недопустима назва папки")
+        new = Path(path) / name
+        new.mkdir(parents=True, exist_ok=True)
+        return self.list_dir(str(new))
+
+    def pick_folder_native(self, initial: str = "") -> str | None:
+        """Звичайне вікно вибору папки Windows. None — якщо недоступне (тоді панель покаже свій перегляд)."""
+        if not control.WIN:
+            return None
+        if initial and not Path(initial).is_absolute():
+            initial = str((self.root / initial).resolve())
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        tk_script = (
+            "import sys\n"
+            "sys.stdout.reconfigure(encoding='utf-8')\n"
+            "import tkinter as tk\nfrom tkinter import filedialog\n"
+            "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True); r.update()\n"
+            "p = filedialog.askdirectory(parent=r, initialdir=sys.argv[1] or None, mustexist=False,\n"
+            "                            title='Оберіть папку з готовими шортсами')\n"
+            "print('PICKED:' + (p or ''))\n")
+        try:
+            r = subprocess.run([control.python_exe(windowless=False), "-c", tk_script, initial or ""],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=900, creationflags=flags)
+            for line in r.stdout.splitlines():
+                if line.startswith("PICKED:"):
+                    return line[7:].replace("/", "\\") or ""
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("tkinter-діалог: %s", e)
+        ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; "
+              "$d=New-Object System.Windows.Forms.FolderBrowserDialog; $d.ShowNewFolderButton=$true; "
+              "$d.Description='Оберіть папку з готовими шортсами'; "
+              f"$d.SelectedPath='{(initial or '').replace(chr(39), chr(39) * 2)}'; "
+              "$f=New-Object System.Windows.Forms.Form -Property @{TopMost=$true}; "
+              "if($d.ShowDialog($f) -eq 'OK'){'PICKED:'+$d.SelectedPath}else{'PICKED:'}")
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=900, creationflags=flags)
+            for line in r.stdout.splitlines():
+                if line.startswith("PICKED:"):
+                    return line[7:]
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("PowerShell-діалог: %s", e)
+        return None
+
     # ---------------- стан для сторінки ----------------
     def state(self) -> dict:
         cfg = self.reload()
@@ -441,6 +534,7 @@ class Panel:
             "queue": queue, "current": current, "upcoming": upcoming, "posted": posted,
             "users": users, "jobs": self.jobs, "log": log_tail,
             "health_time": fmt_slot(cfg, int(db.get("health_ts")), now) if db.get("health_ts") else None,
+            "ready_info": self.count_shorts(cfg["paths"]["ready"]),
             "root": str(self.root), "now": local_dt(cfg, now).strftime("%d.%m.%Y %H:%M"),
         }
 
@@ -595,6 +689,13 @@ def make_handler(panel: Panel):
                     return self.json(panel.tiktok_start())
                 if path == "/api/auth/tiktok/finish":
                     return self.json({"message": panel.tiktok_finish(str(data.get("url") or ""))})
+                if path == "/api/fs":
+                    return self.json(panel.list_dir(data.get("path")))
+                if path == "/api/fs/mkdir":
+                    return self.json(panel.make_dir(str(data.get("path") or ""), str(data.get("name") or "")))
+                if path == "/api/pick_folder":
+                    picked = panel.pick_folder_native(str(data.get("initial") or ""))
+                    return self.json({"path": picked, "native": picked is not None})
                 if path == "/api/shutdown":
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
                     return self.json({"message": "Панель закрито"})

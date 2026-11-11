@@ -138,6 +138,28 @@ class PanelTest(unittest.TestCase):
         users = self.req("GET", "/api/state")[1]["users"]
         self.assertTrue(users[0]["owner"])
 
+    def test_folders(self):
+        self.login()
+        lib = self.tmp / "Мої шортси"
+        (lib / "WoT").mkdir(parents=True)
+        (lib / "WoT" / "a.mp4").write_bytes(b"0")
+        (lib / "WoT" / "a.json").write_text('{"status": "ready_to_post"}', encoding="utf-8")
+        (lib / "WoT" / "b.mp4").write_bytes(b"0")  # без json — не рахується
+        st, j = self.req("POST", "/api/fs", {"path": "Мої шортси"})  # відносний шлях -> повний
+        self.assertEqual(st, 200)
+        self.assertEqual(Path(j["path"]), lib.resolve())
+        self.assertEqual(j["dirs"], ["WoT"])
+        self.assertEqual((j["shorts"]["total"], j["shorts"]["ready"], j["shorts"]["games"]), (1, 1, ["WoT"]))
+        st, j = self.req("POST", "/api/fs/mkdir", {"path": str(lib), "name": "Dota"})
+        self.assertTrue((lib / "Dota").is_dir())
+        self.assertEqual(self.req("POST", "/api/fs/mkdir", {"path": str(lib), "name": "../evil"})[0], 400)
+        self.req("POST", "/api/settings", {"paths.ready": str(lib)})
+        info = self.req("GET", "/api/state")[1]["ready_info"]
+        self.assertEqual((info["exists"], info["ready"]), (True, 1))
+        # на не-Windows рідного вікна немає — панель показує власний перегляд папок
+        if not panel_mod.control.WIN:
+            self.assertEqual(self.req("POST", "/api/pick_folder", {})[1], {"path": None, "native": False})
+
     def test_youtube_secret_upload(self):
         self.login()
         self.assertEqual(self.req("POST", "/api/youtube/secret", {"content": "{}"})[0], 400)
