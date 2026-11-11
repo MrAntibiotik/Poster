@@ -668,7 +668,9 @@ def make_handler(panel: Panel):
                     panel.set_password(str(data.get("new") or ""))
                     return self.json({"message": "Пароль змінено"})
                 if path == "/api/action":
-                    return self.json({"message": panel.action(str(data.get("name")), data)})
+                    msg = panel.action(str(data.get("name")), data)
+                    log.info("Дія «%s»: %s", data.get("name"), str(msg)[:300])
+                    return self.json({"message": msg})
                 if path == "/api/settings":
                     panel.save_settings(data)
                     return self.json({"message": "Налаштування збережено"})
@@ -701,6 +703,7 @@ def make_handler(panel: Panel):
                     return self.json({"message": "Панель закрито"})
                 return self.json({"error": "Not found"}, 404)
             except (ValueError, KeyError, TypeError) as e:
+                log.warning("Панель: %s %s — помилка: %s", path, data.get("name") or "", e)
                 return self.json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
                 log.exception("panel %s", path)
