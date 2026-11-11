@@ -120,7 +120,7 @@ class Publisher:
                                  item["mp4"], Path(item["mp4"]).stat().st_size / 1024 / 1024)
                     r = plat.publish(item["mp4"], meta)
                 log.info("#%s %s: опубліковано %s", item["id"], key, r.get("url"))
-                if r.get("note") and key == "youtube":
+                if r.get("note") and key in ("youtube", "instagram"):
                     app.bot.send(f"ℹ️ {NAMES[key]}, шортс #{item['id']}: {r['note']}")
                 return {"status": "ok", "attempts": i, "published_at": now_ts(), **r}
             except TokenExpired as e:

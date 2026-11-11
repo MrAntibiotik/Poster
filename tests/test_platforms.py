@@ -142,6 +142,56 @@ class InstagramTest(Base):
         self.assertEqual(meta_graph.Instagram(self.cfg).get_views({"id": "M1"}), 777)
 
 
+class InstagramSpecTest(Base):
+    """Файл поза вимогами Reels -> копія; ProcessingFailedError на оригіналі -> повтор із копією."""
+
+    def setUp(self):
+        super().setUp()
+        import media
+        self.media = media
+        self._orig_media = (media.ig_probe, media.ig_problems, media.instagram_copy)
+        self.cfg.update(ffprobe="ffprobe", ffmpeg="ffmpeg")
+        self.cfg["paths"]["data"] = self.tmp / "data"
+        self.copy = self.tmp / "copy_ig.mp4"
+        self.copy.write_bytes(b"c" * 100)
+        media.instagram_copy = lambda path, cfg: str(self.copy)
+
+    def tearDown(self):
+        self.media.ig_probe, self.media.ig_problems, self.media.instagram_copy = self._orig_media
+        super().tearDown()
+
+    def routes(self, upload_resps):
+        return [
+            ("POST", "/IG1/media_publish", Resp({"id": "M1"})),
+            ("POST", "/IG1/media", Resp({"id": "C1", "uri": "https://rupload.facebook.com/ig-api-upload/v25.0/C1"})),
+            ("POST", "rupload.facebook.com", upload_resps),
+            ("GET", "/C1", Resp({"status_code": "FINISHED"})),
+            ("GET", "/M1", Resp({"permalink": "https://www.instagram.com/reel/x/"})),
+        ]
+
+    def test_out_of_spec_uses_copy(self):
+        self.media.ig_probe = lambda path, ffprobe="ffprobe": {"x": 1}
+        self.media.ig_problems = lambda p: ["звук 320 кбіт/с > 128"]
+        f = self.http(meta_graph, self.routes(Resp({"success": True})))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertIn("перекодовано", r["note"])
+        up = [c for c in f.calls if "rupload" in c[1]][0]
+        self.assertEqual(up[2]["data"], b"c" * 100)  # завантажено копію, а не оригінал
+
+    def test_processing_failed_retries_with_copy(self):
+        self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
+        self.media.ig_problems = lambda p: []
+        fail = Resp({"debug_info": {"retriable": False, "type": "ProcessingFailedError",
+                                    "message": "Request processing failed"}}, 400)
+        f = self.http(meta_graph, self.routes([fail, Resp({"success": True})]))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")
+        self.assertIn("не прийняв оригінал", r["note"])
+        ups = [c for c in f.calls if "rupload" in c[1]]
+        self.assertEqual([u[2]["data"][:1] for u in ups], [b"x", b"c"])  # спершу оригінал, потім копія
+        self.assertEqual(len([c for c in f.calls if c[1].endswith("/IG1/media")]), 2)  # новий контейнер
+
+
 class StatsTest(Base):
     def test_instagram_stats(self):
         self.http(meta_graph, [

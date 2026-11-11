@@ -91,6 +91,29 @@ class Instagram(_MetaBase):
         return ig
 
     def publish(self, video_path: str, meta) -> dict:
+        """Оригінал, якщо він відповідає вимогам Reels; інакше — копія під вимоги Instagram.
+        Якщо Instagram відхилив оригінал (ProcessingFailedError) — ще раз із копією в новому контейнері."""
+        import media
+        try:
+            problems = media.ig_problems(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
+        except OSError:
+            problems = []
+        if problems:
+            log.info("Instagram: оригінал не відповідає вимогам Reels (%s) — завантажую копію", ", ".join(problems))
+            out = self._publish_file(media.instagram_copy(video_path, self.cfg), meta)
+            out["note"] = "Instagram: перекодовано під вимоги Reels (" + ", ".join(problems) + ")"
+            return out
+        try:
+            return self._publish_file(video_path, meta)
+        except PublishError as e:
+            if "ProcessingFailed" not in str(e) and "processing failed" not in str(e).lower():
+                raise
+            log.warning("Instagram відхилив оригінал (%s) — пробую копію під вимоги Reels", e)
+            out = self._publish_file(media.instagram_copy(video_path, self.cfg), meta)
+            out["note"] = "Instagram не прийняв оригінал — опубліковано копію під вимоги Reels"
+            return out
+
+    def _publish_file(self, video_path: str, meta) -> dict:
         g = self._g()
         c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable",
                    caption=meta.instagram_text[:2200],

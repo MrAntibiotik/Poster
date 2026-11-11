@@ -75,6 +75,93 @@ def quality(path: str, ffprobe: str = "ffprobe") -> dict:
     return out
 
 
+# Вимоги Instagram Reels (Content Publishing API)
+IG_MAX_VIDEO_KBPS = 25_000
+IG_MAX_AUDIO_KBPS = 128
+IG_MAX_WIDTH = 1920
+IG_MAX_MB = 300
+
+
+def ig_probe(path: str, ffprobe: str = "ffprobe") -> dict:
+    """Параметри, які перевіряє Instagram: відео й аудіо окремо."""
+    try:
+        r = run_hidden([ffprobe, "-v", "error", "-show_entries",
+                        "stream=codec_type,codec_name,width,height,avg_frame_rate,bit_rate,sample_rate,channels,"
+                        "pix_fmt:format=duration,bit_rate", "-of", "json", str(path)], timeout=60)
+        info = json.loads(r.stdout or b"{}")
+    except (MediaError, ValueError):
+        return {}
+    v = next((s for s in info.get("streams") or [] if s.get("codec_type") == "video"), {})
+    a = next((s for s in info.get("streams") or [] if s.get("codec_type") == "audio"), {})
+    fmt = info.get("format") or {}
+    fps = 0.0
+    try:
+        n, d = (v.get("avg_frame_rate") or "0/1").split("/")
+        fps = float(n) / float(d) if float(d) else 0.0
+    except ValueError:
+        pass
+    total_k = int(fmt.get("bit_rate") or 0) // 1000
+    a_k = int(a.get("bit_rate") or 0) // 1000
+    return {"vcodec": v.get("codec_name"), "width": int(v.get("width") or 0), "height": int(v.get("height") or 0),
+            "fps": fps, "pix_fmt": v.get("pix_fmt"),
+            "vkbps": int(v.get("bit_rate") or 0) // 1000 or max(0, total_k - a_k),
+            "acodec": a.get("codec_name"), "akbps": a_k, "arate": int(a.get("sample_rate") or 0),
+            "channels": int(a.get("channels") or 0), "duration": float(fmt.get("duration") or 0),
+            "size_mb": os.path.getsize(path) / 1024 / 1024}
+
+
+def ig_problems(p: dict) -> list[str]:
+    """Чому файл не підходить Instagram Reels (порожньо — підходить)."""
+    if not p:
+        return []
+    out = []
+    if p["vcodec"] not in ("h264", "hevc"):
+        out.append(f"кодек відео {p['vcodec']}")
+    if p["width"] > IG_MAX_WIDTH:
+        out.append(f"ширина {p['width']} px > {IG_MAX_WIDTH}")
+    if p["fps"] and not 23 <= p["fps"] <= 60.5:
+        out.append(f"{p['fps']:.0f} к/с")
+    if p["vkbps"] > IG_MAX_VIDEO_KBPS:
+        out.append(f"відео {p['vkbps'] / 1000:.0f} Мбіт/с > 25")
+    if p["pix_fmt"] and p["pix_fmt"] not in ("yuv420p", "yuvj420p"):
+        out.append(f"формат пікселів {p['pix_fmt']}")
+    if p["acodec"] and p["acodec"] != "aac":
+        out.append(f"звук {p['acodec']}")
+    if p["akbps"] > IG_MAX_AUDIO_KBPS:
+        out.append(f"звук {p['akbps']} кбіт/с > 128")
+    if p["arate"] > 48000 or p["channels"] > 2:
+        out.append("звук понад 48 кГц / стерео")
+    if p["size_mb"] > IG_MAX_MB:
+        out.append(f"розмір {p['size_mb']:.0f} МБ > {IG_MAX_MB}")
+    return out
+
+
+def instagram_copy(path: str, cfg: dict) -> str:
+    """Копія під вимоги Instagram Reels: H.264 High, yuv420p, ≤1080 по ширині (для 9:16 — 1080×1920),
+    та сама частота кадрів, до 20 Мбіт/с, AAC 128 кбіт/с 48 кГц, faststart. Оригінал не змінюється."""
+    cache = Path(cfg["paths"]["data"]) / "previews"
+    cache.mkdir(parents=True, exist_ok=True)
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}".encode()).hexdigest()[:10]
+    out = cache / f"{Path(path).stem}_{key}_ig.mp4"
+    if out.exists() and out.stat().st_size > 0:
+        return str(out)
+    p = ig_probe(path, cfg["ffprobe"])
+    fps = p.get("fps") or 30
+    fps_args = [] if 23 <= fps <= 60.5 else ["-r", "30"]
+    g = int(round(min(max(fps, 23), 60) * 2))
+    vf = "scale='if(gt(iw,ih),min(iw,1920),min(iw,1080))':-2:flags=lanczos,format=yuv420p"
+    args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-vf", vf, *fps_args,
+            "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-crf", "17",
+            "-maxrate", "20M", "-bufsize", "40M", "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", str(out)]
+    log.info("Готую копію під вимоги Instagram: %s", path)
+    r = run_hidden(args, timeout=3600)
+    if r.returncode != 0:
+        out.unlink(missing_ok=True)
+        raise MediaError(f"ffmpeg (Instagram): {r.stderr.decode(errors='ignore')[-300:]}")
+    return str(out)
+
+
 def quality_line(q: dict) -> str:
     """«1080×1920 · 60 к/с · 24.5 Мбіт/с · h264 · 45.2 МБ» + попередження."""
     parts = []
@@ -144,7 +231,8 @@ def telegram_copy(path: str, cfg: dict) -> str:
 
 def drop_previews(path: str, cfg: dict) -> None:
     cache = Path(cfg["paths"]["data"]) / "previews"
-    for p in list(cache.glob(f"{Path(path).stem}_*_720p.mp4")) + list(cache.glob(f"{Path(path).stem}_*_tg.mp4")):
+    for p in [*cache.glob(f"{Path(path).stem}_*_720p.mp4"), *cache.glob(f"{Path(path).stem}_*_tg.mp4"),
+              *cache.glob(f"{Path(path).stem}_*_ig.mp4")]:
         try:
             p.unlink()
         except OSError:
