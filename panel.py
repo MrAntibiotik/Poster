@@ -182,6 +182,12 @@ class Panel:
         except ConfigError as e:
             tmp.unlink(missing_ok=True)
             raise ValueError(str(e)) from e
+        try:
+            from config import ensure_dirs
+            ensure_dirs(load_config(tmp))
+        except ConfigError as e:
+            tmp.unlink(missing_ok=True)
+            raise ValueError(str(e)) from e
         os.replace(tmp, path)
         self.reload()
         self.mark_restart()
@@ -470,6 +476,16 @@ class Panel:
         info["games"] = sorted(games)
         return info
 
+    @staticmethod
+    def path_problems(cfg: dict) -> list[str]:
+        from config import PATH_NAMES
+        out = []
+        for key in ("ready", "posted", "skipped"):
+            p = Path(cfg["paths"][key])
+            if p.anchor and not Path(p.anchor).exists():
+                out.append(f"«{PATH_NAMES[key]}»: {p} — диска {p.anchor} немає")
+        return out
+
     def list_dir(self, path: str | None) -> dict:
         p = Path(path).expanduser() if path else Path(self.cfg["paths"]["ready"])
         p = (p if p.is_absolute() else self.root / p).resolve()
@@ -604,6 +620,7 @@ class Panel:
             "users": users, "jobs": self.jobs, "log": log_tail,
             "health_time": fmt_slot(cfg, int(db.get("health_ts")), now) if db.get("health_ts") else None,
             "ready_info": self.count_shorts(cfg["paths"]["ready"]),
+            "path_problems": self.path_problems(cfg),
             "root": str(self.root), "now": local_dt(cfg, now).strftime("%d.%m.%Y %H:%M"),
         }
 

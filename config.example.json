@@ -9,9 +9,9 @@
   "max_skips": 3,
 
   "paths": {
-    "ready": "D:/Shorts/ready",
-    "posted": "D:/Shorts/posted",
-    "skipped": "D:/Shorts/skipped",
+    "ready": "ready",
+    "posted": "posted",
+    "skipped": "skipped",
     "data": "data",
     "tokens": "tokens",
     "log": "log.txt"
@@ -26,8 +26,8 @@
   },
   "scan_interval_seconds": 60,
 
-  "regenerate_command": ["python", "D:/Shorts/generate_meta.py", "--force", "{mp4}"],
-  "regenerate_cwd": "D:/Shorts",
+  "regenerate_command": [],
+  "regenerate_cwd": "",
 
   "ai": {
     "enabled": true,

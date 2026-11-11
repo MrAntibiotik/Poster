@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import NAMES, ConfigError, enabled_platforms, fmt_slot, load_config, now_ts, setup_logging  # noqa: E402
+from config import NAMES, ConfigError, enabled_platforms, ensure_dirs, fmt_slot, load_config, now_ts, setup_logging  # noqa: E402
 from db import DB  # noqa: E402
 from platforms import build_platforms, get_class  # noqa: E402
 
@@ -33,8 +33,7 @@ esc = html.escape
 class App:
     def __init__(self, cfg: dict, bot=None):
         self.cfg = cfg
-        for key in ("ready", "posted", "skipped", "data", "tokens"):
-            Path(cfg["paths"][key]).mkdir(parents=True, exist_ok=True)
+        ensure_dirs(cfg)
         self.db = DB(Path(cfg["paths"]["data"]) / "poster.sqlite3")
         self.platforms = build_platforms(cfg)
         from publisher import Publisher
@@ -107,7 +106,11 @@ def run_service(cfg: dict) -> int:
     if lock is None:
         log.error("poster уже запущено (порт %s зайнятий) — виходжу", cfg["lock_port"])
         return 1
-    app = App(cfg)
+    try:
+        app = App(cfg)
+    except ConfigError as e:
+        log.error("Бот не запущено: %s", e)
+        return 2
     app.db.set("pid", os.getpid())
     log.info("poster запущено. Платформи: %s. dry_run=%s", list(app.platforms), cfg.get("dry_run"))
     app.scheduler.scan()
@@ -301,7 +304,11 @@ def main(argv=None) -> int:
         def __getattr__(self, name):
             return lambda *a, **k: None
 
-    app = App(cfg, bot=_NoBot())
+    try:
+        app = App(cfg, bot=_NoBot())
+    except ConfigError as e:
+        print("Помилка налаштувань:", e, file=sys.stderr)
+        return 2
     if cmd == "queue":
         app.scheduler.scan()
         app.scheduler.ensure_slots(now_ts())

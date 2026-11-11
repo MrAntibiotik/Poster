@@ -107,6 +107,8 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 <main>
   <div id="tgBanner" class="banner hidden">⚠️ Бот ще не налаштований: впишіть токен бота і свій chat_id.
     <button class="btn" id="goTg">✈️ Налаштувати Telegram</button></div>
+  <div id="pathBanner" class="banner hidden"><span id="pathText"></span>
+    <button class="btn" id="goSched">📂 Виправити папки</button></div>
   <div id="restartBanner" class="banner hidden">⚠️ Налаштування змінено — перезапустіть бота, щоб вони набули чинності.
     <button class="btn" data-act="restart">🔁 Перезапустити</button></div>
 
@@ -441,6 +443,8 @@ async function refresh(){
   pill($("#hMode"), s.dry_run ? "Тестовий режим" : "Бойовий режим", s.dry_run ? "warn" : "ok");
   pill($("#hPause"), "Розклад на паузі", "warn"); $("#hPause").classList.toggle("hidden", !s.paused);
   $("#restartBanner").classList.toggle("hidden", !(s.restart_needed && s.running));
+  $("#pathBanner").classList.toggle("hidden", !s.path_problems.length);
+  $("#pathText").textContent = "⚠️ Неправильні папки — бот не запуститься: " + s.path_problems.join("; ");
   $("#tgBanner").classList.toggle("hidden", s.secrets.TELEGRAM_BOT_TOKEN.set && s.secrets.TELEGRAM_CHAT_ID.set);
 
   $("#botState").textContent = s.running ? "🟢 Працює" : "🔴 Зупинено";
@@ -556,6 +560,7 @@ function saveSecrets(btn, scope){
 }
 
 $("#goTg").addEventListener("click", () => $('#tabs button[data-tab="tg"]').click());
+$("#goSched").addEventListener("click", () => $('#tabs button[data-tab="sched"]').click());
 
 /* ---------- YouTube ---------- */
 $("#ytUpload").addEventListener("click", async ev => {

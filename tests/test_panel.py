@@ -148,6 +148,24 @@ class PanelTest(unittest.TestCase):
         self.assertIn("токен бота", r["error"])
         self.assertFalse(self.req("GET", "/api/state")[1]["secrets"]["TELEGRAM_BOT_TOKEN"]["set"])
 
+    def test_bad_folder_rejected(self):
+        self.login()
+        bad = "/proc/немає/posted"  # як «D:\\Shorts» без диска D: — створити неможливо
+        st, r = self.req("POST", "/api/settings", {"paths.posted": bad})
+        self.assertEqual(st, 400)
+        self.assertIn("неможливо створити", r["error"])
+        self.assertNotEqual(json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))["paths"]["posted"], bad)
+        # CLI-команда (тестовий слот) дає зрозуміле повідомлення, а не traceback
+        cfg = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
+        cfg["paths"]["posted"] = bad
+        (self.tmp / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        import subprocess
+        r = subprocess.run([sys.executable, str(ROOT / "poster.py"), "--config", str(self.tmp / "config.json"),
+                            "test-slot", "10"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Розклад і папки", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_folders(self):
         self.login()
         lib = self.tmp / "Мої шортси"

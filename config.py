@@ -186,6 +186,24 @@ def _hm(value) -> str:
     return f"{h:02d}:{m:02d}"
 
 
+PATH_NAMES = {"ready": "Готові шортси", "posted": "Опубліковані", "skipped": "Пропущені",
+              "data": "data", "tokens": "tokens"}
+
+
+def ensure_dirs(cfg: dict) -> None:
+    """Створює робочі папки; якщо неможливо (немає диска тощо) — зрозуміла ConfigError."""
+    for key in ("ready", "posted", "skipped", "data", "tokens"):
+        path = Path(cfg["paths"][key])
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            drive = path.anchor
+            why = f"диска {drive} немає на цьому ПК" if drive and not Path(drive).exists() else str(e)
+            raise ConfigError(
+                f"Папку «{PATH_NAMES[key]}» ({path}) неможливо створити: {why}. "
+                "Змініть її в панелі керування → «Розклад і папки» (кнопка 📂) і збережіть.") from e
+
+
 def enabled_platforms(cfg: dict) -> list[str]:
     return [p for p in PLATFORMS if cfg["platforms"].get(p, {}).get("enabled")]
 
