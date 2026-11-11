@@ -95,9 +95,10 @@ class Publisher:
             db.update_item(item_id, status="failed")
             self._write_json(item["json"], item, results, "post_failed", now)
             db.event(item_id, "publish_failed", {"title": meta.yt_title, "failed": failed})
-            app.bot.send(f"❌ Шортс #{item_id} «{meta.yt_title}» не опубліковано на жодній платформі. "
-                         f"Файли залишено на місці. Повторити: /retry {item_id}")
+        db.set(f"ignored:{item_id}", None)
         app.bot.refresh(item_id)
+        if failed and hasattr(app.bot, "notify_failed"):
+            app.bot.notify_failed(item_id)
         log.info("#%s: успішно %s, помилки %s", item_id, ok, failed)
 
     def _publish_one(self, key: str, item: dict, meta) -> dict:
@@ -136,8 +137,6 @@ class Publisher:
                 if i < attempts:
                     self.sleep(pause)
         app.db.event(item["id"], "platform_error", {"platform": key, "error": str(last)[:300]})
-        app.bot.send(f"⚠️ {NAMES[key]}: не вдалося опублікувати #{item['id']} «{meta.yt_title}» "
-                     f"після {attempts} спроб.\nПричина: {str(last)[:500]}")
         return {"status": "error", "attempts": attempts, "error": str(last)[:500]}
 
     def _write_json(self, path: str, item: dict, results: dict, status: str, now: int) -> None:

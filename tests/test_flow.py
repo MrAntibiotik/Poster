@@ -263,7 +263,10 @@ class FlowTest(FlowBase):
         self.assertTrue(r["tiktok"]["reauth"])
         msgs = [s[1] for s in self.app.bot.tg.sent if s[0] == "text"]
         self.assertTrue(any("Потрібна повторна авторизація: TikTok" in m for m in msgs))
-        self.assertTrue(any("Instagram: не вдалося" in m and "мережа впала" in m for m in msgs))
+        summary = [m for m in msgs if "Не опубліковано" in m]
+        self.assertEqual(len(summary), 1)  # одне підсумкове повідомлення замість кількох
+        self.assertIn("<b>Instagram</b>: мережа впала", summary[0])
+        self.assertIn("Вийшло: YouTube, Facebook", summary[0])
 
     def test_health_check(self):
         from platforms import TokenExpired

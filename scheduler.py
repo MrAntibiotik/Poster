@@ -248,6 +248,45 @@ class Scheduler:
         self.db.event(item_id, "rescheduled", {"from": old, "to": ts})
         log.info("#%s перенесено: %s → %s", item_id, fmt_slot(self.cfg, old) if old else "—", fmt_slot(self.cfg, ts))
 
+    def reserve_retry(self, item_id: int, ts: int | None = None) -> int:
+        """Повтор невдалих платформ: у вказаний час або в найближчий вільний слот (слот резервується)."""
+        now = now_ts()
+        if ts is None:
+            free = self.future_slots(now, 1)
+            if not free:
+                raise ValueError("Немає вільних слотів")
+            ts = free[0]
+        if ts <= now + 60:
+            raise ValueError("Цей час уже минув або надто близько")
+        ex = self.db.slot(ts)
+        if ex and (ex["item_id"] or ex["state"] != "pending"):
+            raise ValueError("Цей час уже зайнятий")
+        self.db.x("DELETE FROM slots WHERE state='retry' AND item_id=?", (item_id,))  # лише один запланований повтор
+        if ex:
+            self.db.x("UPDATE slots SET state='retry', item_id=? WHERE slot_at=?", (item_id, ts))
+        else:
+            self.db.x("INSERT INTO slots(slot_at, source, item_id, state) VALUES (?, 'manual', ?, 'retry')",
+                      (ts, item_id))
+        self.db.event(item_id, "retry_planned", {"at": ts})
+        return ts
+
+    def retry_at(self, item_id: int) -> int | None:
+        r = self.db.one("SELECT slot_at FROM slots WHERE state='retry' AND item_id=?", (item_id,))
+        return r["slot_at"] if r else None
+
+    def failed_items(self, days: int = 30) -> list[dict]:
+        """Шортси, що не вийшли хоча б на одну увімкнену платформу (без «ігнорованих»)."""
+        out = []
+        for item in self.db.items("status IN ('failed','posted') AND (posted_at IS NULL OR posted_at>=?)",
+                                  (now_ts() - days * 86400,), order="id DESC"):
+            if self.db.get(f"ignored:{item['id']}"):
+                continue
+            errs = {p: r for p, r in item["results"].items()
+                    if r.get("status") != "ok" and p in self.app.platforms and p not in item["disabled"]}
+            if item["status"] == "failed" or errs:
+                out.append({**item, "errors": errs})
+        return out
+
     def release_slot(self, item_id: int) -> None:
         """Звільняє слот шортса (коли його публікують «зараз»)."""
         item = self.db.get_item(item_id)
@@ -311,6 +350,12 @@ class Scheduler:
 
     # ---------- настання слоту ----------
     def process_due_slots(self, now: int) -> None:
+        for s in self.db.q("SELECT * FROM slots WHERE state='retry' AND slot_at<=? ORDER BY slot_at", (now,)):
+            self.db.set_slot(s["slot_at"], state="done")
+            item = self.db.get_item(s["item_id"]) if s["item_id"] else None
+            if item and item["status"] in ("failed", "posted"):
+                log.info("Повторна публікація #%s за розкладом", item["id"])
+                self.app.publisher.start(item["id"])
         for s in self.db.q("SELECT * FROM slots WHERE state IN ('pending','notified') AND slot_at<=? "
                            "ORDER BY slot_at", (now,)):
             if s["state"] == "pending":

@@ -37,6 +37,7 @@ HELP_ADMIN = (
     "/users — хто має доступ до бота\n"
     "/stats — аналітика по платформах, /top — лідери тижня\n"
     "/platforms — увімкнути / вимкнути платформи для всіх шортсів\n"
+    "/failed — невдалі публікації: причина, повтор зараз / пізніше / у вільний слот\n"
     "/menu — показати кнопки\n"
     "/cancel — скасувати введення назви"
 )
@@ -48,7 +49,7 @@ HELP_VIEWER = (
 BTN = {
     "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
     "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
-    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms",
+    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed",
 }
 VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
 
@@ -64,6 +65,7 @@ COMMANDS = [
     ("pause", "Призупинити розклад"),
     ("resume", "Відновити розклад"),
     ("platforms", "Увімкнути / вимкнути платформи"),
+    ("failed", "Невдалі публікації: причина й повтор"),
     ("users", "Хто має доступ"),
     ("help", "Довідка"),
 ]
@@ -127,7 +129,7 @@ class Bot:
         if self.role(chat_id) == "admin":
             pause = "▶️ Продовжити" if self.paused() else "⏸ Пауза"
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня", "🧪 Тест-слот"],
-                    ["🔌 Платформи", pause, "👥 Доступ"], ["❓ Довідка"]]
+                    ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "❓ Довідка"]]
         else:
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня"]]
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
@@ -259,9 +261,13 @@ class Bot:
         if st == "publishing":
             return "⏫ Публікується…" + self._results(item)
         if st == "posted":
-            return f"✅ Опубліковано{edited}" + self._results(item)
+            when = self.app.scheduler.retry_at(item["id"])
+            return f"✅ Опубліковано{edited}" + self._results(item) + (
+                f"\n🔁 Повтор невдалих: {fmt_when(self.cfg, when)}" if when else "")
         if st == "failed":
-            return "❌ Не опубліковано" + self._results(item) + f"\nПовторити: /retry {item['id']}"
+            when = self.app.scheduler.retry_at(item["id"])
+            return "❌ Не опубліковано" + self._results(item) + (
+                f"\n🔁 Повтор: {fmt_when(self.cfg, when)}" if when else "")
         if st == "queued":
             if item["note"]:
                 return esc(item["note"])
@@ -331,7 +337,23 @@ class Bot:
             parts.append(f"📘 <b>Facebook</b>:\n{esc(meta.facebook_text[:1000])}")
         return "\n\n".join(parts)[:4096]
 
+    def failed_errors(self, item: dict) -> dict:
+        return {p: r for p, r in item["results"].items()
+                if r.get("status") != "ok" and p in self.app.platforms and p not in item["disabled"]}
+
+    def retry_keyboard(self, item_id: int) -> dict:
+        return {"inline_keyboard": [
+            [{"text": "🔁 Повторити зараз", "callback_data": f"rf:{item_id}"}],
+            [{"text": "🕐 Обрати час", "callback_data": f"rt:{item_id}"},
+             {"text": "📦 У вільний слот", "callback_data": f"rq:{item_id}"}],
+            [{"text": "✖️ Ігнорувати", "callback_data": f"ri:{item_id}"}]]}
+
     def keyboard(self, item: dict) -> dict | None:
+        if item["status"] in ("failed", "posted"):
+            if self.failed_errors(item) or item["status"] == "failed":
+                if not self.db.get(f"ignored:{item['id']}"):
+                    return self.retry_keyboard(item["id"])
+            return None
         if item["status"] not in ("notified", "approved"):
             return None
         i = item["id"]
@@ -552,6 +574,8 @@ class Bot:
             except TelegramError as e:
                 log.debug("edit platforms: %s", e)
             return
+        if action in ("rf", "rt", "rq", "ri"):
+            return self.retry_button(chat, target, action, cq, answer)
         if action in ("qp", "qi", "qt", "qf", "qd"):
             return self.queue_button(chat, target, action, cq, answer)
         if action in ("time", "tk", "ts", "tc", "tn", "tx"):
@@ -654,8 +678,14 @@ class Bot:
 
     def dialog_answer(self, chat: int, text: str) -> None:
         st = self.dialog_get(chat)
-        item = self._dialog_item(chat, st["item"], allow_approved=st.get("mode") == "change",
-                                 allow_queued=st.get("mode") == "queue")
+        if st.get("mode") == "retry":
+            item = self.db.get_item(st["item"])
+            if not item or item["status"] not in ("failed", "posted"):
+                self.dialog_set(chat, None)
+                return self.cleanup(chat)
+        else:
+            item = self._dialog_item(chat, st["item"], allow_approved=st.get("mode") == "change",
+                                     allow_queued=st.get("mode") == "queue")
         if not item:
             return
         if st["step"] in ("time", "time_custom"):
@@ -712,6 +742,103 @@ class Bot:
         if preset:  # час уже обрали з черги
             return self._apply_time(chat, self.db.get_item(item_id), st, "now" if preset == "now" else None)
         self._ask_time(chat, item_id, dialog=True)
+
+    # ---------- невдалі публікації ----------
+    def failed_text(self, item: dict) -> str:
+        meta = self._meta(item)
+        errs = self.failed_errors(item)
+        ok = [p for p, r in item["results"].items() if r.get("status") == "ok"]
+        lines = [f"⚠️ <b>Не опубліковано</b> #{item['id']}: {esc(meta.yt_title)}"]
+        for p, r in errs.items():
+            lines.append(f"❌ <b>{NAMES[p]}</b>: {esc(str(r.get('error', 'невідома помилка'))[:300])}")
+        if ok:
+            lines.append("✅ Вийшло: " + ", ".join(NAMES[p] for p in ok))
+        when = self.app.scheduler.retry_at(item["id"])
+        if when:
+            lines.append(f"🔁 Повтор заплановано: <b>{fmt_when(self.cfg, when)}</b>")
+        lines.append("Повтор публікує лише туди, де не вийшло.")
+        return "\n".join(lines)
+
+    def notify_failed(self, item_id: int) -> None:
+        item = self.db.get_item(item_id)
+        if not item:
+            return
+        for cid in self.admins():
+            self.say(cid, self.failed_text(item), reply_markup=self.retry_keyboard(item_id))
+
+    def retry_button(self, chat: int, item_id: int, action: str, cq: dict, answer) -> None:
+        item = self.db.get_item(item_id)
+        if not item or item["status"] not in ("failed", "posted"):
+            return answer("Цей шортс уже неактуальний", True)
+        if self.app.publisher.is_active(item_id):
+            return answer("Уже публікується…", True)
+        msg_id = (cq.get("message") or {}).get("message_id")
+        if action == "rf":
+            self.db.set(f"ignored:{item_id}", None)
+            answer("🔁 Повторюю публікацію…")
+            self._close_msg(chat, msg_id, "🔁 Повторюю публікацію…")
+            return self.app.publisher.start(item_id)
+        if action == "rq":
+            try:
+                ts = self.app.scheduler.reserve_retry(item_id)
+            except ValueError as e:
+                return answer(str(e), True)
+            answer(f"🔁 Повтор: {fmt_when(self.cfg, ts)}", True)
+            self._close_msg(chat, msg_id, f"🔁 Повтор заплановано: {fmt_when(self.cfg, ts)}")
+            return self.refresh(item_id)
+        if action == "rt":
+            self.dialog_set(chat, {"item": item_id, "step": "time", "mode": "retry", "msg": msg_id})
+            answer()
+            return self._ask_time(chat, item_id, dialog=False)
+        if action == "ri":
+            self.db.set(f"ignored:{item_id}", "1")
+            self.db.x("DELETE FROM slots WHERE state='retry' AND item_id=?", (item_id,))
+            answer("Гаразд, більше не нагадуватиму")
+            self._close_msg(chat, msg_id, "✖️ Проігноровано")
+            return self.refresh(item_id)
+
+    def _close_msg(self, chat: int, msg_id: int | None, note: str) -> None:
+        """Повідомлення про збій: прибираємо кнопки, щоб не натиснути двічі."""
+        if not msg_id:
+            return
+        own = self.db.q("SELECT 1 FROM tg_msgs WHERE chat_id=? AND msg_id=?", (chat, msg_id))
+        if own:
+            return  # це повідомлення з відео — його оновить refresh()
+        try:
+            self.tg.call("editMessageReplyMarkup", chat_id=chat, message_id=msg_id,
+                         reply_markup={"inline_keyboard": [[{"text": note, "callback_data": "noop:0"}]]})
+        except Exception as e:  # noqa: BLE001
+            log.debug("close msg: %s", e)
+
+    def _retry_choice(self, chat: int, item: dict, choice, answer=None) -> None:
+        item_id = item["id"]
+        st = self.dialog_get(chat) or {}
+        self.dialog_set(chat, None)
+        if choice == "now":
+            self.cleanup(chat)
+            self._close_msg(chat, st.get("msg"), "🔁 Повторюю публікацію…")
+            return self.app.publisher.start(item_id)
+        if isinstance(choice, int):
+            try:
+                ts = self.app.scheduler.reserve_retry(item_id, choice)
+            except ValueError as e:
+                if answer:
+                    answer(str(e), True)
+                self.dialog_set(chat, st)
+                return self.tmp(chat, f"⚠️ {e}. Оберіть інший час.", html_mode=False)
+            if answer:
+                answer(f"🔁 Повтор: {fmt_when(self.cfg, ts)}")
+            self._close_msg(chat, st.get("msg"), f"🔁 Повтор заплановано: {fmt_when(self.cfg, ts)}")
+        self.cleanup(chat)
+        self.refresh(item_id)
+
+    def failed_list(self, chat: int) -> None:
+        items = self.app.scheduler.failed_items()
+        if not items:
+            return self.say(chat, "✅ Невдалих публікацій немає.", html_mode=False)
+        self.say(chat, f"⚠️ <b>Невдалі публікації: {len(items)}</b>")
+        for item in items[:10]:
+            self.say(chat, self.failed_text(item), reply_markup=self.retry_keyboard(item["id"]))
 
     # ---------- вибір відео з черги ----------
     def queue_keyboard(self, page: int = 0, per: int = 8) -> dict | None:
@@ -821,11 +948,12 @@ class Bot:
         btns = [{"text": fmt_when(self.cfg, ts, now), "callback_data": f"ts:{item_id}:{ts}"} for ts in free]
         rows += [btns[i:i + 2] for i in range(0, len(btns), 2)]
         extra = [{"text": "⌨️ Свій час", "callback_data": f"tc:{item_id}"}]
-        if dialog or item["status"] in ("approved", "queued"):
+        if dialog or item["status"] in ("approved", "queued", "failed", "posted"):
             extra.append({"text": "⚡ Зараз", "callback_data": f"tn:{item_id}"})
         rows.append(extra)
         rows.append([{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}" if dialog else f"tx:{item_id}"}])
-        head = ("🕐 <b>Крок 3/3. Коли публікуємо?</b>" if dialog else
+        head = (f"🔁 <b>Коли повторити публікацію #{item_id}?</b>" if item["status"] in ("failed", "posted") else
+                "🕐 <b>Крок 3/3. Коли публікуємо?</b>" if dialog else
                 f"🕐 <b>Коли опублікувати шортс #{item_id}?</b>" if item["status"] == "queued" else
                 f"🕐 <b>Новий час для шортса #{item_id}</b>")
         self.tmp(chat, f"{head}\nОберіть вільний слот, «Свій час» (напр. <code>завтра 18:30</code>) або «Зараз».",
@@ -835,7 +963,9 @@ class Bot:
         item = self.db.get_item(item_id)
         st = self.dialog_get(chat)
         from_queue = bool(st and st.get("item") == item_id and st.get("mode") == "queue")
-        if not item or item["status"] not in (("queued",) if from_queue else ("notified", "approved")):
+        retry = bool(st and st.get("item") == item_id and st.get("mode") == "retry")
+        ok = ("queued",) if from_queue else ("failed", "posted") if retry else ("notified", "approved")
+        if not item or item["status"] not in ok:
             return answer("Цей шортс уже неактуальний", True)
         dialog = bool(st and st.get("item") == item_id and st.get("mode") == "dialog")
         if action == "time":
@@ -881,6 +1011,8 @@ class Bot:
         item_id = item["id"]
         if st.get("mode") == "queue":
             return self._pick_from_queue(chat, item, choice, answer)
+        if st.get("mode") == "retry":
+            return self._retry_choice(chat, item, choice, answer)
         if isinstance(choice, int):
             try:
                 self.app.scheduler.move_slot(item_id, choice)
@@ -1023,6 +1155,8 @@ class Bot:
             self.db.set("paused", None)
             self.db.event(None, "resumed", {"by": chat})
             self.send("▶️ Розклад відновлено.", keyboard=True)
+        elif cmd == "/failed":
+            self.failed_list(chat)
         elif cmd == "/platforms":
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)
