@@ -140,6 +140,8 @@ class PanelTest(unittest.TestCase):
 
     def test_start_without_telegram(self):
         (self.tmp / ".env").write_text("", encoding="utf-8")
+        for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+            os.environ.pop(k, None)  # як у користувача, що ще не вписав токен
         self.login()
         st, r = self.req("POST", "/api/action", {"name": "start"})
         self.assertEqual(st, 400)
