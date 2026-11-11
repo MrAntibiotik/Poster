@@ -44,7 +44,7 @@ PUBLIC_IDS = {"TELEGRAM_CHAT_ID", "FB_PAGE_ID", "IG_USER_ID", "META_APP_ID", "TI
 SECRET_LABELS = {
     "TELEGRAM_BOT_TOKEN": "Токен бота", "TELEGRAM_CHAT_ID": "Головні адміністратори (chat_id)",
     "META_APP_ID": "App ID", "META_APP_SECRET": "App Secret", "META_PAGE_TOKEN": "Токен сторінки",
-    "META_IG_TOKEN": "Окремий токен Instagram", "GEMINI_API_KEY": "Ключ Gemini API", "FB_PAGE_ID": "ID сторінки Facebook",
+    "META_IG_TOKEN": "Окремий токен Instagram", "META_USER_TOKEN": "Токен користувача Meta", "GEMINI_API_KEY": "Ключ Gemini API", "FB_PAGE_ID": "ID сторінки Facebook",
     "IG_USER_ID": "ID акаунта Instagram", "TIKTOK_CLIENT_KEY": "Client key", "TIKTOK_CLIENT_SECRET": "Client secret",
 }
 
@@ -430,7 +430,7 @@ class Panel:
             raise ValueError("Спершу отримайте список сторінок")
         msg = meta_save(self.cfg, self.meta_pages[index])
         self.meta_pages = []
-        for k in ("META_PAGE_TOKEN", "FB_PAGE_ID", "IG_USER_ID"):
+        for k in ("META_PAGE_TOKEN", "FB_PAGE_ID", "IG_USER_ID", "META_USER_TOKEN"):
             os.environ.pop(k, None)
         self.reload()
         return msg

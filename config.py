@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.11-23"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.11-24"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -106,6 +106,7 @@ SECRETS = {
     "META_APP_SECRET": ("meta", "app_secret"),
     "META_PAGE_TOKEN": ("meta", "page_token"),
     "META_IG_TOKEN": ("meta", "ig_token"),
+    "META_USER_TOKEN": ("meta", "user_token"),
     "FB_PAGE_ID": ("meta", "page_id"),
     "IG_USER_ID": ("meta", "ig_user_id"),
     "TIKTOK_CLIENT_KEY": ("tiktok", "client_key"),

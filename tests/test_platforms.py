@@ -178,18 +178,65 @@ class InstagramSpecTest(Base):
         up = [c for c in f.calls if "rupload" in c[1]][0]
         self.assertEqual(up[2]["data"], b"c" * 100)  # завантажено копію, а не оригінал
 
+    FAIL = None
+
+    def fail(self):
+        return Resp({"debug_info": {"retriable": False, "type": "ProcessingFailedError",
+                                    "message": "Request processing failed"}}, 400)
+
+    def test_spurious_400_but_container_finished(self):
+        self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
+        self.media.ig_problems = lambda p: []
+        f = self.http(meta_graph, self.routes(self.fail()))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")  # 400 від rupload, але контейнер FINISHED — опубліковано
+        self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)
+        self.assertNotIn("note", r)
+
     def test_processing_failed_retries_with_copy(self):
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
         self.media.ig_problems = lambda p: []
-        fail = Resp({"debug_info": {"retriable": False, "type": "ProcessingFailedError",
-                                    "message": "Request processing failed"}}, 400)
-        f = self.http(meta_graph, self.routes([fail, Resp({"success": True})]))
+        routes = self.routes([self.fail(), Resp({"success": True})])
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "ERROR", "status": "Error: code 2207026"}),
+                                    Resp({"status_code": "FINISHED"})])
+        f = self.http(meta_graph, routes)
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertEqual(r["id"], "M1")
         self.assertIn("не прийняв оригінал", r["note"])
         ups = [c for c in f.calls if "rupload" in c[1]]
         self.assertEqual([u[2]["data"][:1] for u in ups], [b"x", b"c"])  # спершу оригінал, потім копія
         self.assertEqual(len([c for c in f.calls if c[1].endswith("/IG1/media")]), 2)  # новий контейнер
+
+    def test_user_token_fallback(self):
+        self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
+        self.media.ig_problems = lambda p: []
+        self.cfg["secrets"]["META_USER_TOKEN"] = "USER"
+        bad = Resp({"status_code": "ERROR", "status": "Error"})
+
+        def upload(url, kw):
+            ok = kw["headers"]["Authorization"] == "OAuth USER"
+            return Resp({"success": True}) if ok else self.fail()
+
+        def status(url, kw):
+            return Resp({"status_code": "FINISHED"}) if kw["params"]["access_token"] == "USER" else bad
+        routes = self.routes(None)
+        routes[2] = ("POST", "rupload.facebook.com", upload)
+        routes[3] = ("GET", "/C1", status)
+        f = self.http(meta_graph, routes)
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")
+        self.assertIn("токеном користувача", r["note"])
+        auths = [c[2]["headers"]["Authorization"] for c in f.calls if "rupload" in c[1]]
+        self.assertEqual(auths, ["OAuth PAGE", "OAuth PAGE", "OAuth USER"])
+
+    def test_all_attempts_fail_message(self):
+        self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
+        self.media.ig_problems = lambda p: []
+        routes = self.routes(self.fail())
+        routes[3] = ("GET", "/C1", Resp({"status_code": "ERROR", "status": "Error: code 2207050"}))
+        self.http(meta_graph, routes)
+        with self.assertRaisesRegex(PublishError, "жодним способом.*обмежений або неактивний.*токен користувача"):
+            meta_graph.Instagram(self.cfg).publish(str(self.video), META)
 
 
 class StatsTest(Base):

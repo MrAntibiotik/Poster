@@ -111,30 +111,54 @@ class Instagram(_MetaBase):
         return ig
 
     def publish(self, video_path: str, meta) -> dict:
-        """Оригінал, якщо він відповідає вимогам Reels; інакше — копія під вимоги Instagram.
-        Якщо Instagram відхилив оригінал (ProcessingFailedError) — ще раз із копією в новому контейнері."""
+        """Публікація Reels з кількома спробами, бо Instagram буває вибагливим до завантаження:
+        файл — оригінал (якщо відповідає вимогам Reels), потім копія під вимоги Instagram;
+        токен — токен сторінки, потім токен користувача (у прикладах Meta саме він).
+        Помилка 400 від rupload не означає провал: спершу перевіряємо стан контейнера."""
         import media
         try:
             problems = media.ig_problems(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
         except OSError:
             problems = []
-        if problems:
-            log.info("Instagram: оригінал не відповідає вимогам Reels (%s) — завантажую копію", ", ".join(problems))
-            out = self._publish_file(media.instagram_copy(video_path, self.cfg), meta)
-            out["note"] = "Instagram: перекодовано під вимоги Reels (" + ", ".join(problems) + ")"
-            return out
-        try:
-            return self._publish_file(video_path, meta)
-        except PublishError as e:
-            if "ProcessingFailed" not in str(e) and "processing failed" not in str(e).lower():
-                raise
-            log.warning("Instagram відхилив оригінал (%s) — пробую копію під вимоги Reels", e)
-            out = self._publish_file(media.instagram_copy(video_path, self.cfg), meta)
-            out["note"] = "Instagram не прийняв оригінал — опубліковано копію під вимоги Reels"
-            return out
+        tokens = [("сторінки", None)]
+        user = self.secrets.get("META_USER_TOKEN")
+        if user and user != self._g().token:
+            tokens.append(("користувача", user))
+        files = ([] if problems else [("оригінал", lambda: video_path)]) + \
+            [("копія під вимоги Reels", lambda: media.instagram_copy(video_path, self.cfg))]
+        errors = []
+        for tname, token in tokens:
+            for fname, get_file in files:
+                try:
+                    out = self._publish_file(get_file(), meta, token)
+                except PublishError as e:
+                    if not self._upload_rejected(e):
+                        raise  # інша помилка (токен, ліміт, формат) — без перебору
+                    log.warning("Instagram: %s + токен %s — відмова: %s", fname, tname, e)
+                    errors.append(f"{fname}/токен {tname}: {e}")
+                    continue
+                notes = []
+                if problems:
+                    notes.append("перекодовано під вимоги Reels (" + ", ".join(problems) + ")")
+                elif fname != "оригінал":
+                    notes.append("Instagram не прийняв оригінал — опубліковано копію під вимоги Reels")
+                if token:
+                    notes.append("завантажено з токеном користувача")
+                if notes:
+                    out["note"] = "Instagram: " + "; ".join(notes)
+                return out
+        raise PublishError("Instagram не прийняв завантаження жодним способом. " + " || ".join(errors)
+                           + ("" if len(tokens) > 1 else
+                              " — Порада: у панелі (Instagram + Facebook) ще раз «Отримати сторінки» → «Підключити»,"
+                              " щоб зберегти токен користувача для резервної спроби."))
 
-    def _publish_file(self, video_path: str, meta) -> dict:
-        g = self._g()
+    @staticmethod
+    def _upload_rejected(e: Exception) -> bool:
+        t = str(e).lower()
+        return "processingfailed" in t or "processing failed" in t or "не прийняв завантаження" in t
+
+    def _publish_file(self, video_path: str, meta, token: str | None = None) -> dict:
+        g = self.graph(token) if token else self._g()
         c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable",
                    caption=meta.instagram_text[:2200],
                    share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
@@ -142,20 +166,28 @@ class Instagram(_MetaBase):
         uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
         log.info("Instagram: контейнер %s, завантажую %s (%.1f МБ)", cid, video_path,
                  os.path.getsize(video_path) / 1024 / 1024)
+        upload_error = None
         try:
             g.upload_binary(uri, video_path)
         except PublishError as e:
-            raise PublishError(f"{e}{self._container_reason(g, cid)}") from e
+            upload_error = e  # буває хибна 400 — відео все одно обробляється; перевіримо контейнер
+            log.warning("Instagram rupload: %s — перевіряю стан контейнера", e)
 
-        deadline = time.time() + 20 * 60
+        deadline = time.time() + (3 * 60 if upload_error else 20 * 60)
         while True:
             st = g.get(cid, fields="status_code,status")
             code = st.get("status_code")
             if code == "FINISHED":
+                if upload_error:
+                    log.info("Instagram: попри помилку завантаження контейнер готовий — публікую")
                 break
             if code in ("ERROR", "EXPIRED"):
-                raise PublishError(f"Instagram відхилив відео: {st.get('status')}{ig_hint(st.get('status'))}")
+                reason = f"{st.get('status')}{ig_hint(st.get('status'))}"
+                raise PublishError(f"{upload_error} | стан контейнера: {reason}" if upload_error
+                                   else f"Instagram відхилив відео: {reason}")
             if time.time() > deadline:
+                if upload_error:
+                    raise PublishError(f"{upload_error}{self._container_reason(g, cid)}")
                 raise PublishError("Instagram: обробка відео триває понад 20 хв")
             time.sleep(10)
 
@@ -307,6 +339,8 @@ def meta_pages(cfg: dict, short_token: str) -> list[dict]:
         return j
 
     data = get("me/accounts", fields=fields).get("data") or []
+    for page in data:
+        page["_user_token"] = token
     if not data:
         # Сторінки, що належать бізнес-портфоліо, у me/accounts можуть не з'являтися
         seen = set()
@@ -315,6 +349,7 @@ def meta_pages(cfg: dict, short_token: str) -> list[dict]:
                 for page in get(f"{biz['id']}/{edge}", fields=fields).get("data") or []:
                     if page.get("access_token") and page["id"] not in seen:
                         seen.add(page["id"])
+                        page["_user_token"] = token
                         data.append(page)
     if not data:
         granted = [p["permission"] for p in get("me/permissions").get("data") or [] if p.get("status") == "granted"]
@@ -335,6 +370,8 @@ def meta_save(cfg: dict, page: dict) -> str:
         open(env, "a", encoding="utf-8").close()
     set_key(env, "META_PAGE_TOKEN", page["access_token"], quote_mode="never")
     set_key(env, "FB_PAGE_ID", page["id"], quote_mode="never")
+    if page.get("_user_token"):  # резерв для завантаження в Instagram (див. Instagram.publish)
+        set_key(env, "META_USER_TOKEN", page["_user_token"], quote_mode="never")
     ig = page.get("instagram_business_account") or {}
     if ig.get("id"):
         set_key(env, "IG_USER_ID", ig["id"], quote_mode="never")
