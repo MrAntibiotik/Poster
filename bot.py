@@ -16,7 +16,7 @@ import threading
 from pathlib import Path
 
 import media
-from config import NAMES, PLATFORMS, SHORT, enabled_platforms, fmt_slot, now_ts
+from config import NAMES, PLATFORMS, SHORT, enabled_platforms, fmt_slot, fmt_when, now_ts, parse_when
 from meta import PostMeta, apply_always_hashtags, apply_manual, load_meta, parse_hashtags
 from telegram_api import TelegramAPI, TelegramError
 
@@ -287,6 +287,7 @@ class Bot:
         toggles = [{"text": f"{SHORT[p]} {'🚫' if p in item['disabled'] else '✅'}",
                     "callback_data": f"tog:{i}:{p}"} for p in enabled_platforms(self.cfg)]
         rows = [[first],
+                [{"text": "🕐 Змінити час / дату", "callback_data": f"time:{i}"}],
                 [{"text": "🔄 Перегенерувати тексти", "callback_data": f"regen:{i}"}],
                 [{"text": "✏️ Ввести назву вручну", "callback_data": f"title:{i}"}]]
         if toggles:
@@ -485,6 +486,8 @@ class Bot:
             return answer("Натисніть на платформу нижче, щоб вимкнути/увімкнути її")
         if action in ("keep", "dlgx"):
             return self.dialog_button(chat, target, action, rest, answer)
+        if action in ("time", "tk", "ts", "tc", "tn", "tx"):
+            return self.time_button(chat, target, action, rest, answer)
         item_id = target
         item = self.db.get_item(item_id)
         own = self.db.tg_msg(item_id, chat)
@@ -571,9 +574,10 @@ class Bot:
         self.say(chat, "#️⃣ <b>Крок 2/2.</b> Надішліть <b>хештеги</b> через пробіл — можна з # або без "
                        "(напр.: <code>wot танки shorts</code>). «-» — без хештегів.", reply_markup=kb)
 
-    def _dialog_item(self, chat: int, item_id: int) -> dict | None:
+    def _dialog_item(self, chat: int, item_id: int, allow_approved: bool = False) -> dict | None:
         item = self.db.get_item(item_id)
-        if not item or item["status"] != "notified":
+        ok = ("notified", "approved") if allow_approved else ("notified",)
+        if not item or item["status"] not in ok:
             self.dialog_set(chat, None)
             self.say(chat, "Цей шортс уже неактуальний (слот минув або його опубліковано).", html_mode=False)
             return None
@@ -581,9 +585,11 @@ class Bot:
 
     def dialog_answer(self, chat: int, text: str) -> None:
         st = self.dialog_get(chat)
-        item = self._dialog_item(chat, st["item"])
+        item = self._dialog_item(chat, st["item"], allow_approved=st.get("mode") == "change")
         if not item:
             return
+        if st["step"] in ("time", "time_custom"):
+            return self._time_typed(chat, item, st, text)
         if st["step"] == "title":
             title = re.sub(r"\s+", " ", text).strip()[:100]
             if not title:
@@ -593,7 +599,8 @@ class Bot:
         tags = parse_hashtags(text)
         if text.strip() not in ("-", "—") and not tags:
             return self.say(chat, "Не бачу хештегів — надішліть слова через пробіл або «-».", html_mode=False)
-        self._dialog_finish(chat, item, st.get("title"), tags)
+        if st["step"] == "tags":
+            return self._dialog_finish(chat, item, st.get("title"), tags)
 
     def dialog_button(self, chat: int, item_id: int, action: str, rest: list, answer) -> None:
         st = self.dialog_get(chat)
@@ -624,18 +631,109 @@ class Bot:
         except Exception as e:  # noqa: BLE001
             log.error("Не вдалося записати тексти #%s: %s", item_id, e)
             return self.say(chat, f"❌ Не вдалося зберегти тексти: {e}", html_mode=False)
-        self.dialog_set(chat, None)
         edited = [x for x in item["edited"] if x not in ("назву", "тексти")] + ["назву", "хештеги"]
-        self.db.update_item(item_id, title_override=None, edited=edited, status="approved")
-        self.db.event(item_id, "approved", {"by": chat, "title": title, "hashtags": tags})
+        self.db.update_item(item_id, title_override=None, edited=edited)
         if len(tags) > 15:
             self.say(chat, "⚠️ YouTube ігнорує всі хештеги, якщо їх більше 15.", html_mode=False)
-        when = "зараз" if self.cfg.get("publish_on_approve") else f"о {fmt_slot(self.cfg, item['slot_at'])}"
-        self.say(chat, f"✅ <b>Готово!</b> Публікація {when}.\n🎬 {esc(title)}\n{esc(' '.join(tags)) or 'без хештегів'}")
-        if self.cfg.get("publish_on_approve"):
-            self.app.publisher.start(item_id)
+        self.dialog_set(chat, {"item": item_id, "step": "time", "mode": "dialog", "title": title, "tags": tags})
+        self.refresh(item_id, texts=True)
+        self._ask_time(chat, item_id, dialog=True)
+
+    # ---------- вибір часу публікації ----------
+    def _ask_time(self, chat: int, item_id: int, dialog: bool) -> None:
+        item = self.db.get_item(item_id)
+        now = now_ts()
+        rows = []
+        if item["slot_at"]:
+            rows.append([{"text": f"✅ Залишити: {fmt_when(self.cfg, item['slot_at'], now)}",
+                          "callback_data": f"tk:{item_id}"}])
+        free = self.app.scheduler.future_slots(now, 8)
+        btns = [{"text": fmt_when(self.cfg, ts, now), "callback_data": f"ts:{item_id}:{ts}"} for ts in free]
+        rows += [btns[i:i + 2] for i in range(0, len(btns), 2)]
+        extra = [{"text": "⌨️ Свій час", "callback_data": f"tc:{item_id}"}]
+        if dialog or item["status"] == "approved":
+            extra.append({"text": "⚡ Зараз", "callback_data": f"tn:{item_id}"})
+        rows.append(extra)
+        rows.append([{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}" if dialog else f"tx:{item_id}"}])
+        head = "🕐 <b>Крок 3/3. Коли публікуємо?</b>" if dialog else f"🕐 <b>Новий час для шортса #{item_id}</b>"
+        self.say(chat, f"{head}\nОберіть вільний слот, «Свій час» (напр. <code>завтра 18:30</code>) або «Зараз».",
+                 reply_markup={"inline_keyboard": rows})
+
+    def time_button(self, chat: int, item_id: int, action: str, rest: list, answer) -> None:
+        item = self.db.get_item(item_id)
+        if not item or item["status"] not in ("notified", "approved"):
+            return answer("Цей шортс уже неактуальний", True)
+        st = self.dialog_get(chat)
+        dialog = bool(st and st.get("item") == item_id and st.get("mode") == "dialog")
+        if action == "time":
+            if st and st.get("item") != item_id:
+                self.dialog_set(chat, None)
+            if not dialog:
+                self.dialog_set(chat, {"item": item_id, "step": "time", "mode": "change"})
+            answer()
+            return self._ask_time(chat, item_id, dialog=dialog)
+        if not st or st.get("item") != item_id or st.get("step") not in ("time", "time_custom"):
+            return answer("Цей вибір уже неактуальний", True)
+        if action == "tx":
+            self.dialog_set(chat, None)
+            return answer("Скасовано")
+        if action == "tc":
+            self.dialog_set(chat, {**st, "step": "time_custom"})
+            answer()
+            return self.say(chat, "⌨️ Напишіть дату й час: <code>18:30</code>, <code>завтра 18:30</code> "
+                                  "або <code>13.11 18:30</code>")
+        if action == "tn":
+            answer("Публікую зараз…")
+            return self._apply_time(chat, item, st, "now")
+        if action == "tk":
+            answer("Час залишено")
+            return self._apply_time(chat, item, st, None)
+        if action == "ts" and rest:
+            try:
+                return self._apply_time(chat, item, st, int(rest[0]), answer)
+            except ValueError:
+                return answer()
+        answer()
+
+    def _time_typed(self, chat: int, item: dict, st: dict, text: str) -> None:
+        try:
+            ts = parse_when(text, self.cfg)
+        except ValueError as e:
+            return self.say(chat, f"⚠️ {e}", html_mode=False)
+        self._apply_time(chat, item, st, ts)
+
+    def _apply_time(self, chat: int, item: dict, st: dict, choice, answer=None) -> None:
+        """choice: timestamp — новий час; None — залишити; 'now' — опублікувати зараз."""
+        item_id = item["id"]
+        if isinstance(choice, int):
+            try:
+                self.app.scheduler.move_slot(item_id, choice)
+            except ValueError as e:
+                if answer:
+                    answer(str(e), True)
+                return self.say(chat, f"⚠️ {e}. Оберіть інший час.", html_mode=False)
+            if answer:
+                answer("Час змінено")
+        dialog = st.get("mode") == "dialog"
+        self.dialog_set(chat, None)
+        item = self.db.get_item(item_id)
+        now_pub = choice == "now" or (dialog and choice is None and self.cfg.get("publish_on_approve"))
+        if dialog or now_pub:
+            if item["status"] == "notified":
+                self.db.update_item(item_id, status="approved")
+                self.db.event(item_id, "approved", {"by": chat, "title": st.get("title"), "hashtags": st.get("tags")})
+        if now_pub:
+            self.app.scheduler.release_slot(item_id)
+            self.say(chat, f"✅ <b>Готово!</b> Публікую шортс #{item_id} зараз.")
+            return self.app.publisher.start(item_id)
+        when = fmt_when(self.cfg, item["slot_at"]) if item["slot_at"] else "—"
+        if dialog:
+            meta = self._meta(item)
+            self.say(chat, f"✅ <b>Готово!</b> Публікація {when}.\n🎬 {esc(meta.yt_title)}\n"
+                           f"{esc(' '.join(meta.hashtags))}")
         else:
-            self.refresh(item_id, texts=True)
+            self.say(chat, f"🕐 Час шортса #{item_id}: <b>{when}</b>")
+        self.refresh(item_id, texts=dialog)
 
     def _regen_ai(self, item_id: int) -> None:
         import ai

@@ -42,6 +42,9 @@ class DialogTest(FlowBase):
         self.say("Камбек на Прохорівці")
         self.assertIn("Крок 2/2", self.last())
         self.say("wot, #танки shorts")
+        self.assertIn("Крок 3/3", self.last())
+        self.assertEqual(self.app.db.get_item(item["id"])["status"], "notified")  # ще чекає на час
+        self.button(f"tk:{item['id']}")
         it = self.app.db.get_item(item["id"])
         self.assertEqual(it["status"], "approved")
         self.assertIn("Готово", self.last())
@@ -62,6 +65,7 @@ class DialogTest(FlowBase):
         self.button(f"keep:{item['id']}:title")
         self.assertIn("Крок 2/2", self.last())
         self.say("-")
+        self.button(f"tk:{item['id']}")
         self.assertEqual(self.app.db.get_item(item["id"])["status"], "approved")
         m = load_meta(mp4.with_suffix(".json"))
         self.assertEqual(m.yt_title, "Титул a")

@@ -215,6 +215,43 @@ class Scheduler:
         slots = self.future_slots(now, len(queue))
         return [(it, slots[i] if i < len(slots) else None) for i, it in enumerate(queue)]
 
+    def move_slot(self, item_id: int, ts: int) -> None:
+        """Переносить сповіщений/підтверджений шортс на інший час; старий слот віддається черзі."""
+        now = now_ts()
+        if ts <= now + 60:
+            raise ValueError("Цей час уже минув або надто близько")
+        item = self.db.get_item(item_id)
+        existing = self.db.slot(ts)
+        if existing and existing["item_id"] and existing["item_id"] != item_id:
+            raise ValueError("На цей час уже запланований інший шортс")
+        if existing and existing["state"] not in ("pending", "notified"):
+            raise ValueError("Цей слот уже використано")
+        old = item["slot_at"]
+        hm = local_dt(self.cfg, ts).strftime("%H:%M")
+        with self.db.tx():
+            c = self.db.conn
+            if old and old != ts:
+                row = c.execute("SELECT source FROM slots WHERE slot_at=?", (old,)).fetchone()
+                if row and row["source"] == "manual":
+                    c.execute("DELETE FROM slots WHERE slot_at=? AND item_id=?", (old, item_id))
+                else:
+                    c.execute("UPDATE slots SET state='pending', item_id=NULL WHERE slot_at=? AND item_id=?",
+                              (old, item_id))
+            if existing:
+                c.execute("UPDATE slots SET state='notified', item_id=? WHERE slot_at=?", (item_id, ts))
+            else:
+                c.execute("INSERT INTO slots(slot_at, source, item_id, state) VALUES (?,?,?, 'notified')",
+                          (ts, "config" if hm in self.cfg["slots"] else "manual", item_id))
+            c.execute("UPDATE items SET slot_at=? WHERE id=?", (ts, item_id))
+        self.db.event(item_id, "rescheduled", {"from": old, "to": ts})
+        log.info("#%s перенесено: %s → %s", item_id, fmt_slot(self.cfg, old) if old else "—", fmt_slot(self.cfg, ts))
+
+    def release_slot(self, item_id: int) -> None:
+        """Звільняє слот шортса (коли його публікують «зараз»)."""
+        item = self.db.get_item(item_id)
+        if item and item["slot_at"]:
+            self.db.x("UPDATE slots SET state='done' WHERE slot_at=? AND item_id=?", (item["slot_at"], item_id))
+
     # ---------- слоти ----------
     def _day_slots(self, day) -> list[int]:
         out = []

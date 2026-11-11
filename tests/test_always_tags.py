@@ -76,6 +76,8 @@ class FlowTest(FlowBase):
         self.assertIn("автоматично додаються: " + LINE, self.app.bot.tg.sent[-1][1])
         self.say("Камбек на Прохорівці")
         self.say("shorts танки")
+        self.app.bot.handle({"update_id": 3, "callback_query": {
+            "id": "c", "data": f"tk:{item['id']}", "message": {"message_id": 9, "chat": {"id": 42}, "text": ""}}})
         self.app.scheduler.tick(self.ts(11, "13:00"))
         yt = self.published["youtube"]
         self.assertEqual(yt.yt_title, f"Камбек на Прохорівці {LINE}")

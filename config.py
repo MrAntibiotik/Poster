@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.11-15"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.11-16"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -263,6 +263,49 @@ def fmt_when(cfg: dict, ts: int, now: int | None = None) -> str:
     if days == 1:
         return f"завтра {dt:%H:%M}"
     return f"{WEEKDAYS[dt.weekday()]} {dt:%d.%m %H:%M}"
+
+
+def parse_when(text: str, cfg: dict, now: int | None = None) -> int:
+    """«18:30» / «завтра 18:30» / «13.11 18:30» / «13.11.2026 9:05» -> timestamp. ValueError з поясненням."""
+    from datetime import date as _date, timedelta as _td
+    now = now or now_ts()
+    t = (text or "").lower().strip()
+    tm = re.search(r"\b(\d{1,2}):(\d{2})\b", t)
+    if not tm:
+        raise ValueError("Вкажіть час у форматі ГГ:ХХ, напр. «18:30», «завтра 18:30» або «13.11 18:30»")
+    hh, mm = int(tm.group(1)), int(tm.group(2))
+    if hh > 23 or mm > 59:
+        raise ValueError("Такого часу не буває")
+    rest = (t[:tm.start()] + " " + t[tm.end():]).strip()
+    today = local_dt(cfg, now).date()
+    explicit = True
+    if "післязавтра" in rest:
+        day = today + _td(days=2)
+    elif "завтра" in rest:
+        day = today + _td(days=1)
+    elif "сьогодні" in rest:
+        day = today
+    else:
+        dm = re.search(r"\b(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\b", rest)
+        if dm:
+            d, m = int(dm.group(1)), int(dm.group(2))
+            y = int(dm.group(3)) if dm.group(3) else today.year
+            y = y + 2000 if y < 100 else y
+            try:
+                day = _date(y, m, d)
+            except ValueError as e:
+                raise ValueError("Такої дати не існує") from e
+            if not dm.group(3) and day < today:
+                day = _date(y + 1, m, d)  # «05.01» у грудні — наступного року
+        else:
+            day, explicit = today, False
+    ts = int(datetime(day.year, day.month, day.day, hh, mm, tzinfo=cfg["tz"]).timestamp())
+    if ts <= now + 60 and not explicit:
+        day = day + _td(days=1)  # «09:00», а вже 10:00 — значить завтра
+        ts = int(datetime(day.year, day.month, day.day, hh, mm, tzinfo=cfg["tz"]).timestamp())
+    if ts <= now + 60:
+        raise ValueError("Цей час уже минув — вкажіть пізніший")
+    return ts
 
 
 def fmt_slot(cfg: dict, ts: int, now: int | None = None) -> str:
