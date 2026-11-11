@@ -67,6 +67,8 @@ class Scheduler:
     # ------------------------------------------------------------------
     def tick(self, now: int | None = None) -> None:
         now = now or now_ts()
+        if hasattr(self.app, "reload_config"):
+            self.app.reload_config()  # зміни з панелі — без перезапуску
         if now - self._last_scan >= int(self.cfg["scan_interval_seconds"]):
             self._last_scan = now
             self.scan(now)

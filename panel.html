@@ -658,9 +658,8 @@ async function applyFolder(key, path){
   $$(`[data-set="${key}"]`).forEach(i => i.value = path);
   let msg = "Збережено: " + path;
   if (key === "paths.ready") { const f = await api("/api/fs", {path}); msg += `\nЗнайдено шортсів: ${f.shorts.total}, готових: ${f.shorts.ready}`; }
+  if (S && S.running) msg += "\nБот підхопить нову папку протягом хвилини.";
   toast(msg, "okk"); await refresh();
-  if (S && S.running && confirm("Папку змінено. Перезапустити бота зараз, щоб він почав брати шортси з нової папки?"))
-    run(() => api("/api/action", {name: "restart"}));
 }
 async function openFs(key, path){
   fsTarget = key; $("#fsTitle").textContent = "📂 Оберіть " + (PICK_NAMES[key] || "папку");

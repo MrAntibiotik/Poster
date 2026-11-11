@@ -45,6 +45,43 @@ class App:
             from bot import Bot
             bot = Bot(self)
         self.bot = bot
+        self._cfg_mtime = self._config_mtime()
+
+    # ---------- налаштування «на льоту» ----------
+    def _config_mtime(self) -> float:
+        total = 0.0
+        for p in (self.cfg.get("config_path"), self.cfg.get("env_path")):
+            try:
+                total += os.path.getmtime(p) if p else 0
+            except OSError:
+                pass
+        return total
+
+    def reload_config(self, force: bool = False) -> bool:
+        """Підхоплює зміни config.json / .env без перезапуску (напр. з панелі). True — якщо перечитано."""
+        m = self._config_mtime()
+        if not force and m == self._cfg_mtime:
+            return False
+        try:
+            new = load_config(self.cfg["config_path"])
+        except ConfigError as e:
+            log.error("Нові налаштування з помилкою — лишаю попередні: %s", e)
+            self._cfg_mtime = m
+            return False
+        self.cfg.clear()
+        self.cfg.update(new)  # той самий об'єкт — його бачать бот, планувальник, публікатор
+        self.platforms = build_platforms(self.cfg)
+        self._cfg_mtime = m
+        log.info("Налаштування перечитано; платформи: %s", list(self.platforms))
+        return True
+
+    def set_platform_enabled(self, key: str, enabled: bool) -> None:
+        import json
+        path = Path(self.cfg["config_path"])
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw.setdefault("platforms", {}).setdefault(key, {})["enabled"] = bool(enabled)
+        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.reload_config(force=True)
 
     # ---------- тексти для команд ----------
     def queue_text(self) -> str:

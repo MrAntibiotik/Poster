@@ -36,6 +36,7 @@ HELP_ADMIN = (
     "/retry N — повторити невдалі платформи для шортса #N\n"
     "/users — хто має доступ до бота\n"
     "/stats — аналітика по платформах, /top — лідери тижня\n"
+    "/platforms — увімкнути / вимкнути платформи для всіх шортсів\n"
     "/menu — показати кнопки\n"
     "/cancel — скасувати введення назви"
 )
@@ -47,7 +48,7 @@ HELP_VIEWER = (
 BTN = {
     "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
     "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
-    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top",
+    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms",
 }
 VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
 
@@ -62,6 +63,7 @@ COMMANDS = [
     ("testslot", "Тестовий слот через 10 хв"),
     ("pause", "Призупинити розклад"),
     ("resume", "Відновити розклад"),
+    ("platforms", "Увімкнути / вимкнути платформи"),
     ("users", "Хто має доступ"),
     ("help", "Довідка"),
 ]
@@ -125,11 +127,23 @@ class Bot:
         if self.role(chat_id) == "admin":
             pause = "▶️ Продовжити" if self.paused() else "⏸ Пауза"
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня", "🧪 Тест-слот"],
-                    [pause, "👥 Доступ", "❓ Довідка"]]
+                    ["🔌 Платформи", pause, "👥 Доступ"], ["❓ Довідка"]]
         else:
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня"]]
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
                 "is_persistent": True}
+
+    def platforms_text(self) -> tuple[str, dict]:
+        lines = ["🔌 <b>Платформи</b> — куди публікувати всі шортси",
+                 "Натисніть, щоб вимкнути або увімкнути. Діє одразу, без перезапуску."]
+        rows = []
+        for p in PLATFORMS:
+            on = bool(self.cfg["platforms"].get(p, {}).get("enabled"))
+            lines.append(f"{'✅' if on else '🚫'} {NAMES[p]}")
+            rows.append([{"text": f"{'✅' if on else '🚫'} {NAMES[p]} — {'вимкнути' if on else 'увімкнути'}",
+                          "callback_data": f"plat:0:{p}"}])
+        lines.append("\nДля окремого шортса — кнопки «Вимкнути платформу» під ним.")
+        return "\n".join(lines), {"inline_keyboard": rows}
 
     def setup_commands(self) -> None:
         """Кнопка «Меню» в Telegram зі списком команд (best-effort)."""
@@ -486,6 +500,19 @@ class Bot:
             return answer("Натисніть на платформу нижче, щоб вимкнути/увімкнути її")
         if action in ("keep", "dlgx"):
             return self.dialog_button(chat, target, action, rest, answer)
+        if action == "plat" and rest:
+            key = rest[0]
+            if key not in PLATFORMS:
+                return answer()
+            on = not self.cfg["platforms"].get(key, {}).get("enabled")
+            self.app.set_platform_enabled(key, on)
+            answer(f"{NAMES[key]}: {'увімкнено' if on else 'вимкнено'}")
+            text, kb = self.platforms_text()
+            try:
+                self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
+            except TelegramError as e:
+                log.debug("edit platforms: %s", e)
+            return
         if action in ("time", "tk", "ts", "tc", "tn", "tx"):
             return self.time_button(chat, target, action, rest, answer)
         item_id = target
@@ -848,6 +875,11 @@ class Bot:
             self.db.set("paused", None)
             self.db.event(None, "resumed", {"by": chat})
             self.send("▶️ Розклад відновлено.", keyboard=True)
+        elif cmd == "/platforms":
+            if role != "admin":
+                return reply("⛔ Лише для адміністратора.", False)
+            text, kb = self.platforms_text()
+            reply(text, kb=kb)
         elif cmd == "/users":
             text, kb = self.users_text()
             reply(text, kb=kb if kb["inline_keyboard"] else None)

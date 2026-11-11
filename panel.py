@@ -200,8 +200,7 @@ class Panel:
             tmp.unlink(missing_ok=True)
             raise ValueError(str(e)) from e
         os.replace(tmp, path)
-        self.reload()
-        self.mark_restart()
+        self.reload()  # бот підхопить зміни сам протягом ~15 с, перезапуск не потрібен
 
     def save_secrets(self, values: dict) -> None:
         from dotenv import set_key
@@ -228,7 +227,8 @@ class Panel:
             set_key(env, name, value, quote_mode="never")
             os.environ[name] = value
         self.reload()
-        self.mark_restart()
+        if any(k.startswith("TELEGRAM_") and v for k, v in values.items()):
+            self.mark_restart()  # токен / адміністратори Telegram — лише після перезапуску
 
     def mark_restart(self) -> None:
         if control.is_running(self.cfg["lock_port"]):
@@ -433,7 +433,6 @@ class Panel:
         for k in ("META_PAGE_TOKEN", "FB_PAGE_ID", "IG_USER_ID"):
             os.environ.pop(k, None)
         self.reload()
-        self.mark_restart()
         return msg
 
     def tiktok_start(self) -> dict:
