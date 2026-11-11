@@ -216,6 +216,7 @@ class Panel:
 
     # ---------------- дії ----------------
     def action(self, name: str, data: dict) -> str:
+        self.reload()  # .env / config.json могли змінити вручну
         port = self.cfg["lock_port"]
         if name in ("start", "restart"):
             sec = self.cfg["secrets"]
