@@ -649,6 +649,8 @@ function openEditor(id){
   S.free_slots.filter(f => f.ts !== it.ts).forEach(f => opts.push(`<option value="${f.ts}">📦 ${esc(f.label)}</option>`));
   opts.push(`<option value="custom">⌨️ Свій час…</option>`);
   $("#imWhen").innerHTML = opts.join(""); $("#imCustom").classList.add("hidden"); $("#imCustom").value = "";
+  const mn = new Date(Date.now() + 3 * 60000); mn.setSeconds(0, 0);
+  $("#imCustom").min = new Date(mn.getTime() - mn.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   $("#imNote").textContent = it.status === "queued"
     ? "«Зберегти» з обраним часом — шортс стане в розклад і чекатиме підтвердження (картка прийде в Telegram). «Підтвердити» — опублікується в обраний час без додаткових питань."
     : "«Зберегти» — лише змінити тексти/час. «Підтвердити» — шортс опублікується в обраний час.";
@@ -662,7 +664,8 @@ async function submitEditor(op, btn){
   if (!EDIT) return;
   let when = $("#imWhen").value;
   if (when === "custom") { const v = $("#imCustom").value; if (!v) return toast("Оберіть дату й час", "err");
-    when = Math.floor(new Date(v).getTime() / 1000); }
+    when = Math.floor(new Date(v).getTime() / 1000);
+    if (when * 1000 <= Date.now() + 60000) return toast("Цей час уже минув — оберіть пізніший", "err"); }
   if (op === "save" && when === "now") return toast("«Зараз» — це публікація: натисніть «Підтвердити»", "err");
   const body = {name:"item", op, id: EDIT.id, title: $("#imName").value, tags: $("#imTags").value, when};
   const j = await run(() => api("/api/action", body), btn, op === "publish" ? "Передаю боту…" : null);

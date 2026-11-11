@@ -56,6 +56,18 @@ class BotPanelCommandsTest(FlowBase):
         self.do(op="toggle", id=c["id"], platform="youtube")
         self.assertIn("youtube", self.app.db.get_item(c["id"])["disabled"])
 
+    def test_past_time_rejected(self):
+        c = self.item("c")
+        for past in (self.ts(11, "07:00"), self.ts(10, "19:00"), self.ts(11, "08:00")):
+            with self.assertRaises(ValueError):
+                self.do(op="publish", id=c["id"], when=past)
+        self.assertEqual(self.app.db.get_item(c["id"])["status"], "queued")
+        with self.assertRaises(ValueError):
+            config.parse_when("сьогодні 07:00", self.cfg, self.ts(11, "08:00"))
+        self.assertEqual(config.parse_when("07:00", self.cfg, self.ts(11, "08:00")), self.ts(12, "07:00"))
+        for it, ts in self.app.scheduler.projection(self.ts(11, "08:00")):
+            self.assertGreater(ts, self.ts(11, "08:00"))
+
     def test_first_remove_and_errors(self):
         c = self.item("c")
         self.do(op="first", id=c["id"])
