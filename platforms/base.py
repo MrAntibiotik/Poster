@@ -29,6 +29,14 @@ class Platform:
     def get_views(self, result: dict) -> int | None:
         raise NotImplementedError
 
+    def get_stats(self, result: dict) -> dict:
+        """Статистика поста: {'views', 'likes', 'comments'} (None — недоступно)."""
+        return {"views": self.get_views(result)}
+
+    def account_stats(self) -> dict:
+        """Статистика акаунта/каналу: {'followers', ...} або {} якщо недоступно."""
+        return {}
+
     def check(self) -> str:
         """Перевірка доступу; повертає короткий опис акаунта або кидає виняток."""
         raise NotImplementedError

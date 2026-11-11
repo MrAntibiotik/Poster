@@ -64,6 +64,25 @@ CREATE TABLE IF NOT EXISTS tg_msgs (
     PRIMARY KEY (item_id, chat_id)
 );
 
+CREATE TABLE IF NOT EXISTS post_stats (
+    item_id  INTEGER NOT NULL,
+    platform TEXT NOT NULL,
+    ts       INTEGER NOT NULL,
+    views    INTEGER,
+    likes    INTEGER,
+    comments INTEGER
+);
+CREATE INDEX IF NOT EXISTS post_stats_idx ON post_stats(item_id, platform, ts);
+
+CREATE TABLE IF NOT EXISTS account_stats (
+    platform  TEXT NOT NULL,
+    ts        INTEGER NOT NULL,
+    followers INTEGER,
+    views     INTEGER,
+    likes     INTEGER
+);
+CREATE INDEX IF NOT EXISTS account_stats_idx ON account_stats(platform, ts);
+
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT

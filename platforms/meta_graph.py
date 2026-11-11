@@ -135,6 +135,19 @@ class Instagram(_MetaBase):
                     return int(d["total_value"].get("value") or 0)
         return None
 
+    def get_stats(self, result: dict) -> dict:
+        out = {"views": self.get_views(result)}
+        try:
+            r = self._g().get(result["id"], fields="like_count,comments_count")
+            out.update(likes=r.get("like_count"), comments=r.get("comments_count"))
+        except PublishError as e:
+            log.debug("IG likes: %s", e)
+        return out
+
+    def account_stats(self) -> dict:
+        r = self._g().get(self.ig_id, fields="followers_count,media_count")
+        return {"followers": r.get("followers_count"), "videos": r.get("media_count")}
+
     def check(self) -> str:
         r = self._g().get(self.ig_id, fields="username")
         return f"@{r.get('username')}"
@@ -187,6 +200,20 @@ class Facebook(_MetaBase):
             if d and d.get("values"):
                 return int(d["values"][0].get("value") or 0)
         return None
+
+    def get_stats(self, result: dict) -> dict:
+        out = {"views": self.get_views(result)}
+        try:
+            r = self.graph().get(result["id"], fields="likes.summary(true).limit(0),comments.summary(true).limit(0)")
+            out.update(likes=((r.get("likes") or {}).get("summary") or {}).get("total_count"),
+                       comments=((r.get("comments") or {}).get("summary") or {}).get("total_count"))
+        except PublishError as e:
+            log.debug("FB likes: %s", e)
+        return out
+
+    def account_stats(self) -> dict:
+        r = self.graph().get(self.page_id, fields="followers_count,fan_count")
+        return {"followers": r.get("followers_count") or r.get("fan_count")}
 
     def check(self) -> str:
         r = self.graph().get(self.page_id, fields="name")

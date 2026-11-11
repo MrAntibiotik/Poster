@@ -142,6 +142,46 @@ class InstagramTest(Base):
         self.assertEqual(meta_graph.Instagram(self.cfg).get_views({"id": "M1"}), 777)
 
 
+class StatsTest(Base):
+    def test_instagram_stats(self):
+        self.http(meta_graph, [
+            ("GET", "/M1/insights", Resp({"data": [{"name": "views", "values": [{"value": 1500}]}]})),
+            ("GET", "/M1", Resp({"like_count": 120, "comments_count": 7})),
+            ("GET", "/IG1", Resp({"followers_count": 2048, "media_count": 31})),
+        ])
+        ig = meta_graph.Instagram(self.cfg)
+        self.assertEqual(ig.get_stats({"id": "M1"}), {"views": 1500, "likes": 120, "comments": 7})
+        self.assertEqual(ig.account_stats()["followers"], 2048)
+
+    def test_facebook_stats(self):
+        self.http(meta_graph, [
+            ("GET", "/V1/video_insights", Resp({"data": [{"name": "fb_reels_total_plays", "values": [{"value": 77}]}]})),
+            ("GET", "/V1", Resp({"likes": {"summary": {"total_count": 9}}, "comments": {"summary": {"total_count": 2}}})),
+            ("GET", "/P1", Resp({"followers_count": 350})),
+        ])
+        fb = meta_graph.Facebook(self.cfg)
+        self.assertEqual(fb.get_stats({"id": "V1"}), {"views": 77, "likes": 9, "comments": 2})
+        self.assertEqual(fb.account_stats(), {"followers": 350})
+
+    def test_tiktok_stats(self):
+        d = self.tmp / "tokens"
+        d.mkdir(exist_ok=True)
+        (d / "tiktok_token.json").write_text(json.dumps({"access_token": "AT", "refresh_token": "RT",
+            "expires_at": int(time.time()) + 3600, "refresh_expires_at": int(time.time()) + 99999}))
+        f = self.http(tiktok, [
+            ("POST", "/v2/video/query/", Resp({"data": {"videos": [{"id": "7", "view_count": 5000, "like_count": 400,
+                                                                    "comment_count": 12}]}, "error": {"code": "ok"}})),
+            ("GET", "/v2/user/info/", Resp({"data": {"user": {"follower_count": 900, "likes_count": 15000,
+                                                              "video_count": 40}}, "error": {"code": "ok"}})),
+        ])
+        tt = tiktok.TikTok(self.cfg)
+        self.assertEqual(tt.get_stats({"post_id": "7"}), {"views": 5000, "likes": 400, "comments": 12})
+        self.assertEqual(tt.get_stats({"id": "pub"}), {})  # приватний пост — без статистики
+        self.assertEqual(tt.account_stats()["followers"], 900)
+        self.assertIn("follower_count", f.calls[-1][2]["params"]["fields"])
+        self.assertIn("user.info.stats", tiktok.SCOPES)
+
+
 class FacebookTest(Base):
     def test_publish_flow(self):
         f = self.http(meta_graph, [

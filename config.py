@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.11-11"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.11-12"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -73,7 +73,8 @@ DEFAULTS: dict = {
     },
     "telegram": {"bot_token": "", "chat_id": ""},
     "retry": {"attempts": 3, "pause_seconds": 120},
-    "reports": {"daily_time": "22:30", "stats_after_hours": 24, "health_check_time": "09:00"},
+    "reports": {"daily_time": "22:30", "stats_after_hours": 24, "health_check_time": "09:00",
+                "weekly_day": 6},  # лідери тижня: 0 — понеділок … 6 — неділя (разом із щоденним звітом)
     "platforms": {
         "youtube": {
             "enabled": True,

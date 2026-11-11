@@ -112,6 +112,7 @@ def run_service(cfg: dict) -> int:
         log.error("Бот не запущено: %s", e)
         return 2
     app.db.set("pid", os.getpid())
+    app.bot.setup_commands()
     from config import VERSION
     log.info("Версія %s", VERSION)
     log.info("poster запущено. Платформи: %s. dry_run=%s", list(app.platforms), cfg.get("dry_run"))

@@ -35,6 +35,8 @@ HELP_ADMIN = (
     "/pause, /resume — призупинити / відновити розклад\n"
     "/retry N — повторити невдалі платформи для шортса #N\n"
     "/users — хто має доступ до бота\n"
+    "/stats — аналітика по платформах, /top — лідери тижня\n"
+    "/menu — показати кнопки\n"
     "/cancel — скасувати введення назви"
 )
 HELP_VIEWER = (
@@ -45,9 +47,24 @@ HELP_VIEWER = (
 BTN = {
     "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
     "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
-    "👥 Доступ": "/users", "❓ Довідка": "/help",
+    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top",
 }
-VIEWER_CMDS = {"/start", "/help", "/queue", "/status", "/report"}
+VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
+
+# Кнопка «Меню» біля поля введення (setMyCommands)
+COMMANDS = [
+    ("menu", "Показати кнопки керування"),
+    ("queue", "Черга шортсів"),
+    ("status", "Найближчі слоти й доступи"),
+    ("report", "Підсумок за сьогодні"),
+    ("stats", "Аналітика: підписники, перегляди, лайки"),
+    ("top", "Лідери тижня"),
+    ("testslot", "Тестовий слот через 10 хв"),
+    ("pause", "Призупинити розклад"),
+    ("resume", "Відновити розклад"),
+    ("users", "Хто має доступ"),
+    ("help", "Довідка"),
+]
 
 
 def visible_len(text: str) -> int:
@@ -107,11 +124,20 @@ class Bot:
     def reply_keyboard(self, chat_id: int) -> dict:
         if self.role(chat_id) == "admin":
             pause = "▶️ Продовжити" if self.paused() else "⏸ Пауза"
-            rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["🧪 Тест-слот", pause, "👥 Доступ"]]
+            rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня", "🧪 Тест-слот"],
+                    [pause, "👥 Доступ", "❓ Довідка"]]
         else:
-            rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"]]
+            rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня"]]
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
                 "is_persistent": True}
+
+    def setup_commands(self) -> None:
+        """Кнопка «Меню» в Telegram зі списком команд (best-effort)."""
+        try:
+            self.tg.call("setMyCommands", commands=[{"command": c, "description": d} for c, d in COMMANDS])
+            self.tg.call("setChatMenuButton", menu_button={"type": "commands"})
+        except TelegramError as e:
+            log.warning("Не вдалося налаштувати меню команд: %s", e)
 
     # ================= службові повідомлення =================
     def say(self, chat_id: int, text: str, html_mode: bool = True, reply_markup=None):
@@ -674,6 +700,24 @@ class Bot:
         app = self.app
         chat = chat or self.chat_id
         reply = lambda text, html_mode=True, kb=None: self.say(chat, text, html_mode, kb)  # noqa: E731
+        if cmd in ("/stats", "/top"):
+            reply("⏳ Збираю статистику з платформ…", False)
+
+            def work(which=cmd):
+                from reports import analytics_text, collect, weekly_top
+                try:
+                    stats = collect(app)
+                    reply(analytics_text(app, stats) if which == "/stats" else weekly_top(app, stats))
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Аналітика")
+                    reply(f"❌ Не вдалося зібрати статистику: {esc(str(e))}")
+            if getattr(app.publisher, "sync", False):
+                work()
+            else:
+                threading.Thread(target=work, daemon=True, name="stats-cmd").start()
+            return
+        if cmd == "/menu":
+            return reply("Кнопки керування — під полем введення ⬇️", False, self.reply_keyboard(chat))
         if cmd in ("/start", "/help"):
             reply(HELP_ADMIN if role == "admin" else HELP_VIEWER, kb=self.reply_keyboard(chat))
         elif cmd == "/cancel":

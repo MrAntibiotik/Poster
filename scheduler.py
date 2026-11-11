@@ -264,8 +264,22 @@ class Scheduler:
         if self.db.get("daily_report_day") == day:
             return
         self.db.set("daily_report_day", day)
-        from reports import daily_report
-        self.app.bot.send(daily_report(self.app, now), html_mode=True, to="all")
+        weekly = dt.weekday() == int(self.cfg["reports"].get("weekly_day", 6))
+
+        def work():
+            from reports import collect, daily_report, weekly_top
+            stats = None
+            try:
+                stats = collect(self.app)
+            except Exception:  # noqa: BLE001
+                log.exception("Збір статистики для звіту")
+            self.app.bot.send(daily_report(self.app, now, stats), html_mode=True, to="all")
+            if weekly and stats:
+                self.app.bot.send(weekly_top(self.app, stats), html_mode=True, to="all")
+        if getattr(self.app.publisher, "sync", False):
+            work()
+        else:
+            threading.Thread(target=work, daemon=True, name="daily-report").start()
 
     def maybe_stats(self, now: int) -> None:
         if self._stats_thread and self._stats_thread.is_alive():

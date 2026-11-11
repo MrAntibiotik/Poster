@@ -171,7 +171,7 @@ class FlowTest(FlowBase):
 
         # Перегляди через 24 год
         sch.tick(self.ts(12, "13:05"))
-        self.assertTrue(any("Перегляди за 24 год" in s[1] for s in tg.sent if s[0] == "text"))
+        self.assertTrue(any("Статистика за 24 год" in s[1] for s in tg.sent if s[0] == "text"))
 
     def test_skip_three_times_and_restart(self):
         self.make_short("a")

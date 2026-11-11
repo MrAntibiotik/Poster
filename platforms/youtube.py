@@ -135,6 +135,34 @@ class YouTube(Platform):
         items = r.get("items") or []
         return int(items[0]["statistics"].get("viewCount", 0)) if items else None
 
+    def get_stats(self, result: dict) -> dict:
+        from googleapiclient.errors import HttpError
+
+        try:
+            r = self._api().videos().list(part="statistics", id=result["id"]).execute()
+        except HttpError as e:
+            raise self._http_error(e) from e
+        items = r.get("items") or []
+        if not items:
+            return {}
+        st = items[0].get("statistics") or {}
+        num = lambda k: int(st[k]) if k in st else None  # noqa: E731
+        return {"views": num("viewCount"), "likes": num("likeCount"), "comments": num("commentCount")}
+
+    def account_stats(self) -> dict:
+        from googleapiclient.errors import HttpError
+
+        try:
+            r = self._api().channels().list(part="statistics", mine=True).execute()
+        except HttpError as e:
+            raise self._http_error(e) from e
+        items = r.get("items") or []
+        if not items:
+            return {}
+        st = items[0].get("statistics") or {}
+        subs = None if st.get("hiddenSubscriberCount") else int(st.get("subscriberCount") or 0)
+        return {"followers": subs, "views": int(st.get("viewCount") or 0), "videos": int(st.get("videoCount") or 0)}
+
     def check(self) -> str:
         from googleapiclient.errors import HttpError
 

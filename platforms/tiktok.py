@@ -20,7 +20,7 @@ log = logging.getLogger("tiktok")
 
 API = "https://open.tiktokapis.com"
 AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
-SCOPES = "user.info.basic,video.publish,video.list"
+SCOPES = "user.info.basic,user.info.stats,video.publish,video.list"
 MB = 1024 * 1024
 TOKEN_ERRORS = {"access_token_invalid", "token_not_authorized_for_specified_scope",
                 "scope_not_authorized", "invalid_token"}
@@ -268,6 +268,32 @@ class TikTok(Platform):
                           params={"fields": "id,view_count"})
         vids = data.get("videos") or []
         return int(vids[0].get("view_count", 0)) if vids else None
+
+    def get_stats(self, result: dict) -> dict:
+        pid = result.get("post_id")
+        if not pid:
+            return {}  # приватні пости не мають публічного id
+        data = self._post("/v2/video/query/", {"filters": {"video_ids": [pid]}},
+                          params={"fields": "id,view_count,like_count,comment_count,share_count"})
+        vids = data.get("videos") or []
+        if not vids:
+            return {}
+        v = vids[0]
+        return {"views": v.get("view_count"), "likes": v.get("like_count"), "comments": v.get("comment_count")}
+
+    def account_stats(self) -> dict:
+        try:
+            r = requests.get(f"{API}/v2/user/info/", params={"fields": "follower_count,likes_count,video_count"},
+                             headers={"Authorization": f"Bearer {self._token()}"}, timeout=60)
+            j = r.json()
+        except (requests.RequestException, ValueError) as e:
+            raise PublishError(f"TikTok user/info: {e}") from e
+        err = (j.get("error") or {}).get("code")
+        if err and err != "ok":
+            raise PublishError(f"TikTok {err}: {(j.get('error') or {}).get('message')} "
+                               "(для підписників потрібен дозвіл user.info.stats — авторизуйте TikTok заново)")
+        u = (j.get("data") or {}).get("user") or {}
+        return {"followers": u.get("follower_count"), "likes": u.get("likes_count"), "videos": u.get("video_count")}
 
     def check(self) -> str:
         c = self._creator()

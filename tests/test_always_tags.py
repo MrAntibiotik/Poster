@@ -80,7 +80,7 @@ class FlowTest(FlowBase):
         yt = self.published["youtube"]
         self.assertEqual(yt.yt_title, f"Камбек на Прохорівці {LINE}")
         self.assertEqual(yt.hashtags, ["#shorts"])
-        self.assertEqual(self.published["tiktok"].tiktok_text, f"Камбек на Прохорівці #shorts #танки #wot #wotua #mrantibiotik")
+        self.assertEqual(self.published["tiktok"].tiktok_text, "Камбек на Прохорівці #shorts #танки #wot #wotua #mrantibiotik")
         self.assertTrue(self.published["instagram"].instagram_text.endswith("#wot #wotua #mrantibiotik"))
         self.assertEqual(self.app.db.get_item(item["id"])["status"], "posted")
 

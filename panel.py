@@ -53,7 +53,7 @@ FIELDS = {
     "publish_on_approve": "bool", "ask_texts_before_publish": "bool", "catchup_minutes": "int", "max_skips": "int",
     "paths.ready": "str", "paths.posted": "str", "paths.skipped": "str", "ready_status": "str",
     "regenerate_command": "cmd", "regenerate_cwd": "str", "ffmpeg": "str", "ffprobe": "str",
-    "reports.daily_time": "time", "reports.health_check_time": "time", "reports.stats_after_hours": "int",
+    "reports.daily_time": "time", "reports.health_check_time": "time", "reports.stats_after_hours": "int", "reports.weekly_day": "int",
     "retry.attempts": "int", "retry.pause_seconds": "int", "graph_api_version": "str", "dry_run": "bool",
     "platforms.youtube.enabled": "bool", "platforms.youtube.privacy": "privacy",
     "platforms.youtube.add_shorts_hashtag": "bool", "platforms.youtube.notify_subscribers": "bool",

@@ -305,6 +305,10 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
         <div><label class="f">Щоденний звіт о</label><input type="time" data-set="reports.daily_time"></div>
         <div><label class="f">Перевірка токенів о</label><input type="time" data-set="reports.health_check_time"></div>
         <div><label class="f">Перегляди через, год</label><input type="number" min="1" data-set="reports.stats_after_hours"></div>
+        <div><label class="f">Лідери тижня — у день</label><select data-set="reports.weekly_day">
+          <option value="0">понеділок</option><option value="1">вівторок</option><option value="2">середа</option>
+          <option value="3">четвер</option><option value="4">п'ятниця</option><option value="5">субота</option>
+          <option value="6">неділя</option></select></div>
         <div><label class="f">Публікувати пізніше після вимкненого ПК, хв</label><input type="number" min="0" data-set="catchup_minutes"></div>
         <div><label class="f">Спроб публікації</label><input type="number" min="1" max="10" data-set="retry.attempts"></div>
         <div><label class="f">Пауза між спробами, с</label><input type="number" min="0" data-set="retry.pause_seconds"></div>
