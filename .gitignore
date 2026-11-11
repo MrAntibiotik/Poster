@@ -13,3 +13,4 @@ skipped/
 __pycache__/
 *.pyc
 .venv/
+panel_error.txt

@@ -715,7 +715,7 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
     try:
         panel = Panel(config_path)
     except ConfigError as e:
-        print("Помилка налаштувань:", e)
+        show_fatal(f"Помилка налаштувань: {e}")
         return 2
     setup_logging(panel.cfg)
     if port:
@@ -741,12 +741,38 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
     return 0
 
 
+def show_fatal(text: str) -> None:
+    """Без консолі (pythonw) помилку інакше ніхто не побачить: пишемо у файл і показуємо вікно Windows."""
+    try:
+        (ROOT / "panel_error.txt").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+    if sys.stderr is not None:
+        print(text, file=sys.stderr)
+    if control.WIN:
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, text[-1500:] + "\n\nТекст помилки також збережено у panel_error.txt — надішліть його.",
+                "poster — панель не запустилась", 0x10)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 if __name__ == "__main__":
     import argparse
+    import traceback
 
     ap = argparse.ArgumentParser(description="Панель керування poster")
     ap.add_argument("--config")
     ap.add_argument("--port", type=int)
     ap.add_argument("--no-browser", action="store_true")
     a = ap.parse_args()
-    sys.exit(serve(a.config, not a.no_browser, a.port))
+    try:
+        code = serve(a.config, not a.no_browser, a.port)
+    except SystemExit:
+        raise
+    except BaseException:  # noqa: BLE001
+        show_fatal(traceback.format_exc())
+        code = 1
+    sys.exit(code)

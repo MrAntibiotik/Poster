@@ -11,4 +11,9 @@ if not exist ".venv\Scripts\python.exe" (
 )
 if not exist config.json copy config.example.json config.json >nul
 if not exist .env copy .env.example .env >nul
+if exist panel_error.txt del panel_error.txt
 start "" ".venv\Scripts\pythonw.exe" panel.py
+echo.
+echo Opening the control panel in your browser: http://127.0.0.1:8770/
+echo If nothing opens in 10 seconds, run panel_debug.bat and send a screenshot.
+timeout /t 6 >nul
