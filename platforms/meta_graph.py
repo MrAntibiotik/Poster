@@ -14,6 +14,26 @@ log = logging.getLogger("meta")
 TOKEN_ERROR_CODES = {102, 190, 463, 467}
 
 
+IG_HINTS = {
+    "2207026": "формат відео не підтримується (потрібно MP4 H.264/AAC)",
+    "2207020": "відео обробляється задовго або сесія завантаження застаріла",
+    "2207003": "Instagram не зміг отримати файл",
+    "2207042": "перевищено ліміт публікацій через API за добу",
+    "2207050": "акаунт Instagram обмежений або неактивний",
+    "2207051": "дію заблоковано Instagram (підозріла активність) — спробуйте пізніше",
+    "2207004": "файл завеликий",
+    "2207009": "непідтримувані пропорції (потрібно 9:16)",
+}
+
+
+def ig_hint(text) -> str:
+    text = str(text or "")
+    for code, hint in IG_HINTS.items():
+        if code in text:
+            return f" → {hint}"
+    return ""
+
+
 class Graph:
     def __init__(self, version: str, token: str):
         if not token:
@@ -120,7 +140,12 @@ class Instagram(_MetaBase):
                    share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
         cid = c["id"]
         uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
-        g.upload_binary(uri, video_path)
+        log.info("Instagram: контейнер %s, завантажую %s (%.1f МБ)", cid, video_path,
+                 os.path.getsize(video_path) / 1024 / 1024)
+        try:
+            g.upload_binary(uri, video_path)
+        except PublishError as e:
+            raise PublishError(f"{e}{self._container_reason(g, cid)}") from e
 
         deadline = time.time() + 20 * 60
         while True:
@@ -129,7 +154,7 @@ class Instagram(_MetaBase):
             if code == "FINISHED":
                 break
             if code in ("ERROR", "EXPIRED"):
-                raise PublishError(f"Instagram відхилив відео: {st.get('status')}")
+                raise PublishError(f"Instagram відхилив відео: {st.get('status')}{ig_hint(st.get('status'))}")
             if time.time() > deadline:
                 raise PublishError("Instagram: обробка відео триває понад 20 хв")
             time.sleep(10)
@@ -141,6 +166,17 @@ class Instagram(_MetaBase):
         except Exception as e:  # noqa: BLE001
             log.warning("Instagram permalink: %s", e)
         return out
+
+    @staticmethod
+    def _container_reason(g, cid: str) -> str:
+        """Instagram зберігає точну причину відмови в контейнері — додаємо її до помилки."""
+        try:
+            st = g.get(cid, fields="status_code,status")
+        except Exception as e:  # noqa: BLE001
+            log.debug("status контейнера: %s", e)
+            return ""
+        reason = st.get("status") or st.get("status_code") or ""
+        return f" | стан контейнера: {reason}{ig_hint(reason)}" if reason else ""
 
     def get_views(self, result: dict) -> int | None:
         g = self._g()
