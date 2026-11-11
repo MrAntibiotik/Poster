@@ -93,6 +93,8 @@ def ig_probe(path: str, ffprobe: str = "ffprobe") -> dict:
         return {}
     v = next((s for s in info.get("streams") or [] if s.get("codec_type") == "video"), {})
     a = next((s for s in info.get("streams") or [] if s.get("codec_type") == "audio"), {})
+    if not v:
+        return {}  # не вдалося прочитати — перевірку пропускаємо, завантажуємо як є
     fmt = info.get("format") or {}
     fps = 0.0
     try:
