@@ -622,14 +622,14 @@ class Scheduler:
     # ---------- автооновлення ----------
     def maybe_update(self, now: int) -> None:
         up = self.cfg.get("updates") or {}
-        if not up.get("auto") or getattr(self.app, "no_update", False):
+        if getattr(self.app, "no_update", False):
             return
         if self.db.get("control") == "update":  # «Оновити зараз» з панелі
             self.db.set("control", None)
             self.db.set("update_available", "manual")
         last = int(self.db.get("update_check_ts") or 0)
         every = max(1.0, float(up.get("check_minutes") or 5)) * 60
-        if now - last >= every and not (self._upd_thread and self._upd_thread.is_alive()):
+        if up.get("auto") and now - last >= every and not (self._upd_thread and self._upd_thread.is_alive()):
             self.db.set("update_check_ts", now)
 
             def work():
@@ -664,8 +664,15 @@ class Scheduler:
 
     def install_update(self) -> None:
         import updater
+        manual = self.db.get("update_available") == "manual"
         self.db.set("update_available", None)
         try:
+            info = updater.check(self.cfg)
+            self.db.set("update_remote", info["remote"])
+            if not info["newer"]:
+                if manual:
+                    self.app.bot.send(f"✅ У вас остання версія ({info['local']}).")
+                return
             new = updater.apply(self.cfg)
         except Exception as e:  # noqa: BLE001
             log.error("Оновлення не вдалося: %s", e)

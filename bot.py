@@ -39,6 +39,7 @@ HELP_ADMIN = (
     "/stats — аналітика по платформах, /top — лідери тижня\n"
     "/platforms — увімкнути / вимкнути платформи для всіх шортсів\n"
     "/failed — невдалі публікації: причина, повтор зараз / пізніше / у вільний слот\n"
+    "/update — оновити програму з GitHub зараз\n"
     "/stream — режим стріму: ПК не засне (і за бажанням публікації чекають кінця стріму)\n"
     "/menu — показати кнопки\n"
     "/cancel — скасувати введення назви"
@@ -51,7 +52,7 @@ HELP_VIEWER = (
 BTN = {
     "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
     "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
-    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed", "🎮 Стрім": "/stream",
+    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed", "🎮 Стрім": "/stream", "⬆️ Оновити": "/update",
 }
 VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
 
@@ -134,7 +135,7 @@ class Bot:
         if self.role(chat_id) == "admin":
             pause = "▶️ Продовжити" if self.paused() else "⏸ Пауза"
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня", "🧪 Тест-слот"],
-                    ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "🎮 Стрім", "❓ Довідка"]]
+                    ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "🎮 Стрім", "⬆️ Оновити", "❓ Довідка"]]
         else:
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня"]]
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
@@ -1519,6 +1520,13 @@ class Bot:
             self.db.set("paused", None)
             self.db.event(None, "resumed", {"by": chat})
             self.send("▶️ Розклад відновлено.", keyboard=True)
+        elif cmd == "/update":
+            if role != "admin":
+                return reply("⛔ Лише для адміністратора.", False)
+            from config import VERSION
+            self.db.set("update_available", "manual")  # планувальник перевірить GitHub і оновить протягом ~15 с
+            reply(f"🔍 Перевіряю оновлення… (у вас {VERSION}). Якщо є нова версія — встановлю й перезапущусь, "
+                  "якщо ні — напишу.", False)
         elif cmd == "/stream":
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)

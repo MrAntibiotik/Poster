@@ -99,6 +99,21 @@ class AutoUpdateFlowTest(FlowBase):
         finally:
             updater.check, updater.apply = orig
 
+    def test_update_button_works_even_with_auto_off(self):
+        calls = []
+        orig = (updater.check, updater.apply)
+        updater.check = lambda cfg: {"local": "1", "remote": "1", "newer": False}
+        updater.apply = lambda cfg: calls.append(1) or "x"
+        try:
+            self.app.bot.handle({"update_id": 1, "message": {"message_id": 5, "text": "⬆️ Оновити",
+                                                              "chat": {"id": 42, "type": "private"}}})
+            self.assertIn("Перевіряю оновлення", self.app.bot.tg.sent[-1][1])
+            self.app.scheduler.tick(self.ts(11, "09:00"))
+            self.assertIn("остання версія", self.app.bot.tg.sent[-1][1])
+            self.assertEqual(calls, [])
+        finally:
+            updater.check, updater.apply = orig
+
 
 if __name__ == "__main__":
     unittest.main()

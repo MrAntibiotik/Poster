@@ -138,7 +138,9 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <div class="card"><h2>Бот</h2><div id="botState" class="big"></div>
         <div class="row"><button class="btn primary" data-act="start" id="bStart">▶️ Запустити</button>
           <button class="btn" data-act="stop" id="bStop">⏹ Зупинити</button>
-          <button class="btn" data-act="restart" id="bRestart">🔁 Перезапустити</button></div></div>
+          <button class="btn" data-act="restart" id="bRestart">🔁 Перезапустити</button>
+          <button class="btn" data-act="update_now" id="bUpdHome">⬆️ Оновити</button></div>
+        <p class="small" id="updHome"></p></div>
       <div class="card"><h2>Розклад</h2><div id="pauseState" class="big"></div>
         <div class="row"><button class="btn" id="bPause"></button></div>
         <p class="muted small">На паузі нові шортси не надсилаються, а слоти минають порожніми.</p>
@@ -585,6 +587,8 @@ async function refresh(){
   $("#autoState").textContent = s.autostart === null ? "Лише у Windows" : (s.autostart ? "✅ Увімкнено" : "Вимкнено");
   $("#autoJob").textContent = jobText(s.jobs.autostart);
   showJob("#updJob", s.jobs.update);
+  $("#updHome").textContent = s.update.newer ? "⬆️ Доступна версія " + s.update.remote : (s.update.error ? "⚠️ Оновлення: " + s.update.error : "");
+  $("#bUpdHome").classList.toggle("primary", !!s.update.newer);
   $("#updLocal").textContent = $("#ver").textContent.replace("версія ", "");
   $("#updRemote").textContent = s.update.remote || "—";
   pill($("#updStatus"), s.update.error ? "помилка" : (s.update.newer ? "є оновлення " + s.update.remote : (s.update.remote ? "остання версія" : "ще не перевірено")),
