@@ -107,10 +107,20 @@ class AutoUpdateFlowTest(FlowBase):
         try:
             self.app.bot.handle({"update_id": 1, "message": {"message_id": 5, "text": "⬆️ Оновити",
                                                               "chat": {"id": 42, "type": "private"}}})
-            self.assertIn("Перевіряю оновлення", self.app.bot.tg.sent[-1][1])
-            self.app.scheduler.tick(self.ts(11, "09:00"))
-            self.assertIn("остання версія", self.app.bot.tg.sent[-1][1])
+            texts = [m[1] for m in self.app.bot.tg.sent]
+            self.assertTrue(any("Перевіряю оновлення" in t for t in texts))
+            self.assertIn("остання версія", texts[-1])  # одразу, без очікування планувальника
             self.assertEqual(calls, [])
+            # є нова версія, але йде публікація — питаємо; «⚡ Оновити зараз» — оновлюємось одразу
+            updater.check = lambda cfg: {"local": "1", "remote": "2", "newer": True}
+            self.app.publisher.active.add(7)
+            text, kb = self.app.bot.update_now()
+            self.assertIn("публікується", text)
+            self.assertEqual(kb["inline_keyboard"][0][0]["callback_data"], "upd:1")
+            self.app.bot.handle({"update_id": 2, "callback_query": {
+                "id": "c", "data": "upd:1", "message": {"message_id": 99, "chat": {"id": 42}, "text": ""}}})
+            self.assertEqual(calls, [1])
+            self.assertEqual(self.app.db.get("control"), "restart")
         finally:
             updater.check, updater.apply = orig
 

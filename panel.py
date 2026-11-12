@@ -378,8 +378,10 @@ class Panel:
             return "Перевіряю…"
         if name == "update_now":
             if control.is_running(self.cfg["lock_port"]):
-                self.db.set("control", "update")
-                return "Бот оновиться протягом хвилини й перезапуститься разом із панеллю — оновіть сторінку за ~30 с"
+                force = time.time() - getattr(self, "_upd_asked", 0) < 120  # друге натискання — оновити попри публікацію
+                self._upd_asked = time.time()
+                msg = self.bot_call({"op": "update", "force": force}, 180)
+                return msg + (" Панель перезапуститься — оновіть сторінку за ~15 с." if "Оновлено" in msg else "")
 
             def run():
                 new = updater.apply(self.cfg)

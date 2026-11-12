@@ -141,6 +141,26 @@ class Bot:
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
                 "is_persistent": True}
 
+    def update_now(self, force: bool = False) -> tuple[str, dict | None]:
+        """Оновлення одразу, без очікування. Якщо саме йде публікація — питаємо (якщо не force)."""
+        import updater
+        info = updater.check(self.cfg)
+        self.db.set("update_remote", info["remote"])
+        self.db.set("update_error", None)
+        if not info["newer"]:
+            return f"✅ У вас остання версія ({info['local']}).", None
+        busy = sorted(self.app.publisher.active) or [i["id"] for i in self.db.items("status='publishing'")]
+        if busy and not force:
+            return (f"⬆️ Є версія {info['remote']} (у вас {info['local']}), але зараз публікується "
+                    f"#{', #'.join(map(str, busy))}.\nЯкщо оновитись зараз, ця публікація продовжиться після перезапуску "
+                    "(туди, куди вже вийшло, повторно не піде).",
+                    {"inline_keyboard": [[{"text": "⚡ Оновити зараз", "callback_data": "upd:1"},
+                                          {"text": "⏳ Після публікації", "callback_data": "upd:0"}]]})
+        new = updater.apply(self.cfg)
+        self.db.event(None, "updated", {"version": new, "manual": True})
+        self.db.set("control", "restart")  # головний цикл перезапустить бота за кілька секунд
+        return f"⬆️ Оновлено до {new} — перезапускаюсь (≈10 с).", None
+
     def stream_text(self) -> tuple[str, dict]:
         now = now_ts()
         until = int(self.db.get("stream_until") or 0)
@@ -688,6 +708,19 @@ class Bot:
             except TelegramError as e:
                 log.debug("edit platforms: %s", e)
             return
+        if action == "upd":
+            answer("Оновлюю…" if target else "Оновлю після публікації")
+            if target:
+                def work():
+                    try:
+                        text, _ = self.update_now(force=True)
+                    except Exception as e:  # noqa: BLE001
+                        text = f"⚠️ Оновлення не вдалося: {e}"
+                    self.say(chat, text, html_mode=False)
+                self._bg(work)
+            else:
+                self.db.set("update_available", "manual")  # планувальник оновить, щойно публікація завершиться
+            return self._delete(chat, [cq["message"]["message_id"]])
         if action == "stm":
             hours = target
             if hours:
@@ -1329,6 +1362,11 @@ class Bot:
         """Дія з панелі. Повертає текст для користувача; ValueError — зрозуміла помилка."""
         op = cmd.get("op")
         app = self.app
+        if op == "update":
+            text, kb = self.update_now(force=bool(cmd.get("force")))
+            if kb:  # йде публікація — панель покаже питання
+                raise ValueError(text + " Натисніть «⬆️ Оновити» ще раз, щоб оновитись усе одно.")
+            return text
         if op in ("report", "stats", "top"):
             from reports import analytics_text, collect, daily_report, weekly_top
             if op == "report":
@@ -1524,9 +1562,17 @@ class Bot:
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)
             from config import VERSION
-            self.db.set("update_available", "manual")  # планувальник перевірить GitHub і оновить протягом ~15 с
-            reply(f"🔍 Перевіряю оновлення… (у вас {VERSION}). Якщо є нова версія — встановлю й перезапущусь, "
-                  "якщо ні — напишу.", False)
+            wait = reply(f"🔍 Перевіряю оновлення… (у вас {VERSION})", False)
+
+            def work():
+                try:
+                    text, kb = self.update_now(force=False)
+                except Exception as e:  # noqa: BLE001
+                    text, kb = f"⚠️ Оновлення не вдалося: {e}", None
+                if wait:
+                    self._delete(chat, [wait["message_id"]])
+                self.say(chat, text, html_mode=False, reply_markup=kb)
+            self._bg(work)
         elif cmd == "/stream":
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)
