@@ -42,6 +42,21 @@ class CleanChatTest(FlowBase):
         for v in video_ids:
             self.assertNotIn(v, tg.deleted)          # відео шортса з прогресом лишається
 
+    def test_clean_chat_keeps_only_videos_and_reports(self):
+        tg = self.app.bot.tg
+        self.make_short("a")
+        self.app.scheduler.tick(self.ts(11, "09:00"))
+        item = self.app.db.items("status='notified'")[0]
+        video = self.app.db.tg_msg(item["id"], 42)["msg_id"]
+        self.app.bot.send("📊 звіт", keep=True)
+        report = self.last_id()
+        tg.msg_id += 20  # «старе сміття» до оновлення, про яке бот нічого не знає
+        self.app.bot.clean_chat(42)
+        cleaned = set(tg.deleted)
+        self.assertNotIn(video, cleaned)
+        self.assertNotIn(report, cleaned)
+        self.assertTrue({report + 5, report + 15, self.last_id()} <= cleaned)  # і тимчасове «🧹» теж
+
     def test_service_messages_expire(self):
         tg = self.app.bot.tg
         self.app.bot.send("🟢 poster запущено")

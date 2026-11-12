@@ -179,6 +179,13 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
     app.db.set("pid", os.getpid())
     app.bot.setup_commands()
     app.bot.start_panel_worker()
+    if app.db.get("chat_cleaned") != "1":  # один раз після оновлення — прибрати старе «сміття» з чату
+        app.db.set("chat_cleaned", "1")
+        for cid in app.bot.recipients():
+            try:
+                app.bot.clean_chat(cid)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Прибирання чату %s: %s", cid, e)
     from config import VERSION
     log.info("Версія %s", VERSION)
     log.info("poster запущено. Платформи: %s. dry_run=%s", list(app.platforms), cfg.get("dry_run"))
@@ -187,8 +194,8 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
     app.db.set("control", None)
     nxt = app.scheduler.upcoming(now_ts(), 1)
     paused = " ⏸ Розклад на паузі." if app.db.get("paused") == "1" else ""
-    app.bot.send(f"🟢 poster запущено. У черзі: {len(app.db.queue())}. Найближчий слот: "
-                 f"{fmt_slot(cfg, nxt[0]['slot_at']) if nxt else '—'}.{paused}", keyboard=True)
+    log.info("У черзі: %s. Найближчий слот: %s.%s", len(app.db.queue()),  # у Telegram не пишемо — там лише відео
+             fmt_slot(cfg, nxt[0]["slot_at"]) if nxt else "—", paused)
     last_tick = 0.0
     errors = 0
 
@@ -202,7 +209,6 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
             return False
         app.db.set("control", None)
         log.info("Зупинка за командою з панелі керування")
-        app.bot.send("🔴 poster зупинено з панелі керування.")
         return True
 
     while True:

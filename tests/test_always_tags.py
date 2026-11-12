@@ -105,7 +105,7 @@ class PrivacyTest(FlowBase):
         self.press(f"pub:{item['id']}", item)
         self.app.scheduler.tick(self.ts(11, "13:00"))
         self.assertIn("🔒 приватне", self.app.bot.tg.edits[-1][1])
-        self.assertTrue(any("YouTube зробив відео" in s[1] for s in self.app.bot.tg.sent if s[0] == "text"))
+        self.assertIn("YouTube зробив відео", self.app.bot.tg.edits[-1][1])  # примітка — у підписі відео, не окремо
 
 
 if __name__ == "__main__":

@@ -51,10 +51,9 @@ class RetryTest(FlowBase):
     def test_summary_and_retry_now(self):
         it = self.app.db.get_item(self.item["id"])
         self.assertEqual(it["status"], "posted")
-        summary = [s for s in self.app.bot.tg.sent if s[0] == "text" and "Не опубліковано" in s[1]][-1]
-        self.assertIn("ProcessingFailedError", summary[1])
-        self.assertIn("rf:", json.dumps(summary[2]))
-        self.assertIn("rf:", json.dumps(self.app.bot.tg.edits[-1][2]))  # кнопки й під самим відео
+        self.assertFalse([s for s in self.app.bot.tg.sent if s[0] == "text" and "Не опубліковано" in s[1]])
+        self.assertIn("ProcessingFailedError", self.app.bot.tg.edits[-1][1])  # причина — у підписі відео
+        self.assertIn("rf:", json.dumps(self.app.bot.tg.edits[-1][2]))  # кнопки під самим відео
         self.say("⚠️ Невдалі")
         self.assertTrue(any("Невдалі публікації: 1" in s[1] for s in self.app.bot.tg.sent if s[0] == "text"))
         self.assertEqual(self.app.bot.tg.sent[-1][0], "video")

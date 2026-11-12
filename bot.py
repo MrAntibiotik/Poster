@@ -40,6 +40,7 @@ HELP_ADMIN = (
     "/platforms — увімкнути / вимкнути платформи для всіх шортсів\n"
     "/failed — невдалі публікації: причина, повтор зараз / пізніше / у вільний слот\n"
     "/update — оновити програму з GitHub зараз\n"
+    "/clean — прибрати з чату все, крім відео шортсів, звітів і аналітики\n"
     "/stream — режим стріму: ПК не засне (і за бажанням публікації чекають кінця стріму)\n"
     "/menu — показати кнопки\n"
     "/cancel — скасувати введення назви"
@@ -88,10 +89,11 @@ def user_name(u: dict) -> str:
 
 
 REPLY_TTL = 15 * 60      # відповіді на кнопки зникають за 15 хв (або при наступній дії)
-AUTO_TTL = 6 * 3600      # службові повідомлення (нові в черзі, запуск, примітки) — за 6 год
+AUTO_TTL = 30 * 60       # службові повідомлення (нові в черзі, оновлення, помилки) — за 30 хв
 
 class Bot:
     def __init__(self, app):
+        self._last_incoming: dict[int, int] = {}
         self.app = app
         self.cfg = app.cfg
         self.db = app.db
@@ -217,7 +219,50 @@ class Bot:
             self.keep_latest(chat_id, keep, msg)
         elif not keep:
             self.ephemeral(chat_id, msg, ttl)
+        else:
+            self._remember_kept(chat_id, msg)
         return msg
+
+    def _remember_kept(self, chat_id: int, msg) -> None:
+        mid = msg.get("message_id") if isinstance(msg, dict) else msg
+        if not mid:
+            return
+        key = f"kept:{chat_id}"
+        try:
+            ids = json.loads(self.db.get(key) or "[]")
+        except ValueError:
+            ids = []
+        self.db.set(key, json.dumps((ids + [int(mid)])[-500:]))
+
+    def clean_chat(self, chat_id: int, latest: int | None = None, depth: int = 1500) -> int:
+        """Прибирає з чату все, крім відео шортсів, звітів і аналітики (Telegram дозволяє лише за 48 год)."""
+        keep = {int(r["msg_id"]) for r in self.db.q("SELECT msg_id FROM tg_msgs WHERE chat_id=?", (int(chat_id),))}
+        for r in self.db.q("SELECT key, value FROM kv WHERE key LIKE ?", (f"keep:{chat_id}:%",)):
+            if r["value"] and str(r["value"]).isdigit():
+                keep.add(int(r["value"]))
+        try:
+            keep.update(json.loads(self.db.get(f"kept:{chat_id}") or "[]"))
+        except ValueError:
+            pass
+        known = set(keep)
+        for k in (f"eph:{chat_id}", f"trash:{chat_id}"):
+            try:
+                rows = json.loads(self.db.get(k) or "[]")
+                known.update(r[0] if isinstance(r, list) else r for r in rows)
+            except ValueError:
+                pass
+        if not latest:  # точний номер останнього повідомлення — через тимчасове «🧹»
+            try:
+                latest = int(self.tg.send_message(chat_id, "🧹 Прибираю чат…", html=False)["message_id"])
+            except (TelegramError, KeyError, TypeError):
+                latest = max(known) + 30 if known else 0
+        if not latest:
+            return 0
+        ids = [i for i in range(max(1, latest - depth), latest + 1) if i not in keep]
+        self._delete(chat_id, ids)
+        self.db.set(f"eph:{chat_id}", None)
+        self.db.set(f"trash:{chat_id}", None)
+        return len(ids)
 
     # ---------- охайний чат: лишаються відео з прогресом, звіти й аналітика ----------
     def ephemeral(self, chat_id: int, msg, ttl: int = REPLY_TTL) -> None:
@@ -409,7 +454,8 @@ class Bot:
                 lock = {"SELF_ONLY": " 🔒 приватно", "private": " 🔒 приватне",
                         "unlisted": " 🔗 за посиланням"}.get(r.get("privacy"), "")
                 link = f'<a href="{esc(r["url"])}">{NAMES[p]}</a>' if r.get("url") else f"{NAMES[p]} ✅"
-                lines.append(f"{SHORT[p]}: {link}{lock}")
+                note = str(r.get("note") or "").replace(f"{NAMES[p]}: ", "")
+                lines.append(f"{SHORT[p]}: {link}{lock}" + (f" <i>({esc(note[:90])})</i>" if note else ""))
             else:
                 lines.append(f"{SHORT[p]}: ❌ {esc(str(r.get('error', ''))[:120])}")
         return ("\n" + "\n".join(lines)) if lines else ""
@@ -681,11 +727,11 @@ class Bot:
             return answer()
         if action == "acc" and rest:
             result = self.set_access(target, rest[0], by=chat)
-            answer(result[:200])
+            answer(result[:200], True)
             try:
                 text, kb = self.users_text()
                 if "Запит на доступ" in ((cq.get("message") or {}).get("text") or ""):
-                    self.tg.edit_text(chat, cq["message"]["message_id"], esc(result))
+                    self._delete(chat, [cq["message"]["message_id"]])  # рішення — у спливному вікні, чат чистий
                 else:
                     self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
             except TelegramError as e:
@@ -928,11 +974,22 @@ class Bot:
         return "\n".join(lines)
 
     def notify_failed(self, item_id: int) -> None:
+        """Невдача видна в підписі самого відео (з кнопками повтору). Окреме повідомлення — лише якщо відео в чаті немає."""
         item = self.db.get_item(item_id)
         if not item:
             return
         for cid in self.admins():
-            self.say(cid, self.failed_text(item), reply_markup=self.retry_keyboard(item_id), keep=True)
+            if self.db.tg_msg(item_id, cid):
+                continue
+            self.say(cid, self.failed_text(item), reply_markup=self.retry_keyboard(item_id), keep=f"failed{item_id}")
+
+    def drop_failed_card(self, item_id: int) -> None:
+        for cid in self.admins():
+            key = f"keep:{cid}:failed{item_id}"
+            mid = self.db.get(key)
+            if mid:
+                self._delete(cid, [int(mid)])
+                self.db.set(key, None)
 
     def retry_button(self, chat: int, item_id: int, action: str, cq: dict, answer) -> None:
         item = self.db.get_item(item_id)
@@ -1471,6 +1528,7 @@ class Bot:
             return
         if text in BTN:
             text = BTN[text]
+        self._last_incoming = {**(getattr(self, "_last_incoming", None) or {}), chat: int(m.get("message_id") or 0)}
         in_dialog = bool(self.dialog_get(chat) or self.db.get(f"await_title:{chat}"))
         if not in_dialog:  # нова дія — прибираємо попередні відповіді й натискання кнопок
             self.purge(chat)
@@ -1558,6 +1616,8 @@ class Bot:
             self.db.set("paused", None)
             self.db.event(None, "resumed", {"by": chat})
             self.send("▶️ Розклад відновлено.", keyboard=True)
+        elif cmd == "/clean":
+            self.clean_chat(chat, latest=(self._last_incoming or {}).get(chat))
         elif cmd == "/update":
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)

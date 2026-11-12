@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import media
-from config import NAMES, PLATFORMS, local_dt, now_ts
+from config import PLATFORMS, local_dt, now_ts
 from meta import apply_always_hashtags, load_meta, move_pair, read_json, write_json
 from platforms import TokenExpired
 
@@ -100,6 +100,8 @@ class Publisher:
         db.set("last_activity", now_ts())  # після публікації ПК ще кілька хвилин не засне
         if ok and hasattr(app.bot, "drop_all_texts"):
             app.bot.drop_all_texts(item_id)  # назва й хештеги вже в підписі відео — окреме повідомлення не потрібне
+        if not failed and hasattr(app.bot, "drop_failed_card"):
+            app.bot.drop_failed_card(item_id)  # усе вийшло — окреме повідомлення про невдачу більше не потрібне
         if failed and hasattr(app.bot, "notify_failed"):
             app.bot.notify_failed(item_id)
         log.info("#%s: успішно %s, помилки %s", item_id, ok, failed)
@@ -124,8 +126,6 @@ class Publisher:
                                  item["mp4"], Path(item["mp4"]).stat().st_size / 1024 / 1024)
                     r = plat.publish(item["mp4"], meta)
                 log.info("#%s %s: опубліковано %s", item["id"], key, r.get("url"))
-                if r.get("note") and key in ("youtube", "instagram"):
-                    app.bot.send(f"ℹ️ {NAMES[key]}, шортс #{item['id']}: {r['note']}")
                 return {"status": "ok", "attempts": i, "published_at": now_ts(), **r}
             except TokenExpired as e:
                 log.error("#%s %s: потрібна авторизація: %s", item["id"], key, e)
