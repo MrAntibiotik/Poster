@@ -870,6 +870,16 @@ class Bot:
             except TelegramError as e:
                 log.debug("edit platforms: %s", e)
             return
+        if action == "an":
+            import analytics
+            answer(analytics.PERIODS.get(target, ""))
+            try:
+                self.tg.edit_text(chat, cq["message"]["message_id"],
+                                  analytics.period_report(self.cfg, self.db, target, list(self.app.platforms)),
+                                  analytics.keyboard(target))
+            except TelegramError as e:
+                log.debug("analytics edit: %s", e)
+            return
         if action == "upd":
             answer("Оновлюю…" if target else "Оновлю після публікації")
             if target:
@@ -1586,12 +1596,16 @@ class Bot:
                 raise ValueError(text + " Натисніть «⬆️ Оновити» ще раз, щоб оновитись усе одно.")
             return text
         if op in ("report", "stats", "top"):
-            from reports import analytics_text, collect, daily_report, weekly_top
+            from reports import collect, daily_report, weekly_top
             if op == "report":
                 text = daily_report(app)
             else:
                 stats = collect(app)
-                text = analytics_text(app, stats) if op == "stats" else weekly_top(app, stats)
+                if op == "stats":
+                    import analytics
+                    text = analytics.period_report(self.cfg, self.db, 1, list(app.platforms))
+                else:
+                    text = weekly_top(app, stats)
             if cmd.get("send"):
                 self.send(text, html_mode=True)
             return text
@@ -1736,14 +1750,20 @@ class Bot:
             wait = self.task_start(chat, "⏳ Збираю статистику з платформ…")
 
             def work(which=cmd):
-                from reports import analytics_text, collect, weekly_top
+                from reports import collect, weekly_top
+                import analytics
+                kb = None
                 try:
                     stats = collect(app)
-                    text = analytics_text(app, stats) if which == "/stats" else weekly_top(app, stats)
+                    if which == "/stats":  # доба + кнопки періодів (тиждень … рік — з бази, миттєво)
+                        text = analytics.period_report(self.cfg, self.db, 1, list(app.platforms))
+                        kb = analytics.keyboard(1)
+                    else:
+                        text = weekly_top(app, stats)
                 except Exception as e:  # noqa: BLE001
                     log.exception("Аналітика")
                     text = f"❌ Не вдалося зібрати статистику: {esc(str(e))}"
-                self.task_done(chat, wait, text)  # сповіщення «⏳…» перетворюється на результат
+                self.task_done(chat, wait, text, kb)  # сповіщення «⏳…» перетворюється на результат
             if getattr(app.publisher, "sync", False):
                 work()
             else:

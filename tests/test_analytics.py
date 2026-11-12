@@ -84,6 +84,34 @@ class AnalyticsTest(FlowBase):
         self.assertIn("🥇 <b>Титул a</b>", wt)  # a: 900 + 50 = 950 > b: 900 + 20 = 920
         self.assertIn("Усього за тиждень: 2 шортсів", wt)
 
+    def test_periods_top_and_best_days(self):
+        import analytics
+        a = self.publish("a", 11, "10:00")
+        b = self.publish("b", 11, "13:00")
+        c = self.publish("c", 12, "19:00")
+        ya, yb, yc = (x["results"]["youtube"]["id"] for x in (a, b, c))
+        db = self.app.db
+        # знімки статистики в різні дні (так їх збирає collect щодня)
+        for day, va, vb, vc in ((12, 100, 50, 0), (13, 900, 60, 400), (19, 5000, 70, 600)):
+            self.yt.views.update({ya: va, yb: vb, yc: vc})
+            config.FAKE_NOW = self.ts(day, "22:31")
+            collect(self.app)
+        for it, v24 in ((a, 100), (b, 50), (c, 400)):
+            res = dict(db.get_item(it["id"])["results"])
+            res["youtube"] = {**res["youtube"], "views24": v24}
+            db.update_item(it["id"], results=res)
+        now = self.ts(19, "22:40")
+        week = analytics.period_report(self.cfg, db, 7, ["youtube", "tiktok"], now)
+        self.assertIn("Аналітика: тиждень", week)
+        self.assertIn("🥇", week)
+        self.assertLess(week.index("Титул a"), week.index("Титул c"))  # a набрав за тиждень більше
+        month = analytics.period_report(self.cfg, db, 30, ["youtube", "tiktok"], now)
+        self.assertIn("Опубліковано шортсів: <b>3</b>", month)
+        self.assertIn("Найкращі дні публікації", month)
+        self.assertIn("четвер: 👁 400", month)  # c опубліковано в четвер 12.11 — 400 за першу добу
+        self.assertIn("19:00–19:59", month)
+        self.assertEqual(analytics.keyboard(30)["inline_keyboard"][0][2]["text"], "• Місяць •")
+
     def test_buttons_menu_and_viewer_access(self):
         tg = self.app.bot.tg
         calls = []
@@ -103,7 +131,7 @@ class AnalyticsTest(FlowBase):
         self.app.db.set_user(777, "viewer", "Друг")
         self.app.bot.handle({"update_id": 2, "message": {"text": "📈 Аналітика", "chat": {"id": 777, "type": "private"}}})
         out = [s[1] for s in tg.sent if s[-1] == 777] + [e[1] for e in tg.edits]  # «⏳…» стає результатом
-        self.assertTrue(any("📈 <b>Аналітика за добу</b>" in t for t in out))
+        self.assertTrue(any("📊 <b>Аналітика: доба</b>" in t for t in out))
         self.assertTrue(any("YouTube" in t for t in out))
 
     def test_dry_run_and_errors(self):

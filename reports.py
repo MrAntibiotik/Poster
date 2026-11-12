@@ -254,11 +254,15 @@ def collect(app, days: int = 8) -> dict:
         except Exception as e:  # noqa: BLE001
             log.warning("Статистика акаунта %s: %s", key, e)
             out["errors"][key] = str(e)[:150]
-    for item in db.items("status='posted' AND posted_at>=?", (now - days * DAY,), order="posted_at DESC"):
+    from analytics import snapshot_due
+    for item in db.items("status='posted' AND posted_at>=?", (now - 400 * DAY,), order="posted_at DESC"):
+        recent = item["posted_at"] >= now - days * DAY
         title = _title(item)
         for key, res in item["results"].items():
             if res.get("status") != "ok" or key not in app.platforms or dry:
                 continue
+            if not recent and not snapshot_due(db, item, key, now):
+                continue  # старі відео: знімок щотижня / щомісяця — для аналітики за 3–12 міс.
             try:
                 st = app.platforms[key].get_stats(res) or {}
             except Exception as e:  # noqa: BLE001
@@ -267,8 +271,9 @@ def collect(app, days: int = 8) -> dict:
             if st:
                 db.x("INSERT INTO post_stats(item_id, platform, ts, views, likes, comments) VALUES (?,?,?,?,?,?)",
                      (item["id"], key, now, st.get("views"), st.get("likes"), st.get("comments")))
-            out["posts"].append({"item_id": item["id"], "title": title, "platform": key, "url": res.get("url"),
-                                 "posted_at": item["posted_at"], **st})
+            if recent:
+                out["posts"].append({"item_id": item["id"], "title": title, "platform": key, "url": res.get("url"),
+                                     "posted_at": item["posted_at"], **st})
     return out
 
 

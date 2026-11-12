@@ -352,6 +352,13 @@ class Panel:
         if name == "item":
             cmd = {k: data.get(k) for k in ("op", "id", "title", "tags", "when", "platform") if k in data}
             return self.bot_call(cmd, 180 if cmd.get("op") in ("publish", "save", "regen") else 40)
+        if name == "analytics":
+            import analytics
+            days = int(data.get("days") or 1)
+            plats = [p for p in PLATFORMS if self.cfg["platforms"].get(p, {}).get("enabled")]
+            self.jobs["report"] = {"state": "ok", "message": analytics.period_report(self.cfg, self.db, days, plats),
+                                   "finished": now_ts()}
+            return analytics.PERIODS.get(days, "")
         if name == "report":
             kind = data.get("kind")
             if kind not in ("report", "stats", "top"):

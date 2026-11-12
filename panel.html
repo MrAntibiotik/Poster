@@ -167,6 +167,10 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
         <button class="btn" data-report="stats">📈 Аналітика</button>
         <button class="btn" data-report="top">🏆 Топ тижня</button>
         <label class="small"><input type="checkbox" id="repSend"> також надіслати в Telegram</label></div>
+      <div class="row" style="margin-top:8px"><span class="small muted">Період (з накопиченої статистики, миттєво):</span>
+        <button class="btn" data-period="1">Доба</button><button class="btn" data-period="7">Тиждень</button>
+        <button class="btn" data-period="30">Місяць</button><button class="btn" data-period="90">3 міс</button>
+        <button class="btn" data-period="180">6 міс</button><button class="btn" data-period="365">Рік</button></div>
       <div class="out hidden" id="repOut"></div></div>
 
     <div class="card"><h2>🧪 Тест</h2>
@@ -773,6 +777,9 @@ document.addEventListener("click", ev => {
     if (op === "publish") { if (!confirm("Опублікувати шортс #" + body.id + " зараз?")) return; body.when = "now"; }
     if (b.dataset.platform) body.platform = b.dataset.platform;
     run(() => api("/api/action", body), b, op === "regen" ? "Перегенеровую…" : null);
+  } else if (b.dataset.period) {
+    $("#repOut").classList.remove("hidden"); $("#repOut").dataset.h = "";
+    run(() => api("/api/action", {name:"analytics", days:+b.dataset.period}), b);
   } else if (b.dataset.report) {
     $("#repOut").classList.remove("hidden"); $("#repOut").dataset.h = ""; $("#repOut").textContent = "⏳ Збираю дані…";
     run(() => api("/api/action", {name:"report", kind:b.dataset.report, send:$("#repSend").checked}), b);
