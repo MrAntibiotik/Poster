@@ -628,7 +628,8 @@ class Scheduler:
             self.db.set("control", None)
             self.db.set("update_available", "manual")
         last = int(self.db.get("update_check_ts") or 0)
-        if now - last >= float(up.get("check_hours", 3)) * 3600 and not (self._upd_thread and self._upd_thread.is_alive()):
+        every = max(1.0, float(up.get("check_minutes") or 5)) * 60
+        if now - last >= every and not (self._upd_thread and self._upd_thread.is_alive()):
             self.db.set("update_check_ts", now)
 
             def work():
@@ -641,7 +642,8 @@ class Scheduler:
                         log.info("Є оновлення: %s → %s", info["local"], info["remote"])
                         self.db.set("update_available", info["remote"])
                 except Exception as e:  # noqa: BLE001
-                    log.warning("Перевірка оновлень: %s", e)
+                    if self.db.get("update_error") != str(e)[:300]:  # раз на 5 хв — не засмічуємо журнал
+                        log.warning("Перевірка оновлень: %s", e)
                     self.db.set("update_error", str(e)[:300])
             self._upd_thread = threading.Thread(target=work, daemon=True, name="update-check")
             self._upd_thread.start()

@@ -80,7 +80,7 @@ class UpdaterTest(unittest.TestCase):
 
 class AutoUpdateFlowTest(FlowBase):
     def test_installs_when_idle_and_requests_restart(self):
-        self.cfg["updates"] = {"auto": True, "check_hours": 3}
+        self.cfg["updates"] = {"auto": True, "check_minutes": 5}
         applied = []
         orig = (updater.check, updater.apply)
         updater.check = lambda cfg: {"local": "1", "remote": "2099.01.01-1", "newer": True}

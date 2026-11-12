@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.12-41"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.12-42"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -32,8 +32,8 @@ DEFAULTS: dict = {
     # Якщо шортс не підтвердили до слоту: wait — чекати й опублікувати одразу після «🚀» (ПК не засне),
     # skip — у кінець черги, auto — опублікувати самому з поточною назвою й хештегами
     "on_missed_approval": "wait",
-    # Автооновлення з GitHub: перевірка кожні N год, встановлення, коли бот нічим не зайнятий
-    "updates": {"auto": True, "repo": "MrAntibiotik/poster", "branch": "main", "check_hours": 3},
+    # Автооновлення з GitHub: перевірка кожні N хв, встановлення, коли бот нічим не зайнятий
+    "updates": {"auto": True, "repo": "MrAntibiotik/poster", "branch": "main", "check_minutes": 5},
     # Сон між слотами (Windows): прокидатися за N хв до публікації, засинати, коли роботи немає
     "power": {"sleep_between_slots": False, "wake_before_minutes": 5,
               "quiet_minutes": 5,           # не засинати, поки минуло менше N хв від вашої дії в боті / публікації

@@ -421,12 +421,12 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
   <!-- ================= БЕЗПЕКА ================= -->
   <section data-page="upd" class="hidden">
     <div class="card"><h2>🔄 Оновлення програми <span id="updStatus" class="pill"></span></h2>
-      <p class="small">Програма сама перевіряє GitHub і, коли нічим не зайнята (нічого не публікується, ви 5 хв не клацали в боті),
+      <p class="small">Програма кожні кілька хвилин перевіряє GitHub і, коли нічим не зайнята (нічого не публікується, ви 5 хв не клацали в боті),
         завантажує нову версію й перезапускається. Ваші налаштування, токени, база й журнал <b>не змінюються</b>;
         перед оновленням робиться резервна копія (папка <code>data\backup</code>).</p>
       <div class="row"><span>У вас: <b id="updLocal"></b></span><span>На GitHub: <b id="updRemote">—</b></span></div>
       <label class="check"><input type="checkbox" data-set="updates.auto"> Оновлюватися автоматично</label>
-      <div class="two"><div><label class="f">Перевіряти кожні, год</label><input type="number" min="1" max="48" data-set="updates.check_hours"></div></div>
+      <div class="two"><div><label class="f">Перевіряти кожні, хв</label><input type="number" min="1" max="1440" data-set="updates.check_minutes"></div></div>
       <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button>
         <button class="btn" data-act="update_check">🔍 Перевірити зараз</button>
         <button class="btn" data-act="update_now" id="bUpdNow">⬆️ Оновити зараз</button></div>

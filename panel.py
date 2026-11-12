@@ -70,7 +70,7 @@ FIELDS = {
     "always_hashtags.tags": "taglist", "always_hashtags.in_title": "bool", "always_hashtags.in_captions": "bool",
     "ai.enabled": "bool", "ai.model": "str", "ai.hashtags_count": "int", "ai.channel_description": "str",
     "ai.extra_prompt": "str",
-    "on_missed_approval": "missed", "updates.auto": "bool", "updates.check_hours": "int", "power.sleep_between_slots": "bool",
+    "on_missed_approval": "missed", "updates.auto": "bool", "updates.check_minutes": "int", "power.sleep_between_slots": "bool",
     "power.wake_before_minutes": "int", "power.quiet_minutes": "int", "power.hold_during_stream": "bool",
     "power.no_sleep_apps": "applist",
 }
