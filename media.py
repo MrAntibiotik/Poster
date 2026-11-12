@@ -138,13 +138,13 @@ def ig_problems(p: dict) -> list[str]:
     return out
 
 
-def instagram_copy(path: str, cfg: dict) -> str:
+def instagram_copy(path: str, cfg: dict, lite: bool = False) -> str:
     """Копія під вимоги Instagram Reels: H.264 High, yuv420p, ≤1080 по ширині (для 9:16 — 1080×1920),
     та сама частота кадрів, до 20 Мбіт/с, AAC 128 кбіт/с 48 кГц, faststart. Оригінал не змінюється."""
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
     key = hashlib.md5(f"{path}|{os.path.getmtime(path)}".encode()).hexdigest()[:10]
-    out = cache / f"{Path(path).stem}_{key}_ig.mp4"
+    out = cache / f"{Path(path).stem}_{key}_{'igl' if lite else 'ig'}.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
     p = ig_probe(path, cfg["ffprobe"])
@@ -153,8 +153,8 @@ def instagram_copy(path: str, cfg: dict) -> str:
     g = int(round(min(max(fps, 23), 60) * 2))
     vf = "scale='if(gt(iw,ih),min(iw,1920),min(iw,1080))':-2:flags=lanczos,format=yuv420p"
     args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-vf", vf, *fps_args,
-            "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-crf", "17",
-            "-maxrate", "20M", "-bufsize", "40M", "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
+            "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-crf", "21" if lite else "17",
+            "-maxrate", "6M" if lite else "20M", "-bufsize", "12M" if lite else "40M", "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
             "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", str(out)]
     log.info("Готую копію під вимоги Instagram: %s", path)
     r = run_hidden(args, timeout=3600)
@@ -240,7 +240,8 @@ def telegram_copy(path: str, cfg: dict) -> str:
 def drop_previews(path: str, cfg: dict) -> None:
     cache = Path(cfg["paths"]["data"]) / "previews"
     for p in [*cache.glob(f"{Path(path).stem}_*_720p.mp4"), *cache.glob(f"{Path(path).stem}_*_tg.mp4"),
-              *cache.glob(f"{Path(path).stem}_*_ig.mp4")]:
+              *cache.glob(f"{Path(path).stem}_*_ig.mp4"),
+              *cache.glob(f"{Path(path).stem}_*_igl.mp4")]:
         try:
             p.unlink()
         except OSError:
