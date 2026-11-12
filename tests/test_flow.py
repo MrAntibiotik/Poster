@@ -185,7 +185,8 @@ class FlowTest(FlowBase):
 
         # Перегляди через 24 год
         sch.tick(self.ts(12, "13:05"))
-        self.assertTrue(any("Статистика за 24 год" in s[1] for s in tg.sent if s[0] == "text"))
+        self.assertFalse(any("Статистика за 24 год" in s[1] for s in tg.sent if s[0] == "text"))  # не окремо —
+        self.assertTrue(self.app.db.items("stats_sent=1"))  # перегляди за добу з'являються в підписі відео
 
     def test_skip_three_times_and_restart(self):
         self.make_short("a")

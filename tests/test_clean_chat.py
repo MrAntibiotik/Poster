@@ -59,6 +59,28 @@ class CleanChatTest(FlowBase):
         self.assertNotIn(report, cleaned)
         self.assertTrue({report + 5, report + 15, self.last_id()} <= cleaned)  # і тимчасове «🧹» теж
 
+    def test_auto_reports_replace_and_service_resolves(self):
+        tg, bot = self.app.bot.tg, self.app.bot
+        bot.send("📊 звіт 1", kind="daily")
+        first = self.last_id()
+        bot.send("📊 звіт 2", kind="daily")
+        self.assertIn(first, tg.deleted)  # лишається лише останній автозвіт
+        bot.send(keep="reauth_youtube", text="🔑 Потрібна повторна авторизація")
+        need = self.last_id()
+        self.say("🕐 Статус", 6001)
+        self.assertNotIn(need, tg.deleted)  # службове — висить, доки не вирішено
+        bot.resolve("reauth_youtube")
+        self.assertIn(need, tg.deleted)  # вирішено — зникло
+
+    def test_views_24h_in_video_caption(self):
+        self.make_short("a")
+        self.app.scheduler.tick(self.ts(11, "09:00"))
+        item = self.app.db.items("status='notified'")[0]
+        self.app.db.update_item(item["id"], status="posted", results={
+            "youtube": {"status": "ok", "url": "https://yt/x", "views24": 1500, "likes24": 40}})
+        self.app.bot.refresh(item["id"])
+        self.assertIn("👁 1 500 ❤️ 40", self.app.bot.tg.edits[-1][1])
+
     def test_service_messages_expire(self):
         tg = self.app.bot.tg
         self.app.bot.send("🟢 poster запущено")

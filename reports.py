@@ -197,7 +197,14 @@ def send_stats(app, item: dict) -> None:
         else:
             lines.append(f"{SHORT[p]} {name}: {esc(v)}")
     lines.append(f"Разом: <b>{total:,}</b>".replace(",", " "))
-    app.bot.send("\n".join(lines), html_mode=True, to="all")
+    # окремого повідомлення немає — перегляди за добу з'являються в підписі відео
+    results = dict(item["results"])
+    for p, v in views.items():
+        if isinstance(v, int):
+            results[p] = {**results[p], "views24": v, **({"likes24": likes[p]} if p in likes else {})}
+    db.update_item(item["id"], results=results)
+    if hasattr(app.bot, "refresh"):
+        app.bot.refresh(item["id"])
     try:
         data = read_json(item["json"])
         data.setdefault("posting", {})["views_24h"] = views

@@ -192,7 +192,7 @@ class Scheduler:
                 lines.append(f"• #{it['id']} {html.escape(Path(it['mp4']).stem)} ({it['reason']})")
             if len(removed) > 15:
                 lines.append(f"… і ще {len(removed) - 15}")
-            self.app.bot.send("\n".join(lines), html_mode=True)
+            self.app.bot.send("\n".join(lines), html_mode=True, kind="removed")
         return removed
 
     def announce_queued(self, item_ids: list[int]) -> None:
@@ -216,7 +216,7 @@ class Scheduler:
             lines.append(f"… і ще {len(item_ids) - 15}")
         lines.append("⏸ Розклад на паузі — час зсунеться після «Продовжити»." if paused else
                      f"За {self.cfg['notify_before_minutes']} хв до часу прийде шортс із кнопкою «🚀 Опублікувати».")
-        self.app.bot.send("\n".join(lines), html_mode=True)
+        self.app.bot.send("\n".join(lines), html_mode=True, kind="announce")
 
     # ---------- розклад наперед ----------
     def future_slots(self, now: int, count: int) -> list[int]:
@@ -550,9 +550,9 @@ class Scheduler:
                 stats = collect(self.app)
             except Exception:  # noqa: BLE001
                 log.exception("Збір статистики для звіту")
-            self.app.bot.send(daily_report(self.app, now, stats), html_mode=True, to="all")
+            self.app.bot.send(daily_report(self.app, now, stats), html_mode=True, to="all", kind="daily")
             if weekly and stats:
-                self.app.bot.send(weekly_top(self.app, stats), html_mode=True, to="all")
+                self.app.bot.send(weekly_top(self.app, stats), html_mode=True, to="all", kind="weekly")
         if getattr(self.app.publisher, "sync", False):
             work()
         else:
@@ -808,6 +808,7 @@ class Scheduler:
             try:
                 info = plat.check()
                 out[key] = f"✅ {info}"
+                self.app.bot.resolve(f"reauth_{key}")  # доступ є — повідомлення «потрібна авторизація» прибираємо
                 warn = plat.token_warning()
                 if warn:
                     out[key] = f"⚠️ {warn}"

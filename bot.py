@@ -205,7 +205,7 @@ class Bot:
 
     # ================= службові повідомлення =================
     def say(self, chat_id: int, text: str, html_mode: bool = True, reply_markup=None,
-            keep: bool | str = False, ttl: int = REPLY_TTL):
+            keep: bool | str = False, ttl: int = REPLY_TTL, kind: str | None = None):
         """keep=False — тимчасове (зникне при наступній дії або через ttl с);
         keep=True — лишається назавжди; keep='kind' — лишається лише останнє такого типу."""
         try:
@@ -219,9 +219,23 @@ class Bot:
             self.keep_latest(chat_id, keep, msg)
         elif not keep:
             self.ephemeral(chat_id, msg, ttl)
+            if kind:  # автоматичне повідомлення того ж типу (звіт дня, нові в черзі…) — лишається лише останнє
+                old = self.db.get(f"ekind:{chat_id}:{kind}")
+                self.db.set(f"ekind:{chat_id}:{kind}", msg.get("message_id") if isinstance(msg, dict) else None)
+                if old and str(old).isdigit():
+                    self._delete(chat_id, [int(old)])
         else:
             self._remember_kept(chat_id, msg)
         return msg
+
+    def resolve(self, kind: str) -> None:
+        """Службове повідомлення більше не актуальне (напр. авторизацію відновлено) — прибираємо."""
+        for cid in self.recipients():
+            key = f"keep:{cid}:{kind}"
+            mid = self.db.get(key)
+            if mid and str(mid).isdigit():
+                self._delete(cid, [int(mid)])
+            self.db.set(key, None)
 
     # ---------- завдання, що виконуються: сповіщення висить, доки не завершиться ----------
     def task_start(self, chat_id: int, text: str):
@@ -390,11 +404,12 @@ class Bot:
                 self.db.x("UPDATE tg_msgs SET text_msg_id=NULL WHERE item_id=? AND chat_id=?", (item_id, r["chat_id"]))
 
     def send(self, text: str, html_mode: bool = False, to: str = "admins", keyboard: bool = False,
-             keep: bool | str = False) -> None:
+             keep: bool | str = False, kind: str | None = None) -> None:
         """to: 'admins' — службові повідомлення; 'all' — також глядачам (звіти, перегляди).
         Службові повідомлення (keep=False) самі зникають за кілька годин або при наступній дії."""
         for cid in (self.recipients() if to == "all" else self.admins()):
-            self.say(cid, text, html_mode, self.reply_keyboard(cid) if keyboard else None, keep=keep, ttl=AUTO_TTL)
+            self.say(cid, text, html_mode, self.reply_keyboard(cid) if keyboard else None, keep=keep, ttl=AUTO_TTL,
+                     kind=kind)
 
     def notify_reauth(self, key: str, reason: str) -> None:
         k = f"reauth_{key}"
@@ -403,7 +418,7 @@ class Bot:
             return
         self.db.set(k, now_ts())
         hint = self.app.platforms[key].reauth_hint if key in self.app.platforms else f"python poster.py auth {key}"
-        self.send(keep=True, text=f"🔑 <b>Потрібна повторна авторизація: {NAMES[key]}</b>\n"
+        self.send(keep=f"reauth_{key}", text=f"🔑 <b>Потрібна повторна авторизація: {NAMES[key]}</b>\n"
                   f"Причина: {esc(reason[:300])}\n\nНа ПК: панель керування → {NAMES[key]} → «Авторизувати»\n"
                   f"або команда <code>{esc(hint)}</code>", html_mode=True)
 
@@ -485,7 +500,10 @@ class Bot:
                         "unlisted": " 🔗 за посиланням"}.get(r.get("privacy"), "")
                 link = f'<a href="{esc(r["url"])}">{NAMES[p]}</a>' if r.get("url") else f"{NAMES[p]} ✅"
                 note = str(r.get("note") or "").replace(f"{NAMES[p]}: ", "")
-                lines.append(f"{SHORT[p]}: {link}{lock}" + (f" <i>({esc(note[:90])})</i>" if note else ""))
+                st = ""
+                if isinstance(r.get("views24"), int):
+                    st = f" · 👁 {r['views24']:,}".replace(",", " ") + (f" ❤️ {r['likes24']}" if r.get("likes24") is not None else "")
+                lines.append(f"{SHORT[p]}: {link}{lock}{st}" + (f" <i>({esc(note[:90])})</i>" if note else ""))
             else:
                 lines.append(f"{SHORT[p]}: ❌ {esc(str(r.get('error', ''))[:120])}")
         return ("\n" + "\n".join(lines)) if lines else ""
