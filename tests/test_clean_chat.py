@@ -104,6 +104,27 @@ class CleanChatTest(FlowBase):
         self.assertIn("✅ <b>Опубліковано</b>", tg.edits[n][1])
         self.assertEqual(bot.heal(), 0)
 
+    def test_text_card_upgraded_to_video(self):
+        tg, bot, db = self.app.bot.tg, self.app.bot, self.app.db
+        self.make_short("a")
+        orig = tg.send_video
+
+        def fail(*a, **kw):
+            from telegram_api import TelegramError
+            raise TelegramError("немає інтернету")
+        tg.send_video = fail
+        self.app.scheduler.tick(self.ts(11, "09:00"))  # відео не пішло — картка текстом
+        item = db.items("status='notified'")[0]
+        old = db.tg_msg(item["id"], 42)
+        self.assertEqual(old["is_text"], 1)
+        tg.send_video = orig
+        db.set(f"upgrade_try:{item['id']}:42", None)  # минуло 30 хв від попередньої спроби
+        self.assertEqual(bot.upgrade_text_cards(), 1)
+        new = db.tg_msg(item["id"], 42)
+        self.assertEqual(new["is_text"], 0)
+        self.assertIn(old["msg_id"], tg.deleted)
+        self.assertEqual(tg.sent[-1][0], "video")
+
     def test_service_messages_expire(self):
         tg = self.app.bot.tg
         self.app.bot.send("🟢 poster запущено")

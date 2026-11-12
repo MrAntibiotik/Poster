@@ -738,7 +738,39 @@ class Bot:
                 fixed += 1
                 if fixed >= limit:
                     break
+        fixed += self.upgrade_text_cards()
         return fixed
+
+    def upgrade_text_cards(self, limit: int = 2) -> int:
+        """Картка без відео (відео тоді не вдалося надіслати — світло, інтернет, збій стискання):
+        щойно можна — надсилаємо картку з відео, а текстову прибираємо. Спроби — не частіше ніж раз на 30 хв."""
+        done = 0
+        admins = set(self.admins())
+        for r in self.db.q("SELECT * FROM tg_msgs WHERE is_text=1 ORDER BY item_id DESC LIMIT 20"):
+            item = self.db.get_item(r["item_id"])
+            key = f"upgrade_try:{r['item_id']}:{r['chat_id']}"
+            if not item or not Path(item["mp4"]).exists() or now_ts() - int(self.db.get(key) or 0) < 1800:
+                continue
+            self.db.set(key, now_ts())
+            try:
+                video = media.telegram_copy(item["mp4"], self.cfg)
+                info = media.probe(video, self.cfg["ffprobe"])
+                cap, kb = self.caption(item), self.keyboard(item)
+                markup = kb if r["chat_id"] in admins else None
+                msg = self.tg.send_video(r["chat_id"], video, cap, markup, width=info.get("width"),
+                                         height=info.get("height"), duration=info.get("duration"))
+            except Exception as e:  # noqa: BLE001
+                log.info("Картка #%s досі без відео: %s — спробую пізніше", r["item_id"], e)
+                continue
+            self._delete(r["chat_id"], [r["msg_id"]])
+            self.db.set_tg_msg(r["item_id"], r["chat_id"], msg["message_id"], r.get("text_msg_id"), 0)
+            self.db.set(f"cap:{r['item_id']}:{r['chat_id']}", self._cap_digest(cap, markup))
+            self.db.set(key, None)
+            log.info("Картку #%s замінено на картку з відео", r["item_id"])
+            done += 1
+            if done >= limit:
+                break
+        return done
 
     # ================= вхідні оновлення =================
     def poll_once(self, timeout: int = 15) -> None:
