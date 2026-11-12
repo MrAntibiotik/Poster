@@ -75,6 +75,7 @@ class Scheduler:
         self._health_started = False
         self._awake_since = time.time()
         self._wake_key = ""
+        self._last_heal = 0.0
         self._upd_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
@@ -98,6 +99,12 @@ class Scheduler:
         self.maybe_health_check(now)
         self.maybe_ai()
         self.maybe_update(now)
+        if time.time() - self._last_heal >= 60:  # раз на хвилину: підписи відео, що «застрягли» без зв'язку
+            self._last_heal = time.time()
+            try:
+                self.app.bot.heal()
+            except Exception as e:  # noqa: BLE001
+                log.debug("heal: %s", e)
         self.maybe_sleep(now)
         try:
             self.app.bot.purge_expired()

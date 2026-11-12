@@ -700,6 +700,7 @@ class Bot:
         admins = set(self.admins())
         for r in rows:
             markup = kb if r["chat_id"] in admins else None
+            digest = self._cap_digest(cap, markup)
             try:
                 if r["is_text"]:
                     self.tg.edit_text(r["chat_id"], r["msg_id"], cap, markup)
@@ -707,8 +708,37 @@ class Bot:
                     self.tg.edit_caption(r["chat_id"], r["msg_id"], cap, markup)
                 if txt and r["text_msg_id"]:
                     self.tg.edit_text(r["chat_id"], r["text_msg_id"], txt)
-            except TelegramError as e:
-                log.warning("Не вдалося оновити повідомлення #%s у %s: %s", item_id, r["chat_id"], e)
+            except Exception as e:  # noqa: BLE001 — немає інтернету тощо: доробимо пізніше (heal)
+                if "not modified" not in str(e).lower():
+                    log.warning("Не вдалося оновити повідомлення #%s у %s: %s — повторю, щойно буде зв'язок",
+                                item_id, r["chat_id"], e)
+                    continue
+            self.db.set(f"cap:{item_id}:{r['chat_id']}", digest)  # що саме зараз показано в чаті
+
+    @staticmethod
+    def _cap_digest(cap: str, kb) -> str:
+        import hashlib
+        return hashlib.md5((cap + json.dumps(kb, ensure_ascii=False, sort_keys=True)).encode()).hexdigest()[:16]
+
+    def heal(self, limit: int = 10) -> int:
+        """Самовідновлення: підписи відео, які не вдалося оновити (світло/інтернет), доводимо до актуального стану."""
+        fixed = 0
+        since = now_ts() - 3 * 86400
+        admins = set(self.admins())
+        for item in self.db.items("id IN (SELECT item_id FROM tg_msgs) AND (status IN "
+                                  "('notified','approved','publishing','failed','queued') OR posted_at > ?)",
+                                  (since,), order="id DESC"):
+            meta = self._meta(item)
+            cap, kb = self.caption(item, meta), self.keyboard(item)
+            stale = any(self.db.get(f"cap:{item['id']}:{r['chat_id']}") !=
+                        self._cap_digest(cap, kb if r["chat_id"] in admins else None)
+                        for r in self.db.tg_msgs(item["id"]))
+            if stale:
+                self.refresh(item["id"])
+                fixed += 1
+                if fixed >= limit:
+                    break
+        return fixed
 
     # ================= вхідні оновлення =================
     def poll_once(self, timeout: int = 15) -> None:

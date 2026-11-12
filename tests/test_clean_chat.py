@@ -84,6 +84,26 @@ class CleanChatTest(FlowBase):
         self.app.bot.refresh(item["id"])
         self.assertIn("👁 1 500 ❤️ 40", self.app.bot.tg.edits[-1][1])
 
+    def test_heal_after_outage(self):
+        tg, bot = self.app.bot.tg, self.app.bot
+        self.make_short("a")
+        self.app.scheduler.tick(self.ts(11, "09:00"))
+        item = self.app.db.items("status='notified'")[0]
+        self.assertEqual(bot.heal(), 0)  # усе актуально
+        orig = tg.edit_caption
+
+        def down(*a, **kw):
+            raise ConnectionError("немає інтернету")
+        tg.edit_caption = down
+        self.app.db.update_item(item["id"], status="posted", posted_at=self.ts(11, "10:00"),
+                                results={"youtube": {"status": "ok", "url": "https://yt/x"}})
+        bot.refresh(item["id"])  # не вдалося — світла/інтернету немає
+        tg.edit_caption = orig
+        n = len(tg.edits)
+        self.assertEqual(bot.heal(), 1)  # зв'язок повернувся — підпис доведено до актуального
+        self.assertIn("✅ <b>Опубліковано</b>", tg.edits[n][1])
+        self.assertEqual(bot.heal(), 0)
+
     def test_service_messages_expire(self):
         tg = self.app.bot.tg
         self.app.bot.send("🟢 poster запущено")

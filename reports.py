@@ -287,19 +287,23 @@ def _delta(cur, prev):
 
 
 def analytics_text(app, stats: dict, title: bool = True) -> str:
-    """По кожній платформі: підписники (+за добу), перегляди й лайки за добу (по наших шортсах)."""
+    """По кожній платформі окремим блоком: підписники, перегляди й лайки за добу — з підписами, не цифри підряд."""
     db, now = app.db, stats["ts"]
-    lines = ["📈 <b>Аналітика</b>"] if title else ["📈 <b>Платформи за добу</b>"]
+    when = local_dt(app.cfg, now).strftime("%d.%m %H:%M")
+    lines = [f"📈 <b>Аналітика за добу</b> · {when}"] if title else ["📈 <b>Платформи за добу</b>"]
     if app.cfg.get("dry_run"):
         lines.append("🧪 Тестовий режим — реальної статистики немає")
         return "\n".join(lines)
     if not app.platforms:
         lines.append("Немає підключених платформ")
+    tot_v = tot_l = tot_f = 0
+    any_prev = False
     for key in PLATFORMS:
         if key not in app.platforms:
             continue
         acc = stats["accounts"].get(key) or {}
         prev = _prev_account(db, key, now) or {}
+        any_prev = any_prev or bool(prev)
         posts = [p for p in stats["posts"] if p["platform"] == key]
         dv = dl = 0
         has_prev_posts = False
@@ -313,19 +317,30 @@ def analytics_text(app, stats: dict, title: bool = True) -> str:
                 has_prev_posts = True
             if p.get("likes") is not None and base_l is not None:
                 dl += p["likes"] - base_l
-        parts = []
+        lines.append(f"\n{ICONS.get(key, '•')} <b>{NAMES[key]}</b>")
         if acc.get("followers") is not None:
-            parts.append(f"👥 {fmt_n(acc['followers'])}{fmt_d(_delta(acc.get('followers'), prev.get('followers')))}")
+            d = _delta(acc.get("followers"), prev.get("followers"))
+            tot_f += d or 0
+            lines.append(f"   👥 Підписники: <b>{fmt_n(acc['followers'])}</b>"
+                         + (f" ({'+' if d >= 0 else '−'}{fmt_n(abs(d))} за добу)" if d is not None else ""))
         ch_views = _delta(acc.get("views"), prev.get("views"))  # YouTube: перегляди всього каналу за добу
         if ch_views is not None:
-            parts.append(f"👁 +{fmt_n(ch_views)} (канал)")
+            lines.append(f"   📺 Перегляди каналу: <b>+{fmt_n(ch_views)}</b>")
         if has_prev_posts:
-            parts.append(f"👁 +{fmt_n(dv)} · ❤️ +{fmt_n(dl)} (шортси)")
-        if key in stats["errors"] and not parts:
-            parts.append("⚠️ " + esc(stats["errors"][key]))
-        lines.append(f"<b>{NAMES[key]}</b>: " + (" · ".join(parts) or "даних поки немає"))
-    if not any(_prev_account(db, k, now) for k in app.platforms):
-        lines.append("<i>Різниця «за добу» з'явиться з наступного звіту.</i>")
+            tot_v += dv
+            tot_l += dl
+            lines.append(f"   🎬 Наші шортси: 👁 <b>+{fmt_n(dv)}</b> переглядів · ❤️ <b>+{fmt_n(dl)}</b> лайків")
+        elif not posts:
+            lines.append("   🎬 Наших шортсів тут ще немає")
+        if key in stats["errors"]:
+            lines.append("   ⚠️ " + esc(stats["errors"][key]))
+        elif acc.get("followers") is None and not has_prev_posts and ch_views is None and posts:
+            lines.append("   даних поки немає")
+    if tot_v or tot_l or tot_f:
+        lines.append(f"\n<b>Разом за добу:</b> 👁 +{fmt_n(tot_v)} · ❤️ +{fmt_n(tot_l)} · 👥 "
+                     f"{'+' if tot_f >= 0 else '−'}{fmt_n(abs(tot_f))}")
+    if not any_prev:
+        lines.append("\n<i>Зміни «за добу» з'являться з наступного дня — зараз перший замір.</i>")
     return "\n".join(lines)
 
 

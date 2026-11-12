@@ -60,9 +60,9 @@ class AnalyticsTest(FlowBase):
         r1 = self.reports()[-1]
         self.assertIn("Вийшло шортсів: <b>2</b>", r1)
         self.assertIn("У черзі: <b>0</b>", r1)
-        self.assertIn("<b>YouTube</b>: 👥 1 000", r1)
-        self.assertIn("👁 +1 200 · ❤️ +120 (шортси)", r1)  # опубліковані сьогодні — уся статистика за добу
-        self.assertIn("<b>TikTok</b>: 👥 500", r1)
+        self.assertIn("▶️ <b>YouTube</b>\n   👥 Підписники: <b>1 000</b>", r1)
+        self.assertIn("🎬 Наші шортси: 👁 <b>+1 200</b> переглядів · ❤️ <b>+120</b> лайків", r1)  # опубліковані сьогодні — уся статистика за добу
+        self.assertIn("🎵 <b>TikTok</b>\n   👥 Підписники: <b>500</b>", r1)
 
         # наступна доба: +25 підписників YouTube, +600 переглядів
         self.yt.followers, self.tt.followers = 1025, 490
@@ -70,9 +70,9 @@ class AnalyticsTest(FlowBase):
         self.make_short("c")  # лежить у черзі
         self.app.scheduler.tick(self.ts(12, "22:31"))
         r2 = self.reports()[-1]
-        self.assertIn("👥 1 025 (+25)", r2)
-        self.assertIn("👥 490 (−10)", r2)
-        self.assertIn("👁 +600 · ❤️ +60 (шортси)", r2)
+        self.assertIn("👥 Підписники: <b>1 025</b> (+25 за добу)", r2)
+        self.assertIn("👥 Підписники: <b>490</b> (−10 за добу)", r2)
+        self.assertIn("👁 <b>+600</b> переглядів · ❤️ <b>+60</b> лайків", r2)
         self.assertIn("У черзі: <b>1</b>", r2)
 
         # лідери тижня (неділя 15.11.2026)
@@ -103,7 +103,7 @@ class AnalyticsTest(FlowBase):
         self.app.db.set_user(777, "viewer", "Друг")
         self.app.bot.handle({"update_id": 2, "message": {"text": "📈 Аналітика", "chat": {"id": 777, "type": "private"}}})
         out = [s[1] for s in tg.sent if s[-1] == 777] + [e[1] for e in tg.edits]  # «⏳…» стає результатом
-        self.assertTrue(any("📈 <b>Аналітика</b>" in t for t in out))
+        self.assertTrue(any("📈 <b>Аналітика за добу</b>" in t for t in out))
         self.assertTrue(any("YouTube" in t for t in out))
 
     def test_dry_run_and_errors(self):
