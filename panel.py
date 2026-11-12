@@ -63,7 +63,7 @@ FIELDS = {
     "retry.attempts": "int", "retry.pause_seconds": "int", "graph_api_version": "str", "dry_run": "bool",
     "platforms.youtube.enabled": "bool", "platforms.youtube.privacy": "privacy",
     "platforms.youtube.add_shorts_hashtag": "bool", "platforms.youtube.notify_subscribers": "bool",
-    "platforms.instagram.enabled": "bool", "platforms.instagram.share_to_feed": "bool",
+    "platforms.instagram.enabled": "bool", "platforms.instagram.share_to_feed": "bool", "platforms.instagram.max_upload_mb": "int",
     "platforms.facebook.enabled": "bool",
     "platforms.tiktok.enabled": "bool", "platforms.tiktok.public": "bool", "platforms.tiktok.redirect_uri": "str",
     "auto_meta.enabled": "bool", "auto_meta.hashtags": "tagmap",

@@ -184,6 +184,18 @@ class InstagramSpecTest(Base):
         return Resp({"debug_info": {"retriable": False, "type": "ProcessingFailedError",
                                     "message": "Request processing failed"}}, 400)
 
+    def test_big_file_goes_as_lighter_60fps_copy(self):
+        self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
+        self.media.ig_problems = lambda p: []
+        modes = []
+        self.media.instagram_copy = lambda path, cfg, **kw: modes.append(kw.get("mode", "")) or str(self.copy)
+        self.cfg["platforms"]["instagram"]["max_upload_mb"] = 0.00001
+        f = self.http(meta_graph, self.routes(Resp({"success": True})))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(modes, ["safe60"])  # оригінал і важку копію пропущено
+        self.assertIn("тією ж частотою кадрів", r["note"])
+        self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)
+
     def test_spurious_400_but_container_finished(self):
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
         self.media.ig_problems = lambda p: []

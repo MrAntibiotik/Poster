@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.12-47"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.12-48"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -99,7 +99,8 @@ DEFAULTS: dict = {
             "add_shorts_hashtag": True,
             "notify_subscribers": True,
         },
-        "instagram": {"enabled": True, "share_to_feed": True},
+        "instagram": {"enabled": True, "share_to_feed": True,
+                      "max_upload_mb": 100},  # важчі файли Instagram часто не приймає — шлемо копію 60 к/с ≤10 Мбіт/с
         "facebook": {"enabled": True},
         "tiktok": {
             "enabled": True,
