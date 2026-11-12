@@ -173,10 +173,15 @@ class Instagram(_MetaBase):
             upload_error = e  # буває хибна 400 — відео все одно обробляється; перевіримо контейнер
             log.warning("Instagram rupload: %s — перевіряю стан контейнера", e)
 
-        deadline = time.time() + (3 * 60 if upload_error else 20 * 60)
+        start = time.time()
+        deadline = start + (3 * 60 if upload_error else 20 * 60)
         while True:
             st = g.get(cid, fields="status_code,status")
             code = st.get("status_code")
+            if code == "IN_PROGRESS" and upload_error and deadline < start + 20 * 60:
+                # 400 від rupload була хибною: відео дійшло й обробляється — чекаємо як зазвичай
+                log.info("Instagram: попри помилку завантаження відео обробляється — чекаю до 20 хв")
+                deadline = start + 20 * 60
             if code == "FINISHED":
                 if upload_error:
                     log.info("Instagram: попри помилку завантаження контейнер готовий — публікую")
