@@ -280,14 +280,18 @@ class Bot:
     def clean_chat(self, chat_id: int, latest: int | None = None, depth: int = 1500) -> int:
         """Прибирає з чату все, крім відео шортсів, звітів і аналітики (Telegram дозволяє лише за 48 год)."""
         keep = {int(r["msg_id"]) for r in self.db.q("SELECT msg_id FROM tg_msgs WHERE chat_id=?", (int(chat_id),))}
+        service = ("kbd", "reauth_", "failed", "acc")  # лише невирішені службові; аналітика/звіти — ні
         for r in self.db.q("SELECT key, value FROM kv WHERE key LIKE ?", (f"keep:{chat_id}:%",)):
-            if r["value"] and str(r["value"]).isdigit():
+            kind = r["key"].split(":", 2)[2]
+            if r["value"] and str(r["value"]).isdigit() and kind.startswith(service):
                 keep.add(int(r["value"]))
-        for k in (f"kept:{chat_id}", f"tasks:{chat_id}"):
-            try:
-                keep.update(json.loads(self.db.get(k) or "[]"))
-            except ValueError:
-                pass
+            elif not kind.startswith(service):
+                self.db.set(r["key"], None)  # старі «лишати останню аналітику/звіт» — більше не діють
+        try:
+            keep.update(json.loads(self.db.get(f"tasks:{chat_id}") or "[]"))
+        except ValueError:
+            pass
+        self.db.set(f"kept:{chat_id}", None)
         known = set(keep)
         for k in (f"eph:{chat_id}", f"trash:{chat_id}"):
             try:
@@ -723,7 +727,7 @@ class Bot:
             {"text": "🛠 Адмін", "callback_data": f"acc:{chat}:admin"},
             {"text": "❌ Відхилити", "callback_data": f"acc:{chat}:blocked"}]]}
         for cid in self.admins():
-            self.say(cid, keep=True, text=f"👤 <b>Запит на доступ</b>\n{esc(name)}\nchat_id: <code>{chat}</code>\n\n"
+            self.say(cid, keep=f"acc{chat}", text=f"👤 <b>Запит на доступ</b>\n{esc(name)}\nchat_id: <code>{chat}</code>\n\n"
                           "👁 Сповіщення — отримуватиме шортси, посилання і звіти (без керування)\n"
                           "🛠 Адмін — повне керування", reply_markup=kb)
 

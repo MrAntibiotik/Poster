@@ -50,13 +50,16 @@ class CleanChatTest(FlowBase):
         self.app.scheduler.tick(self.ts(11, "09:00"))
         item = self.app.db.items("status='notified'")[0]
         video = self.app.db.tg_msg(item["id"], 42)["msg_id"]
-        self.app.bot.send("📊 звіт", keep=True)
+        self.app.bot.send(keep="reauth_youtube", text="🔑 потрібна авторизація")
         report = self.last_id()
+        self.app.bot.say(42, "📈 стара аналітика", keep="stats")  # так зберігали старі версії
+        old_stats = self.last_id()
         tg.msg_id += 20  # «старе сміття» до оновлення, про яке бот нічого не знає
         self.app.bot.clean_chat(42)
         cleaned = set(tg.deleted)
         self.assertNotIn(video, cleaned)
-        self.assertNotIn(report, cleaned)
+        self.assertNotIn(report, cleaned)  # невирішене службове лишається
+        self.assertIn(old_stats, cleaned)  # аналітика — ні
         self.assertTrue({report + 5, report + 15, self.last_id()} <= cleaned)  # і тимчасове «🧹» теж
 
     def test_auto_reports_replace_and_service_resolves(self):
