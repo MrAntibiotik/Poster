@@ -26,6 +26,30 @@ IG_HINTS = {
 }
 
 
+def short_error(e) -> str:
+    """Суть помилки Instagram в одному рядку (без вкладеного JSON)."""
+    import re
+    t = str(e)
+    for _ in range(3):
+        t = t.replace('\\\\', '\\').replace('\\"', '"')
+    parts = []
+    m = re.search(r"HTTP (\d{3})", t)
+    if m:
+        parts.append(f"HTTP {m.group(1)}")
+    m = re.search(r"(Video Transcoding Error[^\"\\}]{0,70})", t)
+    if m:
+        parts.append(m.group(1).strip())
+    elif "ProcessingFailedError" in t:
+        parts.append("ProcessingFailedError")
+    m = re.search(r"стан контейнера: ([^|(]{0,90})", t)
+    if m:
+        parts.append("стан: " + m.group(1).strip())
+    m = re.search(r"\(чекали \d+ хв\)", t)
+    if m:
+        parts.append(m.group(0))
+    return ", ".join(parts) if parts else t[:150]
+
+
 def ig_hint(text) -> str:
     text = str(text or "")
     for code, hint in IG_HINTS.items():
@@ -126,7 +150,7 @@ class Instagram(_MetaBase):
             tokens.append(("користувача", user))
         files = ([] if problems else [("оригінал", lambda: video_path)]) + \
             [("копія під вимоги Reels", lambda: media.instagram_copy(video_path, self.cfg)),
-             ("легка копія (6 Мбіт/с)", lambda: media.instagram_copy(video_path, self.cfg, lite=True))]
+             ("безпечна копія (30 к/с, 6 Мбіт/с)", lambda: media.instagram_copy(video_path, self.cfg, lite=True))]
         errors = []
         for tname, token in tokens:
             for fname, get_file in files:
@@ -136,7 +160,7 @@ class Instagram(_MetaBase):
                     if not self._upload_rejected(e):
                         raise  # інша помилка (токен, ліміт, формат) — без перебору
                     log.warning("Instagram: %s + токен %s — відмова: %s", fname, tname, e)
-                    errors.append(f"{fname}/токен {tname}: {e}")
+                    errors.append(f"{fname}" + (f" (токен {tname})" if len(tokens) > 1 else "") + f" — {short_error(e)}")
                     continue
                 notes = []
                 if problems:
@@ -148,7 +172,7 @@ class Instagram(_MetaBase):
                 if notes:
                     out["note"] = "Instagram: " + "; ".join(notes)
                 return out
-        raise PublishError("Instagram не прийняв завантаження жодним способом. " + " || ".join(errors)
+        raise PublishError(f"Instagram не прийняв відео ({len(errors)} спроб): " + "; ".join(errors)
                            + ("" if len(tokens) > 1 else
                               " — Порада: у панелі (Instagram + Facebook) ще раз «Отримати сторінки» → «Підключити»,"
                               " щоб зберегти токен користувача для резервної спроби."))

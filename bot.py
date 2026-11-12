@@ -912,7 +912,7 @@ class Bot:
         self._ask_time(chat, item_id, dialog=True)
 
     # ---------- невдалі публікації ----------
-    def failed_text(self, item: dict, err_len: int = 300) -> str:
+    def failed_text(self, item: dict, err_len: int = 700) -> str:
         meta = self._meta(item)
         errs = self.failed_errors(item)
         ok = [p for p, r in item["results"].items() if r.get("status") == "ok"]

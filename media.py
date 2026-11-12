@@ -149,14 +149,19 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False) -> str:
         return str(out)
     p = ig_probe(path, cfg["ffprobe"])
     fps = p.get("fps") or 30
-    fps_args = [] if 23 <= fps <= 60.5 else ["-r", "30"]
+    if lite:  # «безпечна» копія: 30 к/с рівно, рівень H.264 4.1, без метаданих — Instagram перекодовує її без збоїв
+        fps = 30
+    fps_args = ["-r", "30", "-vsync", "cfr"] if lite or not 23 <= fps <= 60.5 else ["-vsync", "cfr"]
     g = int(round(min(max(fps, 23), 60) * 2))
-    vf = "scale='if(gt(iw,ih),min(iw,1920),min(iw,1080))':-2:flags=lanczos,format=yuv420p"
-    args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-vf", vf, *fps_args,
+    vf = "scale='if(gt(iw,ih),min(iw,1920),min(iw,1080))':-2:flags=lanczos,setsar=1,format=yuv420p"
+    level = ["-level:v", "4.1"] if lite else ["-level:v", "4.2"]
+    args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
+            "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-vf", vf, *fps_args, *level,
             "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-crf", "21" if lite else "17",
             "-maxrate", "6M" if lite else "20M", "-bufsize", "12M" if lite else "40M", "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", str(out)]
-    log.info("Готую копію під вимоги Instagram: %s", path)
+            "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-tag:v", "avc1",
+            "-movflags", "+faststart", str(out)]
+    log.info("Готую %s під вимоги Instagram: %s", "безпечну копію" if lite else "копію", path)
     r = run_hidden(args, timeout=3600)
     if r.returncode != 0:
         out.unlink(missing_ok=True)

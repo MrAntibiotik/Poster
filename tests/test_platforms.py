@@ -255,7 +255,7 @@ class InstagramSpecTest(Base):
         routes = self.routes(self.fail())
         routes[3] = ("GET", "/C1", Resp({"status_code": "ERROR", "status": "Error: code 2207050"}))
         self.http(meta_graph, routes)
-        with self.assertRaisesRegex(PublishError, "жодним способом.*обмежений або неактивний.*токен користувача"):
+        with self.assertRaisesRegex(PublishError, "3 спроб.*обмежений або неактивний.*токен користувача"):
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
 
 
