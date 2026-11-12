@@ -154,7 +154,7 @@ class InstagramSpecTest(Base):
         self.cfg["paths"]["data"] = self.tmp / "data"
         self.copy = self.tmp / "copy_ig.mp4"
         self.copy.write_bytes(b"c" * 100)
-        media.instagram_copy = lambda path, cfg, lite=False: str(self.copy)
+        media.instagram_copy = lambda path, cfg, **kw: str(self.copy)
 
     def tearDown(self):
         self.media.ig_probe, self.media.ig_problems, self.media.instagram_copy = self._orig_media
@@ -247,7 +247,7 @@ class InstagramSpecTest(Base):
         self.assertEqual(r["id"], "M1")
         self.assertIn("токеном користувача", r["note"])
         auths = [c[2]["headers"]["Authorization"] for c in f.calls if "rupload" in c[1]]
-        self.assertEqual(auths, ["OAuth PAGE"] * 6 + ["OAuth USER"])  # 3 файли × 2 відправки, потім токен користувача
+        self.assertEqual(auths, ["OAuth PAGE"] * 8 + ["OAuth USER"])  # 4 файли × 2 відправки, потім токен користувача
 
     def test_all_attempts_fail_message(self):
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
@@ -255,7 +255,7 @@ class InstagramSpecTest(Base):
         routes = self.routes(self.fail())
         routes[3] = ("GET", "/C1", Resp({"status_code": "ERROR", "status": "Error: code 2207050"}))
         self.http(meta_graph, routes)
-        with self.assertRaisesRegex(PublishError, "3 спроб.*обмежений або неактивний.*токен користувача"):
+        with self.assertRaisesRegex(PublishError, "4 спроб.*обмежений або неактивний.*токен користувача"):
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
 
 

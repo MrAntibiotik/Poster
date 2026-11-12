@@ -86,7 +86,7 @@ def ig_probe(path: str, ffprobe: str = "ffprobe") -> dict:
     """Параметри, які перевіряє Instagram: відео й аудіо окремо."""
     try:
         r = run_hidden([ffprobe, "-v", "error", "-show_entries",
-                        "stream=codec_type,codec_name,width,height,avg_frame_rate,bit_rate,sample_rate,channels,"
+                        "stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,bit_rate,sample_rate,channels,"
                         "pix_fmt:format=duration,bit_rate", "-of", "json", str(path)], timeout=60)
         info = json.loads(r.stdout or b"{}")
     except (MediaError, ValueError):
@@ -104,12 +104,31 @@ def ig_probe(path: str, ffprobe: str = "ffprobe") -> dict:
         pass
     total_k = int(fmt.get("bit_rate") or 0) // 1000
     a_k = int(a.get("bit_rate") or 0) // 1000
+    try:
+        rn, rd = (v.get("r_frame_rate") or "0/1").split("/")
+        rfps = float(rn) / float(rd) if float(rd) else 0.0
+    except ValueError:
+        rfps = 0.0
     return {"vcodec": v.get("codec_name"), "width": int(v.get("width") or 0), "height": int(v.get("height") or 0),
-            "fps": fps, "pix_fmt": v.get("pix_fmt"),
+            "fps": fps, "vfr": bool(rfps and fps and abs(rfps - fps) > 0.5), "pix_fmt": v.get("pix_fmt"),
             "vkbps": int(v.get("bit_rate") or 0) // 1000 or max(0, total_k - a_k),
             "acodec": a.get("codec_name"), "akbps": a_k, "arate": int(a.get("sample_rate") or 0),
             "channels": int(a.get("channels") or 0), "duration": float(fmt.get("duration") or 0),
             "size_mb": os.path.getsize(path) / 1024 / 1024}
+
+
+def ig_summary(p: dict) -> str:
+    """Коротко про файл — щоб порівняти відео, яке Instagram не прийняв, з тими, що пройшли."""
+    if not p:
+        return ""
+    m, s = divmod(int(p.get("duration") or 0), 60)
+    parts = [f"{p['width']}×{p['height']}", f"{p['fps']:.0f} к/с" + (" (змінна частота!)" if p.get("vfr") else ""),
+             f"{p['vkbps'] / 1000:.1f} Мбіт/с", f"{m}:{s:02d}", f"{p['size_mb']:.0f} МБ", str(p.get("pix_fmt") or "")]
+    if p.get("acodec"):
+        parts.append(f"звук {p['acodec']} {p['akbps']} кбіт/с {p['arate'] // 1000} кГц")
+    else:
+        parts.append("без звуку")
+    return ", ".join(x for x in parts if x)
 
 
 def ig_problems(p: dict) -> list[str]:
@@ -138,13 +157,18 @@ def ig_problems(p: dict) -> list[str]:
     return out
 
 
-def instagram_copy(path: str, cfg: dict, lite: bool = False) -> str:
+def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> str:
+    """mode: '' — копія під вимоги; 'safe60' — сувора копія з тією ж частотою кадрів (≤10 Мбіт/с);
+    'safe30' (= lite) — сувора копія 30 к/с, 6 Мбіт/с — крайній варіант."""
+    mode = mode or ("safe30" if lite else "")
+    lite = mode == "safe30"
+    strict = mode in ("safe60", "safe30")
     """Копія під вимоги Instagram Reels: H.264 High, yuv420p, ≤1080 по ширині (для 9:16 — 1080×1920),
     та сама частота кадрів, до 20 Мбіт/с, AAC 128 кбіт/с 48 кГц, faststart. Оригінал не змінюється."""
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
     key = hashlib.md5(f"{path}|{os.path.getmtime(path)}".encode()).hexdigest()[:10]
-    out = cache / f"{Path(path).stem}_{key}_{'igl' if lite else 'ig'}.mp4"
+    out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl'}.get(mode, 'ig') }.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
     p = ig_probe(path, cfg["ffprobe"])
@@ -155,13 +179,15 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False) -> str:
     g = int(round(min(max(fps, 23), 60) * 2))
     vf = "scale='if(gt(iw,ih),min(iw,1920),min(iw,1080))':-2:flags=lanczos,setsar=1,format=yuv420p"
     level = ["-level:v", "4.1"] if lite else ["-level:v", "4.2"]
+    rate = (["-crf", "21", "-maxrate", "6M", "-bufsize", "12M"] if lite else
+            ["-crf", "19", "-maxrate", "10M", "-bufsize", "20M"] if strict else
+            ["-crf", "17", "-maxrate", "20M", "-bufsize", "40M"])
     args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
             "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-vf", vf, *fps_args, *level,
-            "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-crf", "21" if lite else "17",
-            "-maxrate", "6M" if lite else "20M", "-bufsize", "12M" if lite else "40M", "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
+            "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", *rate, "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
             "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-tag:v", "avc1",
             "-movflags", "+faststart", str(out)]
-    log.info("Готую %s під вимоги Instagram: %s", "безпечну копію" if lite else "копію", path)
+    log.info("Готую копію для Instagram (%s): %s", mode or "під вимоги", path)
     r = run_hidden(args, timeout=3600)
     if r.returncode != 0:
         out.unlink(missing_ok=True)
@@ -246,7 +272,7 @@ def drop_previews(path: str, cfg: dict) -> None:
     cache = Path(cfg["paths"]["data"]) / "previews"
     for p in [*cache.glob(f"{Path(path).stem}_*_720p.mp4"), *cache.glob(f"{Path(path).stem}_*_tg.mp4"),
               *cache.glob(f"{Path(path).stem}_*_ig.mp4"),
-              *cache.glob(f"{Path(path).stem}_*_igl.mp4")]:
+              *cache.glob(f"{Path(path).stem}_*_igl.mp4"), *cache.glob(f"{Path(path).stem}_*_ig60.mp4")]:
         try:
             p.unlink()
         except OSError:

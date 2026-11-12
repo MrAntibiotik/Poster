@@ -150,7 +150,9 @@ class Instagram(_MetaBase):
             tokens.append(("користувача", user))
         files = ([] if problems else [("оригінал", lambda: video_path)]) + \
             [("копія під вимоги Reels", lambda: media.instagram_copy(video_path, self.cfg)),
-             ("безпечна копія (30 к/с, 6 Мбіт/с)", lambda: media.instagram_copy(video_path, self.cfg, lite=True))]
+             ("сувора копія (та ж частота кадрів, 10 Мбіт/с)",
+              lambda: media.instagram_copy(video_path, self.cfg, mode="safe60")),
+             ("крайній варіант (30 к/с, 6 Мбіт/с)", lambda: media.instagram_copy(video_path, self.cfg, mode="safe30"))]
         errors = []
         for tname, token in tokens:
             for fname, get_file in files:
@@ -172,7 +174,12 @@ class Instagram(_MetaBase):
                 if notes:
                     out["note"] = "Instagram: " + "; ".join(notes)
                 return out
+        try:
+            about = media.ig_summary(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
+        except Exception:  # noqa: BLE001
+            about = ""
         raise PublishError(f"Instagram не прийняв відео ({len(errors)} спроб): " + "; ".join(errors)
+                           + (f". Файл: {about}" if about else "")
                            + ("" if len(tokens) > 1 else
                               " — Порада: у панелі (Instagram + Facebook) ще раз «Отримати сторінки» → «Підключити»,"
                               " щоб зберегти токен користувача для резервної спроби."))
