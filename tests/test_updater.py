@@ -109,7 +109,7 @@ class AutoUpdateFlowTest(FlowBase):
                                                               "chat": {"id": 42, "type": "private"}}})
             texts = [m[1] for m in self.app.bot.tg.sent]
             self.assertTrue(any("Перевіряю оновлення" in t for t in texts))
-            self.assertIn("остання версія", texts[-1])  # одразу, без очікування планувальника
+            self.assertIn("остання версія", self.app.bot.tg.edits[-1][1])  # «🔍…» стало результатом, одразу
             self.assertEqual(calls, [])
             # є нова версія, але йде публікація — питаємо; «⚡ Оновити зараз» — оновлюємось одразу
             updater.check = lambda cfg: {"local": "1", "remote": "2", "newer": True}

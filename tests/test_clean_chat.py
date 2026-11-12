@@ -19,28 +19,30 @@ class CleanChatTest(FlowBase):
     def last_id(self):
         return self.app.bot.tg.msg_id
 
-    def test_replies_disappear_videos_and_analytics_stay(self):
+    def test_only_videos_stay_and_running_task_survives(self):
         tg = self.app.bot.tg
         self.make_short("a")
         self.app.scheduler.tick(self.ts(11, "09:00"))  # відео-картка шортса
         item = self.app.db.items("status='notified'")[0]
         video_ids = [r["msg_id"] for r in self.app.db.tg_msgs(item["id"])]
-        self.assertTrue(video_ids)
         self.say("📋 Черга", 5001)
         queue_reply = self.last_id()
         self.say("🕐 Статус", 5002)
-        self.assertIn(5001, tg.deleted)          # натискання кнопки прибрано
-        self.assertIn(queue_reply, tg.deleted)   # попередня відповідь прибрана
+        self.assertTrue({5001, queue_reply} <= set(tg.deleted))  # попередня кнопка й відповідь прибрані
         self.say("📈 Аналітика", 5003)
-        first_stats = self.last_id()
-        self.say("📈 Аналітика", 5004)
-        self.assertIn(first_stats - 1, tg.deleted)  # заглушка «Збираю…» видаляється одразу
-        self.assertIn(first_stats, tg.deleted)    # стара аналітика замінена новою
-        second_stats = self.last_id()
-        self.say("🕐 Статус", 5005)
-        self.assertNotIn(second_stats, tg.deleted)  # остання аналітика лишається
+        stats = self.last_id()  # «⏳ Збираю…» → стало результатом (редагування того ж повідомлення)
+        self.assertIn("Аналітика", [e for e in tg.edits if e[0] == stats][-1][1])
+        self.say("🕐 Статус", 5004)
+        self.assertIn(stats, tg.deleted)  # результат прибрано при наступній дії
+        # завдання, що ще виконується, не зникає від інших кнопок
+        running = self.app.bot.task_start(42, "⏳ Довга дія…")["message_id"]
+        self.say("📋 Черга", 5005)
+        self.assertNotIn(running, tg.deleted)
+        self.app.bot.task_done(42, {"message_id": running}, "✅ Готово")
+        self.say("🕐 Статус", 5006)
+        self.assertIn(running, tg.deleted)
         for v in video_ids:
-            self.assertNotIn(v, tg.deleted)          # відео шортса з прогресом лишається
+            self.assertNotIn(v, tg.deleted)  # відео шортса з прогресом лишається
 
     def test_clean_chat_keeps_only_videos_and_reports(self):
         tg = self.app.bot.tg
@@ -65,7 +67,7 @@ class CleanChatTest(FlowBase):
         config.FAKE_NOW = None
         self.assertNotIn(mid, tg.deleted)
         import time
-        config.FAKE_NOW = int(time.time()) + 7 * 3600
+        config.FAKE_NOW = int(time.time()) + 25 * 3600
         self.app.bot.purge_expired()
         self.assertIn(mid, tg.deleted)
 

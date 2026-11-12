@@ -550,9 +550,9 @@ class Scheduler:
                 stats = collect(self.app)
             except Exception:  # noqa: BLE001
                 log.exception("Збір статистики для звіту")
-            self.app.bot.send(daily_report(self.app, now, stats), html_mode=True, to="all", keep=True)
+            self.app.bot.send(daily_report(self.app, now, stats), html_mode=True, to="all")
             if weekly and stats:
-                self.app.bot.send(weekly_top(self.app, stats), html_mode=True, to="all", keep=True)
+                self.app.bot.send(weekly_top(self.app, stats), html_mode=True, to="all")
         if getattr(self.app.publisher, "sync", False):
             work()
         else:

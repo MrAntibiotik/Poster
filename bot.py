@@ -88,8 +88,8 @@ def user_name(u: dict) -> str:
     return f"{name} (@{u['username']})" if u.get("username") else name
 
 
-REPLY_TTL = 15 * 60      # відповіді на кнопки зникають за 15 хв (або при наступній дії)
-AUTO_TTL = 30 * 60       # службові повідомлення (нові в черзі, оновлення, помилки) — за 30 хв
+REPLY_TTL = 24 * 3600    # відповіді зникають при наступній дії (або за добу — Telegram дає видаляти лише 48 год)
+AUTO_TTL = 24 * 3600     # службові повідомлення й звіти — так само: до наступної дії або за добу
 
 class Bot:
     def __init__(self, app):
@@ -223,11 +223,40 @@ class Bot:
             self._remember_kept(chat_id, msg)
         return msg
 
-    def _remember_kept(self, chat_id: int, msg) -> None:
+    # ---------- завдання, що виконуються: сповіщення висить, доки не завершиться ----------
+    def task_start(self, chat_id: int, text: str):
+        """«⏳ …» не зникає при натисканні інших кнопок, поки завдання не завершиться."""
+        try:
+            msg = self.tg.send_message(chat_id, esc(text))
+        except TelegramError as e:
+            log.error("task_start: %s", e)
+            return None
+        self._remember_kept(chat_id, msg, key=f"tasks:{chat_id}")
+        return msg
+
+    def task_done(self, chat_id: int, msg, text: str, kb=None) -> None:
+        """Завершилось — те саме повідомлення стає результатом (і зникне при наступній дії)."""
+        mid = (msg or {}).get("message_id")
+        if mid:
+            try:
+                ids = [i for i in json.loads(self.db.get(f"tasks:{chat_id}") or "[]") if i != mid]
+                self.db.set(f"tasks:{chat_id}", json.dumps(ids))
+            except ValueError:
+                pass
+            try:
+                self.tg.edit_text(chat_id, mid, text, kb)
+                self.ephemeral(chat_id, mid)
+                return
+            except TelegramError as e:  # задовге для редагування тощо — надсилаємо окремо
+                log.debug("task_done edit: %s", e)
+                self._delete(chat_id, [mid])
+        self.say(chat_id, text, reply_markup=kb)
+
+    def _remember_kept(self, chat_id: int, msg, key: str | None = None) -> None:
         mid = msg.get("message_id") if isinstance(msg, dict) else msg
         if not mid:
             return
-        key = f"kept:{chat_id}"
+        key = key or f"kept:{chat_id}"
         try:
             ids = json.loads(self.db.get(key) or "[]")
         except ValueError:
@@ -240,10 +269,11 @@ class Bot:
         for r in self.db.q("SELECT key, value FROM kv WHERE key LIKE ?", (f"keep:{chat_id}:%",)):
             if r["value"] and str(r["value"]).isdigit():
                 keep.add(int(r["value"]))
-        try:
-            keep.update(json.loads(self.db.get(f"kept:{chat_id}") or "[]"))
-        except ValueError:
-            pass
+        for k in (f"kept:{chat_id}", f"tasks:{chat_id}"):
+            try:
+                keep.update(json.loads(self.db.get(k) or "[]"))
+            except ValueError:
+                pass
         known = set(keep)
         for k in (f"eph:{chat_id}", f"trash:{chat_id}"):
             try:
@@ -1432,7 +1462,7 @@ class Bot:
                 stats = collect(app)
                 text = analytics_text(app, stats) if op == "stats" else weekly_top(app, stats)
             if cmd.get("send"):
-                self.send(text, html_mode=True, keep=True)
+                self.send(text, html_mode=True)
             return text
         item_id = int(cmd.get("id") or 0)
         item = self.db.get_item(item_id)
@@ -1572,19 +1602,17 @@ class Bot:
         chat = chat or self.chat_id
         reply = lambda text, html_mode=True, kb=None, keep=False: self.say(chat, text, html_mode, kb, keep)  # noqa: E731
         if cmd in ("/stats", "/top"):
-            wait = reply("⏳ Збираю статистику з платформ…", False)
+            wait = self.task_start(chat, "⏳ Збираю статистику з платформ…")
 
             def work(which=cmd):
                 from reports import analytics_text, collect, weekly_top
                 try:
                     stats = collect(app)
-                    reply(analytics_text(app, stats) if which == "/stats" else weekly_top(app, stats),
-                          keep=which[1:])  # лишається остання аналітика / останній топ
+                    text = analytics_text(app, stats) if which == "/stats" else weekly_top(app, stats)
                 except Exception as e:  # noqa: BLE001
                     log.exception("Аналітика")
-                    reply(f"❌ Не вдалося зібрати статистику: {esc(str(e))}")
-                if wait:
-                    self._delete(chat, [wait["message_id"]])
+                    text = f"❌ Не вдалося зібрати статистику: {esc(str(e))}"
+                self.task_done(chat, wait, text)  # сповіщення «⏳…» перетворюється на результат
             if getattr(app.publisher, "sync", False):
                 work()
             else:
@@ -1606,7 +1634,7 @@ class Bot:
             reply(app.status_text())
         elif cmd == "/report":
             from reports import daily_report
-            reply(daily_report(app), keep="report")
+            reply(daily_report(app))
         elif cmd == "/pause":
             self.db.set("paused", "1")
             self.db.event(None, "paused", {"by": chat})
@@ -1622,16 +1650,14 @@ class Bot:
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)
             from config import VERSION
-            wait = reply(f"🔍 Перевіряю оновлення… (у вас {VERSION})", False)
+            wait = self.task_start(chat, f"🔍 Перевіряю оновлення… (у вас {VERSION})")
 
             def work():
                 try:
                     text, kb = self.update_now(force=False)
                 except Exception as e:  # noqa: BLE001
                     text, kb = f"⚠️ Оновлення не вдалося: {e}", None
-                if wait:
-                    self._delete(chat, [wait["message_id"]])
-                self.say(chat, text, html_mode=False, reply_markup=kb)
+                self.task_done(chat, wait, esc(text), kb)
             self._bg(work)
         elif cmd == "/stream":
             if role != "admin":

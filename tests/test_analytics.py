@@ -102,7 +102,7 @@ class AnalyticsTest(FlowBase):
         # глядач теж бачить аналітику
         self.app.db.set_user(777, "viewer", "Друг")
         self.app.bot.handle({"update_id": 2, "message": {"text": "📈 Аналітика", "chat": {"id": 777, "type": "private"}}})
-        out = [s[1] for s in tg.sent if s[-1] == 777]
+        out = [s[1] for s in tg.sent if s[-1] == 777] + [e[1] for e in tg.edits]  # «⏳…» стає результатом
         self.assertTrue(any("📈 <b>Аналітика</b>" in t for t in out))
         self.assertTrue(any("YouTube" in t for t in out))
 
