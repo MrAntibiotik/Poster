@@ -179,8 +179,8 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
     app.db.set("pid", os.getpid())
     app.bot.setup_commands()
     app.bot.start_panel_worker()
-    if app.db.get("chat_cleaned") != "1":  # один раз після оновлення — прибрати старе «сміття» з чату
-        app.db.set("chat_cleaned", "1")
+    if app.db.get("chat_cleaned") != "2":  # один раз після оновлення — прибрати старе «сміття» з чату
+        app.db.set("chat_cleaned", "2")
         for cid in app.bot.recipients():
             try:
                 app.bot.clean_chat(cid)

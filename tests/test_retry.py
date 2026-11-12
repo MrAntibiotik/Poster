@@ -63,6 +63,12 @@ class RetryTest(FlowBase):
         self.assertEqual(it["results"]["youtube"]["id"], "y1")  # YouTube не дублюється
         self.assertEqual(self.app.scheduler.failed_items(), [])
 
+    def test_retry_message_disappears_when_published(self):
+        self.button(f"rf:{self.item['id']}")  # «🔁 Повторити зараз» з окремого повідомлення (id 999)
+        self.assertEqual(self.app.db.get_item(self.item["id"])["results"]["instagram"]["status"], "ok")
+        self.assertIn(999, self.app.bot.tg.deleted)  # статус — у підписі відео, окреме повідомлення прибрано
+        self.assertIsNone(self.app.db.get(f"itemmsg:{self.item['id']}"))
+
     def test_retry_in_free_slot(self):
         self.button(f"rq:{self.item['id']}")
         when = self.app.scheduler.retry_at(self.item["id"])

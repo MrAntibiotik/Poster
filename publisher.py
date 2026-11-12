@@ -100,6 +100,8 @@ class Publisher:
         db.set("last_activity", now_ts())  # після публікації ПК ще кілька хвилин не засне
         if ok and hasattr(app.bot, "drop_all_texts"):
             app.bot.drop_all_texts(item_id)  # назва й хештеги вже в підписі відео — окреме повідомлення не потрібне
+        if hasattr(app.bot, "finish_item_msgs"):
+            app.bot.finish_item_msgs(item_id)  # «🔁 Повторюю…» → прибрати / стати результатом
         if not failed and hasattr(app.bot, "drop_failed_card"):
             app.bot.drop_failed_card(item_id)  # усе вийшло — окреме повідомлення про невдачу більше не потрібне
         if failed and hasattr(app.bot, "notify_failed"):

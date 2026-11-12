@@ -1031,12 +1031,12 @@ class Bot:
         if action == "ru":
             self.db.set(f"ignored:{item_id}", None)
             answer("↩️ Повернуто до невдалих")
-            self._close_msg(chat, msg_id, "↩️ Повернуто до «⚠️ Невдалі»")
+            self._close_msg(chat, msg_id, "↩️ Повернуто до «⚠️ Невдалі»", item_id)
             return self.refresh(item_id)
         if action == "rf":
             self.db.set(f"ignored:{item_id}", None)
             answer("🔁 Повторюю публікацію…")
-            self._close_msg(chat, msg_id, "🔁 Повторюю публікацію…")
+            self._close_msg(chat, msg_id, "🔁 Повторюю публікацію…", item_id, running=True)
             return self.app.publisher.start(item_id)
         if action == "rq":
             try:
@@ -1044,7 +1044,7 @@ class Bot:
             except ValueError as e:
                 return answer(str(e), True)
             answer(f"🔁 Повтор: {fmt_when(self.cfg, ts)}", True)
-            self._close_msg(chat, msg_id, f"🔁 Повтор заплановано: {fmt_when(self.cfg, ts)}")
+            self._close_msg(chat, msg_id, f"🔁 Повтор заплановано: {fmt_when(self.cfg, ts)}", item_id)
             return self.refresh(item_id)
         if action == "rt":
             self.dialog_set(chat, {"item": item_id, "step": "time", "mode": "retry", "msg": msg_id})
@@ -1054,21 +1054,66 @@ class Bot:
             self.db.set(f"ignored:{item_id}", "1")
             self.db.x("DELETE FROM slots WHERE state='retry' AND item_id=?", (item_id,))
             answer("Гаразд, більше не нагадуватиму")
-            self._close_msg(chat, msg_id, "✖️ Проігноровано")
+            self._close_msg(chat, msg_id, "✖️ Проігноровано", item_id)
             return self.refresh(item_id)
 
-    def _close_msg(self, chat: int, msg_id: int | None, note: str) -> None:
-        """Повідомлення про збій: прибираємо кнопки, щоб не натиснути двічі."""
+    def _close_msg(self, chat: int, msg_id: int | None, note: str, item_id: int | None = None,
+                   running: bool = False) -> None:
+        """Окреме повідомлення про збій після дії з ним.
+        Якщо в чаті є відео цього шортса (статус видно в його підписі) — повідомлення прибираємо.
+        Якщо дія триває (повтор зараз) — воно висить як «🔁 Повторюю…» і зникне, щойно публікація завершиться."""
         if not msg_id:
             return
         own = self.db.q("SELECT 1 FROM tg_msgs WHERE chat_id=? AND msg_id=?", (chat, msg_id))
         if own:
             return  # це повідомлення з відео — його оновить refresh()
+        has_card = bool(item_id and self.db.tg_msg(item_id, chat))
+        if running and item_id:
+            self._remember_kept(chat, msg_id, key=f"tasks:{chat}")  # не зникне від інших кнопок, поки триває
+            key = f"itemmsg:{item_id}"
+            try:
+                rows = json.loads(self.db.get(key) or "[]")
+            except ValueError:
+                rows = []
+            self.db.set(key, json.dumps(rows + [[int(chat), int(msg_id)]]))
+        elif has_card:
+            return self._delete(chat, [msg_id])
+        else:
+            self.ephemeral(chat, msg_id)
         try:
             self.tg.call("editMessageReplyMarkup", chat_id=chat, message_id=msg_id,
                          reply_markup={"inline_keyboard": [[{"text": note, "callback_data": "noop:0"}]]})
         except Exception as e:  # noqa: BLE001
             log.debug("close msg: %s", e)
+
+    def finish_item_msgs(self, item_id: int) -> None:
+        """Публікацію завершено: «🔁 Повторюю…» прибираємо — результат видно в підписі відео
+        (або, якщо відео в чаті немає, це повідомлення стає результатом)."""
+        key = f"itemmsg:{item_id}"
+        try:
+            rows = json.loads(self.db.get(key) or "[]")
+        except ValueError:
+            rows = []
+        self.db.set(key, None)
+        item = self.db.get_item(item_id)
+        for chat, mid in rows:
+            try:
+                ids = [i for i in json.loads(self.db.get(f"tasks:{chat}") or "[]") if i != mid]
+                self.db.set(f"tasks:{chat}", json.dumps(ids))
+            except ValueError:
+                pass
+            if self.db.tg_msg(item_id, chat) or not item:
+                self._delete(chat, [mid])
+                continue
+            if self.failed_errors(item) or item["status"] == "failed":
+                text, kb = self.failed_text(item), self.retry_keyboard(item_id)
+            else:
+                text, kb = f"✅ Опубліковано #{item_id}" + self._results(item), None
+            try:
+                self.tg.edit_text(chat, mid, text, kb)
+                self.ephemeral(chat, mid)
+            except TelegramError:
+                self._delete(chat, [mid])
 
     def _retry_choice(self, chat: int, item: dict, choice, answer=None) -> None:
         item_id = item["id"]
