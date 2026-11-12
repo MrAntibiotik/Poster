@@ -406,8 +406,9 @@ class Bot:
                 hint = "\n🤖 Тексти від ШІ — перевірте; інший варіант: «🔄 Перегенерувати тексти»"
             elif meta.auto:
                 hint = "\nℹ️ Назва з імені файлу — змінити: «✏️ Ввести назву вручну»"
-        tail = (f"🕐 Слот: {slot} | Платформи: {self._platform_line(item)}\n\n"
-                f"{self._status_block(item)}{hint}")
+        q = self.db.get(f"qline:{item['id']}") if item["status"] in ("notified", "approved") else None
+        tail = (f"🕐 Слот: {slot} | Платформи: {self._platform_line(item)}\n"
+                + (f"📐 {esc(q)}\n" if q else "") + f"\n{self._status_block(item)}{hint}")
         text = "\n".join(x for x in (head, tags, tail) if x)
         if visible_len(text) > CAPTION_LIMIT and tags:
             room = CAPTION_LIMIT - visible_len(head + "\n\n" + tail) - 2
@@ -457,10 +458,11 @@ class Bot:
                  else {"text": "↩️ Скасувати підтвердження", "callback_data": f"unpub:{i}"})
         toggles = [{"text": f"{SHORT[p]} {'🚫' if p in item['disabled'] else '✅'}",
                     "callback_data": f"tog:{i}:{p}"} for p in enabled_platforms(self.cfg)]
-        rows = [[first],
-                [{"text": "🕐 Змінити час / дату", "callback_data": f"time:{i}"}],
-                [{"text": "🔄 Перегенерувати тексти", "callback_data": f"regen:{i}"}],
-                [{"text": "✏️ Ввести назву вручну", "callback_data": f"title:{i}"}]]
+        import ai
+        edit = [{"text": "✏️ Назва", "callback_data": f"title:{i}"}, {"text": "📝 Тексти", "callback_data": f"txt:{i}"}]
+        if self.cfg.get("regenerate_command") or ai.enabled(self.cfg):
+            edit.append({"text": "🔄 Нові тексти", "callback_data": f"regen:{i}"})
+        rows = [[first], [{"text": "🕐 Змінити час / дату", "callback_data": f"time:{i}"}], edit]
         if toggles:
             rows.append([{"text": "Вимкнути платформу:", "callback_data": f"noop:{i}"}])
             rows.append(toggles)
@@ -481,6 +483,13 @@ class Bot:
                           "на YouTube/TikTok/Instagram/Facebook іде оригінал.")
         except OSError:
             qline = ""
+        try:
+            if q.get("width"):
+                self.db.set(f"qline:{item_id}", f"{q['width']}×{q['height']} · {q.get('fps') or '?'} к/с · "
+                                                f"{q.get('size_mb')} МБ → на платформи оригінал")
+        except NameError:  # файл недоступний — без рядка якості
+            pass
+        separate = bool((self.cfg.get("telegram") or {}).get("texts_message", False))
         caption, kb, texts = self.caption(item, meta), self.keyboard(item), self.texts(item, meta, qline)
         admins = self.admins()
         self.db.clear_tg_msgs(item_id)
@@ -509,7 +518,7 @@ class Bot:
                     if is_admin:
                         self.say(cid, f"⚠️ Відео #{item_id} не вдалося надіслати в чат: {esc(str(video_error))}")
                     is_text = 1
-                text_msg = self.tg.send_message(cid, texts, reply_to=msg["message_id"])
+                text_msg = self.tg.send_message(cid, texts, reply_to=msg["message_id"]) if separate else None
                 self.db.set_tg_msg(item_id, cid, msg["message_id"], (text_msg or {}).get("message_id"), is_text)
                 if is_admin:
                     delivered_admin = True
@@ -528,6 +537,10 @@ class Bot:
         rows = self.db.tg_msgs(item_id)
         if not rows:
             return
+        if not (self.cfg.get("telegram") or {}).get("texts_message", False) and any(r.get("text_msg_id") for r in rows):
+            self.drop_all_texts(item_id)  # старі окремі «📝 Тексти» прибираємо — лишається тільки відео
+            rows = self.db.tg_msgs(item_id)
+            texts = False
         meta = self._meta(item)
         cap, kb = self.caption(item, meta), self.keyboard(item)
         txt = self.texts(item, meta) if texts else None
@@ -731,6 +744,10 @@ class Bot:
             self.db.update_item(item_id, disabled=disabled)
             self.refresh(item_id)
             answer(f"{NAMES[p]}: {'вимкнено' if p in disabled else 'увімкнено'}")
+        elif action == "txt":
+            answer()
+            q = self.db.get(f"qline:{item_id}") or ""
+            self.say(chat, self.texts(item, self._meta(item), f"📐 {esc(q)}" if q else ""))  # зникне при наступній дії
         elif action == "title":
             self.db.set(f"await_title:{chat}", item_id)
             self._track(chat, self.tg.send_message(

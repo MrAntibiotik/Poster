@@ -141,7 +141,11 @@ class FlowTest(FlowBase):
         self.assertIn("🎬 <b>Титул a</b>", cap)
         self.assertIn("#wot #танки", cap)
         self.assertIn("🕐 Слот: 13:00 | Платформи: YT ✅ TT ✅🔒 IG ✅ FB ✅", cap)
-        texts = tg.sent[-1]
+        self.assertEqual(tg.sent[-1][0], "video")  # окремого повідомлення з текстами немає — чат охайний
+        item0 = self.app.db.items("status='notified'")[0]
+        self.app.bot.handle({"update_id": 9, "callback_query": {"id": "t", "data": f"txt:{item0['id']}", "message": {
+            "message_id": self.app.db.tg_msg(item0["id"], 42)["msg_id"], "chat": {"id": 42}, "text": ""}}})
+        texts = tg.sent[-1]  # «📝 Тексти» — за кнопкою
         self.assertIn("Текст для TikTok", texts[1])
         self.assertIn("Текст для Instagram", texts[1])
 
