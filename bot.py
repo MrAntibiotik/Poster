@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 import media
-from config import NAMES, PLATFORMS, SHORT, enabled_platforms, fmt_slot, fmt_when, now_ts, parse_when
+from config import NAMES, PLATFORMS, SHORT, enabled_platforms, fmt_slot, fmt_when, local_dt, now_ts, parse_when
 from meta import PostMeta, apply_always_hashtags, apply_manual, load_meta, parse_hashtags
 from telegram_api import TelegramAPI, TelegramError
 
@@ -470,15 +470,20 @@ class Bot:
         if st == "approved":
             return f"👍 Підтверджено — публікація о {slot}{edited}"
         if st == "publishing":
-            return "⏫ Публікується…" + self._results(item)
-        if st == "posted":
+            return "⏫ <b>Публікується…</b>" + self._results(item, publishing=True)
+        if st in ("posted", "failed"):
+            targets = [p for p in PLATFORMS if p in self.app.platforms and p not in item["disabled"]] or \
+                list(item["results"])
+            ok = [p for p in targets if (item["results"].get(p) or {}).get("status") == "ok"]
+            if not ok:
+                head = "❌ <b>Не опубліковано</b>"
+            elif len(ok) < len([p for p in targets if p in item["results"]]):
+                head = f"⚠️ <b>Опубліковано частково</b> ({len(ok)} з {len([p for p in targets if p in item['results']])})"
+            else:
+                head = "✅ <b>Опубліковано</b>"
             when = self.app.scheduler.retry_at(item["id"])
-            return f"✅ Опубліковано{edited}" + self._results(item) + (
-                f"\n🔁 Повтор невдалих: {fmt_when(self.cfg, when)}" if when else "")
-        if st == "failed":
-            when = self.app.scheduler.retry_at(item["id"])
-            return "❌ Не опубліковано" + self._results(item) + (
-                f"\n🔁 Повтор: {fmt_when(self.cfg, when)}" if when else "")
+            ignored = " · 🙈 проігноровано" if self.db.get(f"ignored:{item['id']}") else ""
+            return head + ignored + self._results(item) + (f"\n🔁 Повтор: {fmt_when(self.cfg, when)}" if when else "")
         if st == "queued":
             if item["note"]:
                 return esc(item["note"])
@@ -489,27 +494,47 @@ class Bot:
             return "⚠️ Файл не знайдено — шортс прибрано з черги"
         return st
 
-    def _results(self, item: dict) -> str:
+    @staticmethod
+    def _short_note(note: str) -> str:
+        n = str(note or "").lower()
+        if "тією ж частотою" in n:
+            return "полегшена копія"
+        if "перекодовано" in n or "копію під вимоги" in n or "не прийняв оригінал" in n:
+            return "копія під вимоги Reels"
+        if "приват" in n:
+            return "приватне"
+        if "токеном користувача" in n:
+            return "резервний токен"
+        return ""
+
+    def _results(self, item: dict, publishing: bool = False) -> str:
+        from reports import ICONS, explain_error
         lines = []
+        targets = [p for p in PLATFORMS if p in self.app.platforms and p not in item["disabled"]]
         for p in PLATFORMS:
             r = item["results"].get(p)
+            icon = ICONS.get(p, "•")
             if p in item["disabled"]:
-                if p in self.app.platforms:
-                    lines.append(f"{SHORT[p]}: 🚫 вимкнено")
                 continue
             if not r:
+                if publishing and p in targets:
+                    lines.append(f"{icon} {NAMES[p]} — ⏳")
                 continue
             if r.get("status") == "ok":
-                lock = {"SELF_ONLY": " 🔒 приватно", "private": " 🔒 приватне",
-                        "unlisted": " 🔗 за посиланням"}.get(r.get("privacy"), "")
-                link = f'<a href="{esc(r["url"])}">{NAMES[p]}</a>' if r.get("url") else f"{NAMES[p]} ✅"
-                note = str(r.get("note") or "").replace(f"{NAMES[p]}: ", "")
-                st = ""
+                lock = {"SELF_ONLY": " 🔒", "private": " 🔒", "unlisted": " 🔗"}.get(r.get("privacy"), "")
+                name = f'<a href="{esc(r["url"])}">{NAMES[p]}</a>' if r.get("url") else NAMES[p]
+                extra = []
                 if isinstance(r.get("views24"), int):
-                    st = f" · 👁 {r['views24']:,}".replace(",", " ") + (f" ❤️ {r['likes24']}" if r.get("likes24") is not None else "")
-                lines.append(f"{SHORT[p]}: {link}{lock}{st}" + (f" <i>({esc(note[:90])})</i>" if note else ""))
+                    extra.append(f"👁 {r['views24']:,}".replace(",", " ") +
+                                 (f" ❤️ {r['likes24']}" if r.get("likes24") is not None else ""))
+                note = self._short_note(r.get("note"))
+                if note:
+                    extra.append(f"<i>{note}</i>")
+                lines.append(f"{icon} {name} ✅{lock}" + (" · " + " · ".join(extra) if extra else ""))
             else:
-                lines.append(f"{SHORT[p]}: ❌ {esc(str(r.get('error', ''))[:120])}")
+                _, text, _ = explain_error(p, r.get("error", ""))
+                text = text.replace(f"{NAMES[p]}: ", "").replace(f"{NAMES[p]} ", "")
+                lines.append(f"{icon} {NAMES[p]} — ❌ {esc(text[:80])}")
         return ("\n" + "\n".join(lines)) if lines else ""
 
     def caption(self, item: dict, meta: PostMeta | None = None) -> str:
@@ -526,8 +551,17 @@ class Bot:
             elif meta.auto:
                 hint = "\nℹ️ Назва з імені файлу — змінити: «✏️ Ввести назву вручну»"
         q = self.db.get(f"qline:{item['id']}") if item["status"] in ("notified", "approved") else None
-        tail = (f"🕐 Слот: {slot} | Платформи: {self._platform_line(item)}\n"
-                + (f"📐 {esc(q)}\n" if q else "") + f"\n{self._status_block(item)}{hint}")
+        st = item["status"]
+        if st in ("notified", "approved"):
+            info = f"🕐 Слот: {slot} | Платформи: {self._platform_line(item)}\n" + (f"📐 {esc(q)}\n" if q else "")
+        elif st in ("posted", "failed") and item["posted_at"]:
+            info = f"📅 {local_dt(self.cfg, item['posted_at']):%d.%m %H:%M}\n"
+        elif st == "queued":
+            plan = {it["id"]: ts for it, ts in self.app.scheduler.projection()}
+            info = f"📦 У черзі → {fmt_when(self.cfg, plan[item['id']])}\n" if plan.get(item["id"]) else ""
+        else:
+            info = ""
+        tail = info + f"\n{self._status_block(item)}{hint}"
         text = "\n".join(x for x in (head, tags, tail) if x)
         if visible_len(text) > CAPTION_LIMIT and tags:
             room = CAPTION_LIMIT - visible_len(head + "\n\n" + tail) - 2

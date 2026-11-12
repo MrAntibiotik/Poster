@@ -52,7 +52,7 @@ class RetryTest(FlowBase):
         it = self.app.db.get_item(self.item["id"])
         self.assertEqual(it["status"], "posted")
         self.assertFalse([s for s in self.app.bot.tg.sent if s[0] == "text" and "Не опубліковано" in s[1]])
-        self.assertIn("ProcessingFailedError", self.app.bot.tg.edits[-1][1])  # причина — у підписі відео
+        self.assertIn("📸 Instagram — ❌ не зміг обробити відео", self.app.bot.tg.edits[-1][1])  # причина — у підписі відео
         self.assertIn("rf:", json.dumps(self.app.bot.tg.edits[-1][2]))  # кнопки під самим відео
         self.say("⚠️ Невдалі")
         self.assertTrue(any("Невдалі публікації: 1" in s[1] for s in self.app.bot.tg.sent if s[0] == "text"))

@@ -173,8 +173,7 @@ class FlowTest(FlowBase):
         self.assertEqual(data["posting"]["platforms"]["facebook"]["status"], "disabled")
         self.assertNotIn("facebook", item["results"])
         last_cap = tg.edits[-1][1]
-        self.assertIn("✅ Опубліковано", last_cap)
-        self.assertIn("✏️ Змінено: назву", last_cap)
+        self.assertIn("✅ <b>Опубліковано</b>", last_cap)
         self.assertIn("Нова назва", last_cap)
 
         # Звіт
@@ -274,7 +273,9 @@ class FlowTest(FlowBase):
         self.assertTrue(any("Потрібна повторна авторизація: TikTok" in m for m in msgs))
         self.assertFalse([m for m in msgs if "Не опубліковано" in m])  # окремого повідомлення немає — усе в підписі відео
         cap = self.app.bot.tg.edits[-1]
-        self.assertIn("IG: ❌ мережа впала", cap[1])
+        self.assertIn("⚠️ <b>Опубліковано частково</b> (2 з 4)", cap[1])
+        self.assertIn("📸 Instagram — ❌ мережа впала", cap[1])
+        self.assertIn("🎵 TikTok — ❌ потрібна повторна авторизація", cap[1])
         self.assertIn("rf:", str(cap[2]))  # кнопки повтору — під самим відео
 
     def test_health_check(self):

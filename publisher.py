@@ -67,6 +67,7 @@ class Publisher:
                 continue  # уже опубліковано (відновлення після збою/перезапуску)
             results[key] = self._publish_one(key, item, meta)
             db.update_item(item_id, results=results)
+            app.bot.refresh(item_id)  # у підписі відео видно, куди вже вийшло
 
         ok = [k for k in targets if results.get(k, {}).get("status") == "ok"]
         failed = [k for k in targets if k not in ok]

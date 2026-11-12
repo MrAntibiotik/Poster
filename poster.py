@@ -179,6 +179,14 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
     app.db.set("pid", os.getpid())
     app.bot.setup_commands()
     app.bot.start_panel_worker()
+    if app.db.get("captions_v") != "2":  # один раз: підписи вже надісланих відео — у новому вигляді й з актуальним станом
+        app.db.set("captions_v", "2")
+        for it in app.db.items("posted_at > ? OR status IN ('notified','approved','failed')", (now_ts() - 7 * 86400,),
+                               order="id"):
+            try:
+                app.bot.refresh(it["id"])
+            except Exception as e:  # noqa: BLE001
+                log.debug("refresh #%s: %s", it["id"], e)
     if app.db.get("chat_cleaned") != "3":  # один раз після оновлення — прибрати старе «сміття» з чату
         app.db.set("chat_cleaned", "3")
         for cid in app.bot.recipients():

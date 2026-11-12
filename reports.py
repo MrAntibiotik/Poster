@@ -20,7 +20,7 @@ def explain_error(platform: str, error: str) -> tuple[str, str, str]:
     e = str(error or "")
     low = e.lower()
     name = NAMES.get(platform, platform)
-    if "токена tiktok" in low or ("авторизац" in low and platform == "tiktok"):
+    if "токена tiktok" in low:
         return "tt_auth", "TikTok не підключено", "підключіть у панелі або вимкніть у «🔌 Платформи»"
     if "meta_page_token" in low or "meta_user_token" in low:
         return "meta_token", "Instagram/Facebook: не було токена Meta", "перевірте в панелі «🔍 Перевірити всі підключення»"
