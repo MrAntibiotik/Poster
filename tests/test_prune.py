@@ -50,7 +50,7 @@ class PruneTest(FlowBase):
         self.app.scheduler.scan()
         self.assertEqual(self.names(), ["1_battle_03"])
         q = self.app.db.queue()
-        self.assertEqual(q[0]["game"], "job_20261111_171232")
+        self.assertEqual(q[0]["game"], "")  # папки програми нарізки — не назва гри
         self.cfg["paths"]["ready"] = old_root  # повернулись до старої папки
         self.app.scheduler.scan()
         self.assertEqual(self.names(), ["old1"])

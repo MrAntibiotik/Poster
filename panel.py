@@ -726,9 +726,9 @@ class Panel:
         current = [{"id": i["id"], "name": Path(i["mp4"]).stem, "status": i["status"],
                     "slot": fmt_slot(cfg, i["slot_at"], now) if i["slot_at"] else ""}
                    for i in db.items("status IN ('notified','approved','publishing','failed')", order="slot_at")]
-        upcoming = [{"slot": fmt_slot(cfg, s["slot_at"], now), "item": s["item_id"], "manual": s["source"] == "manual"}
-                    for s in db.q("SELECT * FROM slots WHERE slot_at>? AND state IN ('pending','notified') "
-                                  "ORDER BY slot_at LIMIT 6", (now,))]
+        upcoming = [{"slot": fmt_when(cfg, s["slot_at"], now), "item": s["item"]["id"] if s["item"] else None,
+                     "name": Path(s["item"]["mp4"]).stem if s["item"] else "", "kind": s["kind"], "manual": s["manual"]}
+                    for s in sched.slot_plan(now, 6)]
         posted = [{"id": i["id"], "name": Path(i["mp4"]).stem,
                    "when": local_dt(cfg, i["posted_at"]).strftime("%d.%m %H:%M") if i["posted_at"] else "",
                    "links": {p: r.get("url") for p, r in i["results"].items() if r.get("status") == "ok"},

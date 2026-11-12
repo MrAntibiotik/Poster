@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -44,13 +45,22 @@ def find_videos(folder: Path, depth: int = 4, exclude: tuple = ()) -> list[Path]
     return out
 
 
+AUTO_FOLDER = re.compile(r"(?i)^(battle|job|clip|short|video|output|replay|render|export)s?[_\-\s]?\d"
+                         r"|_(dmg|assist|kills?|frags?)_\d|^\d{4}[_\-.]?\d\d[_\-.]?\d\d|^\d+$")
+
+
+def is_auto_folder(name: str) -> bool:
+    """Папки, які створює програма нарізки (battle_02_dmg_5004, job_20261111_…), — це не назва гри."""
+    return bool(AUTO_FOLDER.search(name or ""))
+
+
 def game_of(mp4: Path, ready: Path) -> str:
-    """Назва «гри» = перша підпапка в папці з шортсами (ready/WoT/… → WoT); для відео в корені — ''."""
+    """Назва «гри» = перша «людська» підпапка в папці з шортсами (ready/WoT/… → WoT); інакше — ''."""
     try:
-        rel = mp4.resolve().relative_to(ready.resolve())
+        parts = mp4.resolve().relative_to(ready.resolve()).parts[:-1]
     except ValueError:
-        return mp4.parent.name
-    return rel.parts[0] if len(rel.parts) > 1 else ""
+        parts = (mp4.parent.name,)
+    return next((p for p in parts if not is_auto_folder(p)), "")
 
 
 class Scheduler:
@@ -104,6 +114,9 @@ class Scheduler:
             ready.mkdir(parents=True, exist_ok=True)
             return []
         self.prune_queue(ready)
+        for it in self.db.items("status='queued'"):  # старі записи з «грою» на кшталт battle_02_dmg_5004
+            if it["game"] and is_auto_folder(it["game"]):
+                self.db.update_item(it["id"], game=game_of(Path(it["mp4"]), ready))
         missing = {r["mp4"]: r["id"] for r in self.db.q("SELECT id, mp4 FROM items WHERE status='missing'")}
         known = self.db.known_paths() - set(missing)
         found = []
@@ -359,6 +372,18 @@ class Scheduler:
             self.app.bot.refresh(later["item_id"])
             self.db.set("refresh_item", later["item_id"])  # якщо слот додано з панелі/меню — оновить служба
         return ts
+
+    def slot_plan(self, now: int | None = None, limit: int = 6) -> list[dict]:
+        """Найближчі слоти разом із тим, що в них вийде: уже сповіщений шортс або наступний із черги."""
+        now = now or now_ts()
+        planned = {ts: it for it, ts in self.projection(now) if ts}
+        out = []
+        for s in self.upcoming(now, limit):
+            item = self.db.get_item(s["item_id"]) if s["item_id"] else planned.get(s["slot_at"])
+            kind = (item["status"] if item and s["item_id"] else "planned" if item else
+                    "paused" if self.db.get("paused") == "1" else "empty")
+            out.append({"slot_at": s["slot_at"], "manual": s["source"] == "manual", "item": item, "kind": kind})
+        return out
 
     def upcoming(self, now: int, limit: int = 6) -> list[dict]:
         return self.db.q("SELECT * FROM slots WHERE slot_at>? AND state IN ('pending','notified') "

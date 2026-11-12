@@ -571,7 +571,8 @@ async function refresh(){
     <td><button class="btn" data-plat="${k}" data-on="${p.enabled ? 0 : 1}">${p.enabled ? "🚫 Вимкнути" : "✅ Увімкнути"}</button></td></tr>`).join("");
 
   renderWork(s);
-  $("#upcoming").innerHTML = s.upcoming.map(u => `<li>${esc(u.slot)}${u.manual ? " (тестовий)" : ""} — ${u.item ? "#" + u.item : "вільний"}</li>`).join("") || '<li class="muted">—</li>';
+  const UK = {notified:"⏳ чекає підтвердження", approved:"👍 підтверджено", publishing:"⏫ публікується", planned:"📦 з черги"};
+  $("#upcoming").innerHTML = s.upcoming.map(u => `<li><b>${esc(u.slot)}</b>${u.manual ? " (тестовий)" : ""} — ${u.item ? `#${u.item} ${esc(u.name)} <span class="muted small">${UK[u.kind] || esc(u.kind)}</span>` : (u.kind === "paused" ? "⏸ пауза" : '<span class="muted">порожньо — черга порожня</span>')}</li>`).join("") || '<li class="muted">—</li>';
   $("#qCount").textContent = s.queue.length;
   const ri = s.ready_info; $("#readyPath").textContent = ri.path;
   $("#readyInfo").innerHTML = !ri.exists ? '<span style="color:var(--bad)">папки не існує — оберіть іншу</span>' :

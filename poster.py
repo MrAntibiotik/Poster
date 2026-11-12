@@ -111,10 +111,14 @@ class App:
     def status_text(self) -> str:
         now = now_ts()
         lines = ["🕐 <b>Найближчі слоти</b>"]
-        for s in self.scheduler.upcoming(now, 6):
-            who = f"#{s['item_id']}" if s["item_id"] else "—"
-            src = " (ручний)" if s["source"] == "manual" else ""
-            lines.append(f"• {fmt_slot(self.cfg, s['slot_at'], now)}{src}: {who}")
+        kinds = {"notified": "⏳ чекає підтвердження", "approved": "👍 підтверджено", "publishing": "⏫ публікується",
+                 "planned": "📦 з черги"}
+        for s in self.scheduler.slot_plan(now, 6):
+            src = " (тестовий)" if s["manual"] else ""
+            it = s["item"]
+            who = (f"#{it['id']} {esc(Path(it['mp4']).stem)} — {kinds.get(s['kind'], s['kind'])}" if it else
+                   "⏸ пауза" if s["kind"] == "paused" else "порожньо (черга порожня)")
+            lines.append(f"• {fmt_when(self.cfg, s['slot_at'], now)}{src}: {who}")
         if self.db.get("paused") == "1":
             lines.append("⏸ <b>Розклад на паузі</b> — нові шортси не надсилаються")
         lines.append(f"\n📦 У черзі: {len(self.db.queue())}")
