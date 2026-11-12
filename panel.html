@@ -117,6 +117,7 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
     <button data-tab="ai">🤖 ШІ</button>
     <button data-tab="sched">🗓 Розклад і папки</button>
     <button data-tab="log">📄 Журнал</button>
+    <button data-tab="upd">🔄 Оновлення</button>
     <button data-tab="sec">🔐 Безпека</button>
   </nav>
 </header>
@@ -418,6 +419,30 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
   </section>
 
   <!-- ================= БЕЗПЕКА ================= -->
+  <section data-page="upd" class="hidden">
+    <div class="card"><h2>🔄 Оновлення програми <span id="updStatus" class="pill"></span></h2>
+      <p class="small">Програма сама перевіряє GitHub і, коли нічим не зайнята (нічого не публікується, ви 5 хв не клацали в боті),
+        завантажує нову версію й перезапускається. Ваші налаштування, токени, база й журнал <b>не змінюються</b>;
+        перед оновленням робиться резервна копія (папка <code>data\backup</code>).</p>
+      <div class="row"><span>У вас: <b id="updLocal"></b></span><span>На GitHub: <b id="updRemote">—</b></span></div>
+      <label class="check"><input type="checkbox" data-set="updates.auto"> Оновлюватися автоматично</label>
+      <div class="two"><div><label class="f">Перевіряти кожні, год</label><input type="number" min="1" max="48" data-set="updates.check_hours"></div></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button>
+        <button class="btn" data-act="update_check">🔍 Перевірити зараз</button>
+        <button class="btn" data-act="update_now" id="bUpdNow">⬆️ Оновити зараз</button></div>
+      <pre id="updJob" class="hidden"></pre>
+      <h3>Доступ до приватного репозиторію</h3>
+      <p class="small">Репозиторій приватний, тож потрібен токен GitHub лише на читання:</p>
+      <ol class="steps small">
+        <li>Відкрийте <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → Fine-grained token</a>.</li>
+        <li>Назва — <b>poster-update</b>, термін — до року. <b>Repository access</b> → Only select repositories → <b>poster</b>.</li>
+        <li><b>Permissions</b> → Repository permissions → <b>Contents: Read-only</b> (більше нічого). Generate token, скопіюйте сюди.</li></ol>
+      <label class="f">Токен GitHub</label>
+      <div class="pw"><input type="password" data-secret="GITHUB_TOKEN" autocomplete="off"><button class="btn" data-toggle-pw>👁</button></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-secrets="upd">Зберегти токен</button></div>
+    </div>
+  </section>
+
   <section data-page="sec" class="hidden">
     <div class="card"><h2>🔐 Пароль панелі</h2>
       <div class="two"><div><label class="f">Поточний пароль</label><input id="oldPw" type="password" autocomplete="current-password"></div>
@@ -559,6 +584,12 @@ async function refresh(){
   $("#bMode").textContent = s.dry_run ? "🚀 Увімкнути бойовий" : "🧪 Повернути тестовий";
   $("#autoState").textContent = s.autostart === null ? "Лише у Windows" : (s.autostart ? "✅ Увімкнено" : "Вимкнено");
   $("#autoJob").textContent = jobText(s.jobs.autostart);
+  showJob("#updJob", s.jobs.update);
+  $("#updLocal").textContent = $("#ver").textContent.replace("версія ", "");
+  $("#updRemote").textContent = s.update.remote || "—";
+  pill($("#updStatus"), s.update.error ? "помилка" : (s.update.newer ? "є оновлення " + s.update.remote : (s.update.remote ? "остання версія" : "ще не перевірено")),
+       s.update.error ? "bad" : (s.update.newer ? "warn" : (s.update.remote ? "ok" : "")));
+  if (s.update.error) { const e = $("#updJob"); if (e.classList.contains("hidden")) { e.classList.remove("hidden"); e.textContent = "❌ " + s.update.error; } }
   showJob("#checkJob", s.jobs.check); showJob("#tgJob", s.jobs.tg_test); showJob("#tgJob2", s.jobs.tg_test);
   $("#healthTime").textContent = s.health_time ? "Остання автоматична перевірка: " + s.health_time : "";
 

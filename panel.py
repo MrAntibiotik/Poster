@@ -38,6 +38,11 @@ from db import DB  # noqa: E402
 
 log = logging.getLogger("panel")
 
+
+def VERSION_NOW() -> str:  # noqa: N802
+    from config import VERSION
+    return VERSION
+
 DEFAULT_PORT = 8770
 SESSION_HOURS = 12
 PUBLIC_IDS = {"TELEGRAM_CHAT_ID", "FB_PAGE_ID", "IG_USER_ID", "META_APP_ID", "TIKTOK_CLIENT_KEY"}
@@ -45,7 +50,7 @@ SECRET_LABELS = {
     "TELEGRAM_BOT_TOKEN": "Токен бота", "TELEGRAM_CHAT_ID": "Головні адміністратори (chat_id)",
     "META_APP_ID": "App ID", "META_APP_SECRET": "App Secret", "META_PAGE_TOKEN": "Токен сторінки",
     "META_IG_TOKEN": "Окремий токен Instagram", "META_USER_TOKEN": "Токен користувача Meta", "GEMINI_API_KEY": "Ключ Gemini API", "FB_PAGE_ID": "ID сторінки Facebook",
-    "IG_USER_ID": "ID акаунта Instagram", "TIKTOK_CLIENT_KEY": "Client key", "TIKTOK_CLIENT_SECRET": "Client secret",
+    "IG_USER_ID": "ID акаунта Instagram", "GITHUB_TOKEN": "Токен GitHub (оновлення)", "TIKTOK_CLIENT_KEY": "Client key", "TIKTOK_CLIENT_SECRET": "Client secret",
 }
 
 # Поля config.json, які можна змінювати з панелі: шлях -> тип
@@ -65,7 +70,7 @@ FIELDS = {
     "always_hashtags.tags": "taglist", "always_hashtags.in_title": "bool", "always_hashtags.in_captions": "bool",
     "ai.enabled": "bool", "ai.model": "str", "ai.hashtags_count": "int", "ai.channel_description": "str",
     "ai.extra_prompt": "str",
-    "on_missed_approval": "missed", "power.sleep_between_slots": "bool",
+    "on_missed_approval": "missed", "updates.auto": "bool", "updates.check_hours": "int", "power.sleep_between_slots": "bool",
     "power.wake_before_minutes": "int", "power.quiet_minutes": "int", "power.hold_during_stream": "bool",
     "power.no_sleep_apps": "applist",
 }
@@ -360,6 +365,28 @@ class Panel:
             on = bool(data.get("on"))
             self.save_settings({f"platforms.{key}.enabled": on})
             return f"{NAMES[key]}: {'увімкнено' if on else 'вимкнено'}"
+        import updater
+        if name == "update_check":
+
+            def run():
+                info = updater.check(self.cfg)
+                self.db.set("update_remote", info["remote"])
+                self.db.set("update_error", None)
+                return (f"Доступна нова версія {info['remote']} (у вас {info['local']})" if info["newer"]
+                        else f"У вас остання версія ({info['local']})")
+            self.job("update", run)
+            return "Перевіряю…"
+        if name == "update_now":
+            if control.is_running(self.cfg["lock_port"]):
+                self.db.set("control", "update")
+                return "Бот оновиться протягом хвилини й перезапуститься разом із панеллю — оновіть сторінку за ~30 с"
+
+            def run():
+                new = updater.apply(self.cfg)
+                updater.spawn([str(self.root / "panel.py"), "--config", self.cfg["config_path"], "--no-browser"])
+                return f"Оновлено до {new}. Панель перезапускається — оновіть сторінку за ~10 с"
+            self.job("update", run)
+            return "Завантажую оновлення…"
         if name == "stream":
             hours = int(data.get("hours") or 0)
             self.db.set("stream_until", now_ts() + hours * 3600 if hours > 0 else None)
@@ -773,6 +800,10 @@ class Panel:
             "health_time": fmt_slot(cfg, int(db.get("health_ts")), now) if db.get("health_ts") else None,
             "ready_info": self.count_shorts(cfg["paths"]["ready"]),
             "failed": self.failed_state(cfg, now),
+            "update": {"remote": db.get("update_remote") or "", "error": db.get("update_error") or "",
+                       "newer": __import__("updater").version_key(db.get("update_remote") or "")
+                       > __import__("updater").version_key(VERSION_NOW()),
+                       "token": bool(cfg["secrets"].get("GITHUB_TOKEN"))},
             "stream_until": fmt_slot(cfg, int(db.get("stream_until")), now)
             if int(db.get("stream_until") or 0) > now else "",
             "power": {"on": bool((cfg.get("power") or {}).get("sleep_between_slots")),

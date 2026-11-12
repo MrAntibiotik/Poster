@@ -75,6 +75,7 @@ class Scheduler:
         self._health_started = False
         self._awake_since = time.time()
         self._wake_key = ""
+        self._upd_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
     def tick(self, now: int | None = None) -> None:
@@ -96,6 +97,7 @@ class Scheduler:
         self.maybe_stats(now)
         self.maybe_health_check(now)
         self.maybe_ai()
+        self.maybe_update(now)
         self.maybe_sleep(now)
         try:
             self.app.bot.purge_expired()
@@ -617,6 +619,62 @@ class Scheduler:
             self._ai_thread.start()
 
     # ---------- перевірка токенів ----------
+    # ---------- автооновлення ----------
+    def maybe_update(self, now: int) -> None:
+        up = self.cfg.get("updates") or {}
+        if not up.get("auto") or getattr(self.app, "no_update", False):
+            return
+        if self.db.get("control") == "update":  # «Оновити зараз» з панелі
+            self.db.set("control", None)
+            self.db.set("update_available", "manual")
+        last = int(self.db.get("update_check_ts") or 0)
+        if now - last >= float(up.get("check_hours", 3)) * 3600 and not (self._upd_thread and self._upd_thread.is_alive()):
+            self.db.set("update_check_ts", now)
+
+            def work():
+                import updater
+                try:
+                    info = updater.check(self.cfg)
+                    self.db.set("update_remote", info["remote"])
+                    self.db.set("update_error", None)
+                    if info["newer"]:
+                        log.info("Є оновлення: %s → %s", info["local"], info["remote"])
+                        self.db.set("update_available", info["remote"])
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Перевірка оновлень: %s", e)
+                    self.db.set("update_error", str(e)[:300])
+            self._upd_thread = threading.Thread(target=work, daemon=True, name="update-check")
+            self._upd_thread.start()
+        if self.db.get("update_available") and self.update_idle(now):
+            self.install_update()
+
+    def update_idle(self, now: int) -> bool:
+        """Оновлюємось лише коли нічого не публікується, не відкрито діалог і ви 5 хв не клацали в боті."""
+        if self.app.publisher.active or self.db.items("status='publishing'"):
+            return False
+        if self.db.q("SELECT key FROM kv WHERE key LIKE 'dialog:%' AND value IS NOT NULL"):
+            return False
+        if now - int(self.db.get("last_activity") or 0) < 300 and self.db.get("update_available") != "manual":
+            return False
+        soon = self.db.one("SELECT slot_at FROM slots WHERE slot_at>? AND slot_at<=? AND state IN ('notified','retry')",
+                           (now, now + 180))
+        return not soon
+
+    def install_update(self) -> None:
+        import updater
+        self.db.set("update_available", None)
+        try:
+            new = updater.apply(self.cfg)
+        except Exception as e:  # noqa: BLE001
+            log.error("Оновлення не вдалося: %s", e)
+            self.db.set("update_error", str(e)[:300])
+            self.app.bot.send(f"⚠️ Автооновлення не вдалося: {e}")
+            return
+        self.db.set("update_error", None)
+        self.db.event(None, "updated", {"version": new})
+        self.app.bot.send(f"⬆️ poster оновлено до версії {new} — перезапускаюсь (≈10 с).")
+        self.db.set("control", "restart")
+
     # ---------- сон між слотами ----------
     def wake_times(self, now: int, days: int = 3) -> list[int]:
         """Коли прокидатися: за N хв до кожного слоту (наступні дні), повторів і щоденного звіту."""

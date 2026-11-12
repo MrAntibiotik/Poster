@@ -136,6 +136,22 @@ class App:
 
 
 # ======================================================================
+def restart_after_update(cfg: dict, lock) -> None:
+    """Новий процес бота (з новим кодом) + перезапуск панелі, якщо вона відкрита."""
+    import control
+    import updater
+    root = Path(__file__).resolve().parent
+    log.info("Перезапуск після оновлення")
+    try:
+        lock.close()
+    except OSError:
+        pass
+    updater.spawn([str(root / "poster.py"), "--config", cfg["config_path"], "run", "--wait-lock", "60"])
+    port = int(cfg.get("panel_port") or 8770)
+    if control.is_running(port):
+        updater.spawn([str(root / "panel.py"), "--config", cfg["config_path"], "--no-browser"])
+
+
 def single_instance(port: int) -> socket.socket | None:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -146,8 +162,12 @@ def single_instance(port: int) -> socket.socket | None:
         return None
 
 
-def run_service(cfg: dict) -> int:
+def run_service(cfg: dict, wait_lock: int = 0) -> int:
     lock = single_instance(int(cfg["lock_port"]))
+    deadline = time.time() + wait_lock
+    while lock is None and time.time() < deadline:  # після оновлення старий процес ще завершується
+        time.sleep(1)
+        lock = single_instance(int(cfg["lock_port"]))
     if lock is None:
         log.error("poster уже запущено (порт %s зайнятий) — виходжу", cfg["lock_port"])
         return 1
@@ -173,7 +193,12 @@ def run_service(cfg: dict) -> int:
     errors = 0
 
     def stop_requested() -> bool:
-        if app.db.get("control") != "stop":
+        ctl = app.db.get("control")
+        if ctl == "restart":
+            app.db.set("control", None)
+            restart_after_update(cfg, lock)
+            return True
+        if ctl != "stop":
             return False
         app.db.set("control", None)
         log.info("Зупинка за командою з панелі керування")
@@ -297,7 +322,8 @@ def main(argv=None) -> int:
     ap.add_argument("--config", help="шлях до config.json")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd")
-    sub.add_parser("run")
+    r = sub.add_parser("run")
+    r.add_argument("--wait-lock", type=int, default=0, help=argparse.SUPPRESS)
     sub.add_parser("check")
     sub.add_parser("queue")
     a = sub.add_parser("auth")
@@ -338,7 +364,7 @@ def main(argv=None) -> int:
     if cmd == "mode":
         return cmd_mode(cfg, args.mode)
     if cmd == "run":
-        return run_service(cfg)
+        return run_service(cfg, getattr(args, "wait_lock", 0) or 0)
     if cmd == "check":
         return cmd_check(cfg)
     if cmd == "auth":
