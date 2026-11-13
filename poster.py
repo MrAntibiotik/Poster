@@ -17,6 +17,7 @@ import logging
 import os
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -179,6 +180,8 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
     app.db.set("pid", os.getpid())
     app.bot.setup_commands()
     app.bot.start_panel_worker()
+    import control
+    threading.Thread(target=control.ensure_shortcut_once, args=(app.db,), daemon=True).start()
     if app.db.get("captions_v") != "2":  # один раз: підписи вже надісланих відео — у новому вигляді й з актуальним станом
         app.db.set("captions_v", "2")
         for it in app.db.items("posted_at > ? OR status IN ('notified','approved','failed')", (now_ts() - 7 * 86400,),

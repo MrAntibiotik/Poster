@@ -400,6 +400,9 @@ class Panel:
             hours = int(data.get("hours") or 0)
             self.db.set("stream_until", now_ts() + hours * 3600 if hours > 0 else None)
             return f"🎮 Режим стріму на {hours} год — ПК не засне" if hours > 0 else "Режим стріму вимкнено"
+        if name == "shortcut":
+            desk = control.create_shortcut()
+            return f"Ярлик «{control.SHORTCUT_NAME}» створено на робочому столі{(' (' + desk + ')') if desk else ''} і в меню «Пуск»"
         if name == "power_allow":
             import power
             return power.allow_wake_timers()
@@ -1091,6 +1094,7 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
     except OSError:
         pass
     log.info("Панель керування %s: %s", VERSION, url)
+    threading.Thread(target=control.ensure_shortcut_once, args=(panel.db,), daemon=True).start()
     if sys.stdout:
         print(f"Панель керування: {url}  (Ctrl+C — закрити)")
     if open_browser:

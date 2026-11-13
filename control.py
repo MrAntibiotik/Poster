@@ -175,3 +175,56 @@ def open_path(path: str | os.PathLike) -> None:
         subprocess.Popen(["open", path])
     else:
         subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+SHORTCUT_NAME = "Poster — панель керування"
+
+
+def shortcut_script() -> str:
+    """PowerShell: ярлик панелі на робочому столі (і в меню «Пуск») — без вікна консолі, з іконкою."""
+    q = lambda x: "'" + str(x).replace("'", "''") + "'"  # noqa: E731
+    target, icon = python_exe(windowless=True), ROOT / "poster.ico"
+    return ("$ws = New-Object -ComObject WScript.Shell; "
+            "foreach ($dir in @([Environment]::GetFolderPath('Desktop'), "
+            "(Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'))) { "
+            f"$s = $ws.CreateShortcut((Join-Path $dir {q(SHORTCUT_NAME + '.lnk')})); "
+            f"$s.TargetPath = {q(target)}; $s.Arguments = {q(chr(34) + str(ROOT / 'panel.py') + chr(34))}; "
+            f"$s.WorkingDirectory = {q(ROOT)}; $s.IconLocation = {q(str(icon) + ',0')}; "
+            "$s.Description = 'Автопублікація шортсів: панель керування'; $s.Save() }; "
+            "[Environment]::GetFolderPath('Desktop')")
+
+
+def create_shortcut() -> str:
+    """Створює ярлик; повертає шлях до робочого столу. Лише Windows."""
+    if not WIN:
+        raise RuntimeError("Ярлик створюється лише у Windows")
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + shortcut_script()],
+                       cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode:
+        raise RuntimeError((r.stderr or r.stdout).strip()[-300:])
+    return (r.stdout or "").strip().splitlines()[-1] if r.stdout.strip() else ""
+
+
+def shortcut_exists() -> bool | None:
+    if not WIN:
+        return None
+    import os as _os
+    desk = Path(_os.path.expandvars(r"%USERPROFILE%")) / "Desktop"
+    cands = [desk, Path(_os.path.expandvars(r"%USERPROFILE%")) / "OneDrive" / "Desktop",
+             Path(_os.environ.get("OneDrive", "")) / "Desktop"]
+    return any((c / f"{SHORTCUT_NAME}.lnk").exists() for c in cands if str(c))
+
+
+def ensure_shortcut_once(db) -> None:
+    """Один раз (після встановлення/оновлення) — створити ярлик. Якщо ви його видалите, сам не повернеться."""
+    if not WIN or db.get("shortcut_done"):
+        return
+    db.set("shortcut_done", "1")
+    try:
+        if not shortcut_exists():
+            create_shortcut()
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger("control").warning("Ярлик панелі: %s", e)
