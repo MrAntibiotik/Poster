@@ -161,7 +161,12 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
 
     <div class="card"><h2>🎬 Шортси в роботі <span id="workCount" class="pill"></span></h2>
       <p class="muted small">Те саме, що картки в Telegram: перегляд відео, назва й хештеги, час, платформи, публікація. Дії виконує бот — він має бути запущений.</p>
-      <div class="shorts" id="work"></div></div>
+      <div class="row hidden" id="pubAllRow" style="margin-bottom:10px">
+        <button class="btn primary" id="bPubAll" data-act="publish_all"></button>
+        <span class="muted small">Опублікує по черзі всі шортси, що чекають на підтвердження, з поточними назвами.</span></div>
+      <div class="shorts" id="work"></div>
+      <div id="cancelBox" class="hidden"><h3>🚫 Скасовані</h3><div id="cancelRows"></div>
+        <div class="row" style="margin-top:6px"><button class="btn" data-open="cancelled">📂 Папка скасованих</button></div></div></div>
 
     <div class="card"><h2>📊 Звіти й аналітика</h2>
       <div class="row"><button class="btn" data-report="report">📊 Звіт за день</button>
@@ -407,7 +412,8 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <label class="f">Готові шортси (усередині — папки ігор: &lt;Гра&gt;/відео.mp4; json — необов'язково)</label>
       <div class="pw"><input type="text" data-set="paths.ready"><button class="btn" data-pick="paths.ready">📂 Обрати…</button></div>
       <div class="two"><div><label class="f">Опубліковані</label><div class="pw"><input type="text" data-set="paths.posted"><button class="btn" data-pick="paths.posted" title="Обрати папку">📂</button></div></div>
-        <div><label class="f">Пропущені</label><div class="pw"><input type="text" data-set="paths.skipped"><button class="btn" data-pick="paths.skipped" title="Обрати папку">📂</button></div></div></div>
+        <div><label class="f">Пропущені</label><div class="pw"><input type="text" data-set="paths.skipped"><button class="btn" data-pick="paths.skipped" title="Обрати папку">📂</button></div></div>
+        <div><label class="f">Скасовані</label><div class="pw"><input type="text" data-set="paths.cancelled"><button class="btn" data-pick="paths.cancelled" title="Обрати папку">📂</button></div></div></div>
       <label class="f">Статус у json, що означає «готово»</label><input type="text" data-set="ready_status">
       <label class="f">Команда «Перегенерувати тексти» (підстановки {mp4}, {json}, {game})</label>
       <input type="text" data-set="regenerate_command" placeholder='python D:/Shorts/generate_meta.py --force {mp4}'>
@@ -624,7 +630,7 @@ async function refresh(){
   setHTML("#queue", s.queue_items.map(i => `<div class="qrow"><span class="n">#${i.id} ${i.game ? "[" + esc(i.game) + "] " : ""}${esc(i.title)}${i.when ? ` → <b>${esc(i.when)}</b>` : ""}${i.skips ? ` <span class="pill warn">пропусків: ${i.skips}</span>` : ""}</span>
       <button class="btn" data-edit="${i.id}" title="Переглянути відео, змінити назву, обрати час">🎬 Відкрити</button>
       <button class="btn" data-iop="first" data-id="${i.id}" title="Першим у черзі">⬆️</button>
-      <button class="btn danger" data-iop="remove" data-id="${i.id}" title="Прибрати з черги (у папку skipped)">🗑</button></div>`).join("") || '<p class="muted">черга порожня — покладіть шортси в папку ready</p>');
+      <button class="btn danger" data-iop="remove" data-id="${i.id}" title="Скасувати (файл — у папку «скасовані»)">🗑</button></div>`).join("") || '<p class="muted">черга порожня — покладіть шортси в папку ready</p>');
   $("#reqCard").classList.toggle("hidden", !s.pending_users.length);
   setHTML("#reqRows", s.pending_users.map(u => `<tr><td>${esc(u.name || "")}</td><td>${u.chat_id}</td><td><div class="row">
       <button class="btn" data-user="${u.chat_id}" data-role="viewer">👁 Сповіщення</button>
@@ -696,6 +702,12 @@ function tgHtml(t){  // лише безпечні теги Telegram: b, i, u, s,
 }
 function renderWork(s){
   $("#workCount").textContent = s.work.length;
+  const waiting = s.work.filter(i => i.status === "notified").length;
+  $("#pubAllRow").classList.toggle("hidden", waiting < 2);
+  $("#bPubAll").textContent = `🚀 Опублікувати всі, що чекають (${waiting})`;
+  $("#cancelBox").classList.toggle("hidden", !s.cancelled.length);
+  setHTML("#cancelRows", s.cancelled.map(c => `<div class="qrow"><span class="n">#${c.id} ${esc(c.name)}${c.exists ? "" : ' <span class="pill warn">файл не знайдено</span>'}</span>
+    ${c.exists ? `<button class="btn" data-iop="restore" data-id="${c.id}">↩️ Повернути в чергу</button>` : ""}</div>`).join(""));
   const plats = Object.entries(s.platforms).filter(([k, p]) => p.enabled);
   setHTML("#work", s.work.map(i => `<div class="short">
     ${i.exists ? `<video src="/api/video?id=${i.id}" controls preload="metadata" playsinline></video>` : '<div class="pill warn">файл не знайдено</div>'}
@@ -707,6 +719,7 @@ function renderWork(s){
         <button class="btn primary" data-edit="${i.id}">${i.status === "notified" ? "🚀 Опублікувати…" : "✏️ Назва, хештеги, час"}</button>
         <button class="btn" data-iop="publish" data-when="now" data-id="${i.id}">⚡ Зараз</button>
         ${i.status === "approved" ? `<button class="btn" data-iop="unapprove" data-id="${i.id}">↩️ Скасувати підтвердження</button>` : ""}
+        <button class="btn danger" data-iop="cancel" data-id="${i.id}" title="Файл — у папку «скасовані», наступний шортс стає на цей слот">🚫 Скасувати шортс</button>
         ${s.can_regen ? `<button class="btn" data-iop="regen" data-id="${i.id}">🔄 Перегенерувати тексти</button>` : ""}</div>`}
     </div></div>`).join("") || '<p class="muted">Зараз нічого не чекає. Шортс з’явиться тут за годину до свого слоту — або відкрийте будь-яке відео з черги нижче й опублікуйте коли завгодно.</p>');
 }
@@ -756,6 +769,7 @@ document.addEventListener("click", ev => {
     const name = b.dataset.act, body = {name};
     if (name === "testslot") body.minutes = +$("#testMin").value || 10;
     if (name === "stream") body.hours = +b.dataset.hours;
+    if (name === "publish_all" && !confirm("Опублікувати всі шортси, що чекають на підтвердження, по черзі зараз?")) return;
     if (name === "stop" && !confirm("Зупинити бота? Сповіщення і публікації не працюватимуть, доки не запустите знову.")) return;
     if (name === "testslot" && body.minutes < 7) { body.minutes = 7; $("#testMin").value = 7; toast("Найменше — 7 хв: бот має встигнути надіслати шортс і дочекатися відповіді"); }
     if (SLOW[name]) $$(`button[data-act="${name}"]`).forEach(x => { if (x !== b) x.disabled = true; });
@@ -774,7 +788,7 @@ document.addEventListener("click", ev => {
     openEditor(+b.dataset.edit);
   } else if (b.dataset.iop) {
     const op = b.dataset.iop, body = {name:"item", op, id:+b.dataset.id};
-    if (op === "remove" && !confirm("Прибрати відео з черги? Файл буде перенесено в папку skipped.")) return;
+    if ((op === "remove" || op === "cancel") && !confirm("Скасувати шортс #" + body.id + "? Файл буде перенесено в папку «скасовані», черга зсунеться. Повернути можна кнопкою «↩️ Повернути».")) return;
     if (op === "publish") { if (!confirm("Опублікувати шортс #" + body.id + " зараз?")) return; body.when = "now"; }
     if (b.dataset.platform) body.platform = b.dataset.platform;
     run(() => api("/api/action", body), b, op === "regen" ? "Перегенеровую…" : null);
@@ -867,7 +881,7 @@ $("#shutdown").addEventListener("click", async () => {
 
 /* ---------- вибір папки ---------- */
 const PICK_NAMES = {"paths.ready": "папку з готовими шортсами", "paths.posted": "папку для опублікованих",
-  "paths.skipped": "папку для пропущених", "regenerate_cwd": "робочу папку команди"};
+  "paths.skipped": "папку для пропущених", "paths.cancelled": "папку для скасованих", "regenerate_cwd": "робочу папку команди"};
 let fsTarget = null, fsCur = "", fsSep = "/";
 async function pickFolder(key, btn){
   const input = $(`[data-set="${key}"]`), initial = (input && input.value) || (S && S.settings[key]) || "";

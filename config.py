@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.13-58"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.13-59"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -80,6 +80,7 @@ DEFAULTS: dict = {
         "ready": "ready",
         "posted": "posted",
         "skipped": "skipped",
+        "cancelled": "cancelled",  # шортси, які ви скасували вручну
         "data": "data",
         "tokens": "tokens",
         "log": "log.txt",
@@ -211,13 +212,13 @@ def _hm(value) -> str:
     return f"{h:02d}:{m:02d}"
 
 
-PATH_NAMES = {"ready": "Готові шортси", "posted": "Опубліковані", "skipped": "Пропущені",
+PATH_NAMES = {"ready": "Готові шортси", "posted": "Опубліковані", "skipped": "Пропущені", "cancelled": "Скасовані",
               "data": "data", "tokens": "tokens"}
 
 
 def ensure_dirs(cfg: dict) -> None:
     """Створює робочі папки; якщо неможливо (немає диска тощо) — зрозуміла ConfigError."""
-    for key in ("ready", "posted", "skipped", "data", "tokens"):
+    for key in ("ready", "posted", "skipped", "cancelled", "data", "tokens"):
         path = Path(cfg["paths"][key])
         try:
             path.mkdir(parents=True, exist_ok=True)

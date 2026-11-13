@@ -16,7 +16,7 @@ from meta import auto_meta_json, json_status, load_meta, move_pair, read_json, w
 log = logging.getLogger("scheduler")
 
 
-SKIP_DIRS = {"posted", "skipped", "data", "tokens", "previews", ".venv", "__pycache__"}
+SKIP_DIRS = {"posted", "skipped", "cancelled", "data", "tokens", "previews", ".venv", "__pycache__"}
 
 
 def find_videos(folder: Path, depth: int = 4, exclude: tuple = ()) -> list[Path]:
@@ -88,6 +88,8 @@ class Scheduler:
             self.scan(now)
         self.ensure_slots(now)
         self.resume_publishing()
+        if hasattr(self.app.bot, "resume_bulk"):
+            self.app.bot.resume_bulk()
         pending_refresh = self.db.get("refresh_item")
         if pending_refresh:
             self.db.set("refresh_item", None)
@@ -130,7 +132,8 @@ class Scheduler:
         known = self.db.known_paths() - set(missing)
         found = []
         auto = bool((self.cfg.get("auto_meta") or {}).get("enabled", True))
-        for mp4 in find_videos(ready, exclude=(self.cfg["paths"]["posted"], self.cfg["paths"]["skipped"])):
+        for mp4 in find_videos(ready, exclude=(self.cfg["paths"]["posted"], self.cfg["paths"]["skipped"],
+                                               self.cfg["paths"]["cancelled"])):
             path = str(mp4.resolve())
             if path in known:
                 continue
@@ -500,14 +503,66 @@ class Scheduler:
             self.db.update_item(item["id"], slot_at=None)
             log.info("#%s пропущено (%s/%s) → у кінець черги", item["id"], skips, self.cfg["max_skips"])
 
+    # ---------- скасування вручну ----------
+    def cancel(self, item_id: int, by="") -> dict:
+        """Скасувати шортс: файл — у папку «скасовані», слот звільняється, черга зсувається (наступний — у цей слот)."""
+        item = self.db.get_item(item_id)
+        if not item or item["status"] not in ("queued", "notified", "approved"):
+            raise ValueError("Цей шортс уже не можна скасувати (публікується, опублікований або прибраний)")
+        if self.app.publisher.is_active(item_id):
+            raise ValueError("Шортс уже публікується")
+        now = now_ts()
+        origin = str(Path(item["mp4"]).parent)
+        try:
+            mp4, js = move_pair(item["mp4"], item["json"], Path(self.cfg["paths"]["cancelled"]))
+        except OSError as e:
+            raise ValueError(f"Не вдалося перенести файл у папку скасованих: {e}") from e
+        media.drop_previews(item["mp4"], self.cfg)
+        if item["slot_at"]:
+            if item["slot_at"] > now:  # слот ще попереду — віддаємо його наступному в черзі
+                self.db.x("UPDATE slots SET state='pending', item_id=NULL WHERE slot_at=? AND item_id=?",
+                          (item["slot_at"], item_id))
+            else:
+                self.db.x("UPDATE slots SET state='done' WHERE slot_at=? AND item_id=?", (item["slot_at"], item_id))
+        self.db.update_item(item_id, status="cancelled", mp4=mp4, json=js, note=None)
+        self.db.set(f"cancel_from:{item_id}", origin)
+        self.db.event(item_id, "cancelled", {"by": by, "title": self._title(self.db.get_item(item_id))})
+        log.info("#%s скасовано → %s", item_id, mp4)
+        self.app.bot.refresh(item_id)
+        self.process_notifications(now, min_lead=60)  # наступний із черги — одразу в цей слот
+        return self.db.get_item(item_id)
+
+    def restore(self, item_id: int) -> dict:
+        """Повернути скасований шортс: файл назад у папку з шортсами, першим у черзі."""
+        item = self.db.get_item(item_id)
+        if not item or item["status"] != "cancelled":
+            raise ValueError("Цей шортс не скасований")
+        if not Path(item["mp4"]).exists():
+            raise ValueError("Файл у папці скасованих не знайдено")
+        origin = Path(self.db.get(f"cancel_from:{item_id}") or self.cfg["paths"]["ready"])
+        ready = Path(self.cfg["paths"]["ready"]).resolve()
+        if ready != origin.resolve() and ready not in origin.resolve().parents:
+            origin = ready  # папку з шортсами змінили — повертаємо в поточну
+        mp4, js = move_pair(item["mp4"], item["json"], origin)
+        self.db.update_item(item_id, status="queued", mp4=mp4, json=js, slot_at=None, qpos=self.db.first_qpos(),
+                            note="↩️ Повернуто зі скасованих — перший у черзі")
+        self.db.set(f"cancel_from:{item_id}", None)
+        self.db.event(item_id, "restored", {})
+        self.app.bot.refresh(item_id)
+        self.db.update_item(item_id, note=None)
+        return self.db.get_item(item_id)
+
     # ---------- сповіщення за годину ----------
-    def process_notifications(self, now: int) -> None:
+    def process_notifications(self, now: int, min_lead: int | None = None) -> None:
         if self.db.get("paused") == "1":
             return  # пауза: нові шортси не надсилаються, слоти минають порожніми
         lead = int(self.cfg["notify_before_minutes"]) * 60
+        forced = min_lead
         min_lead = int(self.cfg["min_notify_lead_minutes"]) * 60
         if (self.cfg.get("power") or {}).get("sleep_between_slots"):
             min_lead = 60  # ПК прокидається за 5 хв — сповіщення має встигнути
+        if forced is not None:
+            min_lead = forced
         for s in self.db.q("SELECT * FROM slots WHERE state='pending' AND slot_at>? AND slot_at<=? "
                            "ORDER BY slot_at", (now + min_lead, now + lead)):
             item = self._next_item()

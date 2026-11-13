@@ -76,8 +76,8 @@ class PickTest(FlowBase):
         b = self.item("b")
         self.button(f"qd:{b['id']}")
         it = self.app.db.get_item(b["id"])
-        self.assertEqual(it["status"], "skipped")
-        self.assertIn(str(self.cfg["paths"]["skipped"]), it["mp4"])
+        self.assertEqual(it["status"], "cancelled")
+        self.assertIn(str(self.cfg["paths"]["cancelled"]), it["mp4"])
         self.app.scheduler.scan()  # не повертається в чергу
         self.assertNotIn("b", [Path(x["mp4"]).stem for x in self.app.db.queue()])
 

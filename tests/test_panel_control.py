@@ -73,7 +73,7 @@ class BotPanelCommandsTest(FlowBase):
         self.do(op="first", id=c["id"])
         self.assertEqual(Path(self.app.scheduler.projection()[0][0]["mp4"]).stem, "c")
         self.do(op="remove", id=c["id"])
-        self.assertEqual(self.app.db.get_item(c["id"])["status"], "skipped")
+        self.assertEqual(self.app.db.get_item(c["id"])["status"], "cancelled")
         with self.assertRaises(ValueError):
             self.do(op="first", id=c["id"])
         with self.assertRaises(ValueError):

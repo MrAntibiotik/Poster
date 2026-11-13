@@ -57,7 +57,7 @@ SECRET_LABELS = {
 FIELDS = {
     "slots": "slots", "timezone": "str", "notify_before_minutes": "int", "min_notify_lead_minutes": "int",
     "publish_on_approve": "bool", "ask_texts_before_publish": "bool", "catchup_minutes": "int", "max_skips": "int",
-    "paths.ready": "str", "paths.posted": "str", "paths.skipped": "str", "ready_status": "str",
+    "paths.ready": "str", "paths.posted": "str", "paths.skipped": "str", "paths.cancelled": "str", "ready_status": "str",
     "regenerate_command": "cmd", "regenerate_cwd": "str", "ffmpeg": "str", "ffprobe": "str",
     "reports.daily_time": "time", "reports.health_check_time": "time", "reports.stats_after_hours": "int", "reports.weekly_day": "int",
     "retry.attempts": "int", "retry.pause_seconds": "int", "graph_api_version": "str", "dry_run": "bool",
@@ -343,12 +343,15 @@ class Panel:
             return "Виконую…"
         if name == "open":
             target = {"ready": self.cfg["paths"]["ready"], "posted": self.cfg["paths"]["posted"],
-                      "skipped": self.cfg["paths"]["skipped"], "log": self.cfg["paths"]["log"],
+                      "skipped": self.cfg["paths"]["skipped"], "cancelled": self.cfg["paths"]["cancelled"],
+                      "log": self.cfg["paths"]["log"],
                       "folder": self.root}.get(data.get("what"))
             if not target:
                 raise ValueError("Невідомо що відкрити")
             control.open_path(target)
             return "Відкрито"
+        if name == "publish_all":
+            return self.bot_call({"op": "publish_all"}, 60)
         if name == "item":
             cmd = {k: data.get(k) for k in ("op", "id", "title", "tags", "when", "platform") if k in data}
             return self.bot_call(cmd, 180 if cmd.get("op") in ("publish", "save", "regen") else 40)
@@ -590,7 +593,7 @@ class Panel:
     def path_problems(cfg: dict) -> list[str]:
         from config import PATH_NAMES
         out = []
-        for key in ("ready", "posted", "skipped"):
+        for key in ("ready", "posted", "skipped", "cancelled"):
             p = Path(cfg["paths"][key])
             if p.anchor and not Path(p.anchor).exists():
                 out.append(f"«{PATH_NAMES[key]}»: {p} — диска {p.anchor} немає")
@@ -812,6 +815,8 @@ class Panel:
             "health_time": fmt_slot(cfg, int(db.get("health_ts")), now) if db.get("health_ts") else None,
             "ready_info": self.count_shorts(cfg["paths"]["ready"]),
             "failed": self.failed_state(cfg, now),
+            "cancelled": [{"id": i["id"], "name": Path(i["mp4"]).stem, "exists": Path(i["mp4"]).exists()}
+                          for i in db.items("status='cancelled'", order="id DESC")[:15]],
             "update": {"remote": db.get("update_remote") or "", "error": db.get("update_error") or "",
                        "newer": __import__("updater").version_key(db.get("update_remote") or "")
                        > __import__("updater").version_key(VERSION_NOW()),

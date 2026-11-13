@@ -94,6 +94,7 @@ AUTO_TTL = 24 * 3600     # службові повідомлення й звіт
 class Bot:
     def __init__(self, app):
         self._last_incoming: dict[int, int] = {}
+        self._bulk_running = False
         self.app = app
         self.cfg = app.cfg
         self.db = app.db
@@ -142,6 +143,54 @@ class Bot:
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня"]]
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
                 "is_persistent": True}
+
+    def publish_all(self, by="") -> str:
+        """Опублікувати всі шортси, що чекають на підтвердження (пропущені слоти) — по черзі, з поточними назвами."""
+        items = [i for i in self.db.items("status='notified'", order="slot_at")
+                 if self.app.publisher.targets(i) and not self.app.publisher.is_active(i["id"])]
+        if not items:
+            raise ValueError("Немає шортсів, що чекають на підтвердження")
+        ids = [i["id"] for i in items]
+        for i in ids:
+            self.db.update_item(i, status="approved")
+            self.db.event(i, "approved", {"by": by, "bulk": True})
+            self.app.scheduler.release_slot(i)
+            self.refresh(i)
+
+        try:
+            pending = json.loads(self.db.get("bulk_ids") or "[]")
+        except ValueError:
+            pending = []
+        self.db.set("bulk_ids", json.dumps(pending + [i for i in ids if i not in pending]))
+        self.resume_bulk()
+        self.db.set("last_activity", now_ts())
+        return f"🚀 Публікую по черзі: {', '.join('#' + str(i) for i in ids)}"
+
+    def resume_bulk(self) -> None:
+        """Черга «опублікувати всі»: по одному шортсу; переживає перезапуск бота (список — у базі)."""
+        if self._bulk_running or not self.db.get("bulk_ids"):
+            return
+        self._bulk_running = True
+
+        def work():
+            try:
+                while True:
+                    try:
+                        ids = json.loads(self.db.get("bulk_ids") or "[]")
+                    except ValueError:
+                        ids = []
+                    if not ids:
+                        break
+                    i = ids[0]
+                    item = self.db.get_item(i)
+                    if item and item["status"] in ("approved", "publishing"):
+                        self.app.publisher.start(i)  # по одному — щоб не вантажити інтернет і платформи
+                        while self.app.publisher.is_active(i):
+                            time.sleep(2)
+                    self.db.set("bulk_ids", json.dumps(ids[1:]) if ids[1:] else None)
+            finally:
+                self._bulk_running = False
+        self._bg(work)
 
     def update_now(self, force: bool = False) -> tuple[str, dict | None]:
         """Оновлення одразу, без очікування. Якщо саме йде публікація — питаємо (якщо не force)."""
@@ -490,6 +539,8 @@ class Bot:
             return f"⏭ Пропущено ({item['skips']}/{self.cfg['max_skips']}) — шортс переміщено в кінець черги"
         if st == "skipped":
             return f"⏭ Пропущено {item['skips']} рази — файли перенесено в skipped/"
+        if st == "cancelled":
+            return "🚫 <b>Скасовано</b> — файл у папці «скасовані». Черга зсунулась: наступний шортс іде в цей слот."
         if st == "missing":
             return "⚠️ Файл не знайдено — шортс прибрано з черги"
         return st
@@ -604,6 +655,9 @@ class Bot:
                 if not self.db.get(f"ignored:{item['id']}"):
                     return self.retry_keyboard(item["id"])
             return None
+        if item["status"] == "cancelled":
+            return {"inline_keyboard": [[{"text": "↩️ Повернути в чергу", "callback_data": f"cr:{item['id']}"}]]} \
+                if Path(item["mp4"]).exists() else None
         if item["status"] not in ("notified", "approved"):
             return None
         i = item["id"]
@@ -619,6 +673,10 @@ class Bot:
         if toggles:
             rows.append([{"text": "Вимкнути платформу:", "callback_data": f"noop:{i}"}])
             rows.append(toggles)
+        waiting = len(self.db.items("status='notified'"))
+        if item["status"] == "notified" and waiting >= 2:
+            rows.append([{"text": f"🚀 Опублікувати всі, що чекають ({waiting})", "callback_data": "pall:0"}])
+        rows.append([{"text": "🚫 Скасувати цей шортс", "callback_data": f"cx:{i}"}])
         return {"inline_keyboard": rows}
 
     def notify_item(self, item_id: int) -> None:
@@ -901,6 +959,19 @@ class Bot:
                 self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
             except TelegramError as e:
                 log.debug("edit platforms: %s", e)
+            return
+        if action in ("cx", "cr", "pall"):
+            try:
+                if action == "cx":
+                    self.app.scheduler.cancel(target, by=chat)
+                    answer("🚫 Скасовано — файл у папці «скасовані». Наступний шортс стає на цей слот.", True)
+                elif action == "cr":
+                    self.app.scheduler.restore(target)
+                    answer("↩️ Повернуто — перший у черзі", True)
+                else:
+                    answer(self.publish_all(by=chat)[:190], True)
+            except ValueError as e:
+                answer(str(e)[:190], True)
             return
         if action == "an":
             import analytics
@@ -1384,11 +1455,11 @@ class Bot:
             when = fmt_when(self.cfg, plan[target]) if plan.get(target) else "—"
             return answer(f"⬆️ Першим у черзі → {when}", True)
         if action == "qd":
-            from meta import move_pair
-            mp4, js = move_pair(item["mp4"], item["json"], Path(self.cfg["paths"]["skipped"]))
-            self.db.update_item(target, status="skipped", mp4=mp4, json=js, note="прибрано вручну")
-            self.db.event(target, "removed", {"by": chat})
-            answer("🗑 Прибрано з черги — файл у папці skipped", True)
+            try:
+                self.app.scheduler.cancel(target, by=chat)
+            except ValueError as e:
+                return answer(str(e)[:190], True)
+            answer("🚫 Скасовано — файл у папці «скасовані»", True)
             return self.cleanup(chat)
         answer()
 
@@ -1627,6 +1698,8 @@ class Bot:
             if kb:  # йде публікація — панель покаже питання
                 raise ValueError(text + " Натисніть «⬆️ Оновити» ще раз, щоб оновитись усе одно.")
             return text
+        if op == "publish_all":
+            return self.publish_all(by="panel")
         if op in ("report", "stats", "top"):
             from reports import collect, daily_report, weekly_top
             if op == "report":
@@ -1646,17 +1719,20 @@ class Bot:
         if not item:
             raise ValueError("Шортс не знайдено")
         st = item["status"]
+        if op == "cancel":
+            app.scheduler.cancel(item_id, by="panel")
+            return f"🚫 #{item_id} скасовано — файл у папці «скасовані», наступний шортс стає на цей слот"
+        if op == "restore":
+            app.scheduler.restore(item_id)
+            return f"↩️ #{item_id} повернуто — перший у черзі"
         if op in ("first", "remove") and st != "queued":
             raise ValueError("Цього відео вже немає в черзі")
         if op == "first":
             self.db.update_item(item_id, qpos=self.db.first_qpos())
             return f"⬆️ #{item_id} першим у черзі"
         if op == "remove":
-            from meta import move_pair
-            mp4, js = move_pair(item["mp4"], item["json"], Path(self.cfg["paths"]["skipped"]))
-            self.db.update_item(item_id, status="skipped", mp4=mp4, json=js, note="прибрано вручну")
-            self.db.event(item_id, "removed", {"by": "panel"})
-            return f"🗑 #{item_id} прибрано з черги — файл у папці skipped"
+            app.scheduler.cancel(item_id, by="panel")
+            return f"🚫 #{item_id} скасовано — файл у папці «скасовані»"
         if st not in ("queued", "notified", "approved"):
             raise ValueError("Шортс уже публікується або опубліковано — оновіть сторінку")
         if app.publisher.is_active(item_id):
