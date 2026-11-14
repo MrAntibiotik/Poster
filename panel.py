@@ -584,8 +584,13 @@ class Panel:
         if not Path(self.cfg["platforms"]["youtube"]["client_secrets_file"]).exists():
             raise ValueError("Спершу завантажте client_secret.json")
         yt = YouTube(self.reload())
-        self.job("youtube_auth", lambda: (yt.authorize(), f"YouTube підключено: {yt.check()}")[1])
-        return "Відкриваю браузер для входу в Google…"
+
+        def show(url):                         # браузер міг не відкритися (панель у фоні) — посилання в панелі
+            if self.jobs.get("youtube_auth", {}).get("state") == "running":
+                self.jobs["youtube_auth"]["message"] = f"Увійдіть у Google за посиланням (5 хв): {url}"
+        self.job("youtube_auth", lambda: (yt.authorize(on_url=show, timeout_s=300),
+                                          f"YouTube підключено: {yt.check()}")[1])
+        return "Відкриваю вхід у Google… Якщо браузер не відкрився — посилання з'явиться під кнопкою."
 
     def meta_exchange(self, token: str) -> list[dict]:
         from platforms.meta_graph import meta_pages

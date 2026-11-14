@@ -29,14 +29,44 @@ class YouTube(Platform):
         return self.tokens_dir / "youtube_token.json"
 
     # ---------- авторизація ----------
-    def authorize(self) -> None:
+    def authorize(self, on_url=None, timeout_s: int | None = None) -> None:
+        """Вхід у Google. on_url(посилання) — показати посилання (якщо браузер сам не відкрився, напр. панель
+        запущена у фоні); timeout_s — не чекати вічно."""
+        import webbrowser as _wb
+
+        import google_auth_oauthlib.flow as gflow
         from google_auth_oauthlib.flow import InstalledAppFlow
+
+        class _Browser:                        # спершу — посилання в панель, потім спроба відкрити браузер
+            @staticmethod
+            def get(using=None):
+                return _Browser
+
+            @staticmethod
+            def open(url, new=0, autoraise=True):
+                if on_url:
+                    on_url(url)
+                try:
+                    return _wb.open(url, new=new, autoraise=autoraise)
+                except Exception:  # noqa: BLE001 — браузер не відкрився: є посилання в панелі
+                    return False
 
         secrets = self.pcfg["client_secrets_file"]
         flow = InstalledAppFlow.from_client_secrets_file(secrets, SCOPES)
-        creds = flow.run_local_server(port=0, access_type="offline", prompt="consent",
-                                      authorization_prompt_message="Відкрийте в браузері: {url}",
-                                      success_message="Готово! Можна закрити вкладку.")
+        orig = gflow.webbrowser
+        gflow.webbrowser = _Browser
+        try:
+            creds = flow.run_local_server(port=0, access_type="offline", prompt="consent",
+                                          authorization_prompt_message="Відкрийте в браузері: {url}",
+                                          success_message="Готово! Можна закрити вкладку.",
+                                          timeout_seconds=timeout_s)
+        except Exception as e:  # noqa: BLE001
+            if type(e).__name__ == "WSGITimeoutError" or "timed out" in str(e).lower():
+                raise RuntimeError("Час вийшов — вхід у Google не завершено. Натисніть «Авторизувати» ще раз "
+                                   "і відкрийте посилання.") from e
+            raise
+        finally:
+            gflow.webbrowser = orig
         self.tokens_dir.mkdir(parents=True, exist_ok=True)
         self.token_file.write_text(creds.to_json(), encoding="utf-8")
         print(f"Токен YouTube збережено: {self.token_file}")

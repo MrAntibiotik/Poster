@@ -734,7 +734,9 @@ async function refresh(){
 
   pill($("#ytStatus"), tok.youtube.connected ? "підключено" : "не підключено", tok.youtube.connected ? "ok" : "bad");
   pill($("#ytSecret"), tok.youtube.client_secret ? "завантажено" : "немає", tok.youtube.client_secret ? "ok" : "warn");
-  $("#ytJob").textContent = jobText(s.jobs.youtube_auth);
+  { const t = jobText(s.jobs.youtube_auth), m = t.match(/https:\/\/\S+/);   // посилання на вхід — клікабельне
+    $("#ytJob").innerHTML = m ? esc(t.slice(0, m.index)) + `<a href="${esc(m[0])}" target="_blank" rel="noopener">відкрити вхід у Google ↗</a>`
+                              : esc(t); }
   pill($("#metaStatus"), conn.facebook ? "підключено" : "не підключено", conn.facebook ? "ok" : "bad");
   $("#fbPage").textContent = sec.FB_PAGE_ID.value || "—"; $("#igUser").textContent = sec.IG_USER_ID.value || "—";
   const tt = tok.tiktok;
