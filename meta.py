@@ -23,6 +23,7 @@ class PostMeta:
     game: str = ""
     auto: bool = False  # тексти створено автоматично з імені файлу
     ai: bool = False    # тексти написало ШІ
+    kind: str = "short"  # short — шортс; highlight — довге горизонтальне відео (YouTube, не Shorts)
 
 
 def read_json(path: str | Path) -> dict:
@@ -139,6 +140,7 @@ def load_meta(json_path: str | Path, title_override: str | None = None) -> PostM
         game=str(data.get("game") or Path(json_path).parent.name),
         auto=bool(data.get("auto_generated")) and not data.get("ai_generated"),
         ai=bool(data.get("ai_generated")),
+        kind="highlight" if str(data.get("kind") or "") == "highlight" else "short",
     )
 
 
@@ -182,6 +184,19 @@ def auto_meta_json(mp4: Path, game: str, cfg: dict) -> dict:
         "youtube": {"title": title, "description": title, "tags": [t.lstrip("#") for t in tags], "hashtags": tags},
         "tiktok": {"caption": f"{title} {line}".strip()},
         "instagram": {"caption": f"{title}\n\n{line}".strip()},
+    }
+
+
+def highlight_meta_json(mp4: Path, cfg: dict) -> dict:
+    """json для хайлайту без json (зазвичай його кладе shorts-autocut). Без #shorts і без ШІ."""
+    name = re.sub(r"\s*·\s*хайлайт$", "", mp4.stem)
+    title = title_from_filename(name, "WoT", "World of Tanks — бій повністю 🔥")
+    tags = ["#wot", "#worldoftanks", "#танки"]
+    return {
+        "status": cfg.get("ready_status", "ready_to_post"),
+        "kind": "highlight",
+        "game": "WoT",
+        "youtube": {"title": title, "description": title, "tags": [t.lstrip("#") for t in tags], "hashtags": tags},
     }
 
 

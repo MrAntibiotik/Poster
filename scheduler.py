@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import media
-from config import fmt_slot, fmt_when, local_dt, now_ts
-from meta import auto_meta_json, json_status, load_meta, move_pair, read_json, write_json
+from config import fmt_slot, fmt_when, highlights_on, local_dt, now_ts
+from meta import auto_meta_json, highlight_meta_json, json_status, load_meta, move_pair, read_json, write_json
 
 log = logging.getLogger("scheduler")
 
@@ -158,9 +158,10 @@ class Scheduler:
                 continue
             if json_status(data) != self.cfg["ready_status"]:
                 continue
-            found.append((order, path, str(js.resolve()), game))
+            found.append((order, path, str(js.resolve()), game, "short"))
+        found += self._scan_highlights(known)
         added = []
-        for _, path, js, game in sorted(found):
+        for _, path, js, game, kind in sorted(found):
             if path in missing:  # файл повернувся (напр. знову вибрали ту саму папку) — назад у чергу
                 item_id = missing[path]
                 self.db.update_item(item_id, status="queued", qpos=self.db.next_qpos(), note=None,
@@ -168,7 +169,8 @@ class Scheduler:
                 added.append(item_id)
                 self.db.event(item_id, "queued", {"file": Path(path).name, "again": True})
                 continue
-            item_id = self.db.add_item(path, js, game)
+            disabled = [p for p in ("tiktok", "instagram", "facebook")] if kind == "highlight" else None
+            item_id = self.db.add_item(path, js, game, kind=kind, disabled=disabled)
             if item_id:
                 added.append(item_id)
                 self.db.event(item_id, "queued", {"file": Path(path).name})
@@ -177,6 +179,42 @@ class Scheduler:
             self.announce_queued(added)
         return added
 
+    def _scan_highlights(self, known: set) -> list[tuple]:
+        """Хайлайти з окремої папки (Робочий стіл\\Хайлайти): json від shorts-autocut або створений тут."""
+        if not highlights_on(self.cfg):
+            return []
+        folder = Path(self.cfg["highlights"]["folder_path"])
+        if not folder.is_dir():
+            return []
+        out = []
+        for mp4 in find_videos(folder, depth=2):
+            path = str(mp4.resolve())
+            if path in known:
+                continue
+            js = mp4.with_suffix(".json")
+            try:
+                if time.time() - mp4.stat().st_mtime < 30:
+                    continue  # ще рендериться / копіюється
+                if not js.exists():
+                    write_json(js, highlight_meta_json(mp4, self.cfg))
+                    log.info("Створено json для хайлайту %s", mp4.name)
+                elif time.time() - js.stat().st_mtime < 30:
+                    continue
+                data = read_json(js)
+            except (OSError, ValueError) as e:
+                log.debug("Пропускаю хайлайт %s: %s", mp4, e)
+                continue
+            if json_status(data) != self.cfg["ready_status"]:
+                continue
+            out.append((mp4.stat().st_mtime, path, str(js.resolve()), "WoT", "highlight"))
+        return out
+
+    def _home(self, item: dict, ready: Path) -> Path:
+        """Папка, з якої відео має бути в черзі: шортси — папка шортсів, хайлайти — папка хайлайтів."""
+        if item.get("kind") == "highlight":
+            return Path(self.cfg["highlights"]["folder_path"]).resolve()
+        return ready
+
     def prune_queue(self, ready: Path) -> list[dict]:
         """Прибирає з черги відео, файлів яких більше немає або які не з поточної папки з шортсами."""
         ready = ready.resolve()
@@ -184,7 +222,8 @@ class Scheduler:
         for item in self.db.items("status IN ('queued','notified')"):
             mp4 = Path(item["mp4"])
             gone = not mp4.exists()
-            moved = not gone and item["status"] == "queued" and ready not in mp4.resolve().parents
+            home = self._home(item, ready)
+            moved = not gone and item["status"] == "queued" and home not in mp4.resolve().parents
             if not (gone or moved):
                 continue
             reason = "файл видалено" if gone else "не з поточної папки"
@@ -229,19 +268,22 @@ class Scheduler:
         self.app.bot.send("\n".join(lines), html_mode=True, kind="announce")
 
     # ---------- розклад наперед ----------
-    def future_slots(self, now: int, count: int) -> list[int]:
-        """Найближчі вільні слоти (у т.ч. наступних днів і позапланові) — для розкладу черги."""
+    def future_slots(self, now: int, count: int, lane: str = "short") -> list[int]:
+        """Найближчі вільні слоти (у т.ч. наступних днів і позапланові) — для розкладу черги.
+        lane: "short" — слоти шортсів, "highlight" — слоти хайлайтів."""
         if count <= 0:
             return []
         min_lead = int(self.cfg["min_notify_lead_minutes"]) * 60
-        rows = self.db.q("SELECT slot_at, state, item_id FROM slots WHERE slot_at>?", (now + min_lead,))
+        rows = self.db.q("SELECT slot_at, state, item_id FROM slots WHERE slot_at>? AND lane=?",
+                         (now + min_lead, lane))
+        taken_any = {r["slot_at"] for r in self.db.q("SELECT slot_at FROM slots WHERE slot_at>?", (now + min_lead,))}
         taken = {r["slot_at"] for r in rows if r["state"] != "pending" or r["item_id"]}
         free = {r["slot_at"] for r in rows if r["state"] == "pending" and not r["item_id"]}
         today = local_dt(self.cfg, now).date()
         for d in range(400):  # до ~1 року наперед
             day = today + timedelta(days=d)
-            for ts in self._day_slots(day):
-                if ts > now + min_lead and ts not in taken:
+            for ts in self._day_slots(day, lane):
+                if ts > now + min_lead and ts not in taken and (ts in free or ts not in taken_any):
                     free.add(ts)
             # слоти з БД (сьогодні/завтра, позапланові) вже враховано; далі дні лише пізніші
             if d >= 1 and len(free) >= count:
@@ -254,8 +296,13 @@ class Scheduler:
         queue = [it for it in self.db.queue() if Path(it["mp4"]).exists()]  # видалені файли не показуємо
         if self.db.get("paused") == "1":
             return [(it, None) for it in queue]
-        slots = self.future_slots(now, len(queue))
-        return [(it, slots[i] if i < len(slots) else None) for i, it in enumerate(queue)]
+        when: dict[int, int | None] = {}
+        for lane in ("short", "highlight"):           # шортси і хайлайти — кожні у своїх слотах
+            part = [it for it in queue if (it.get("kind") or "short") == lane]
+            slots = self.future_slots(now, len(part), lane) if (lane == "short" or highlights_on(self.cfg)) else []
+            for i, it in enumerate(part):
+                when[it["id"]] = slots[i] if i < len(slots) else None
+        return [(it, when.get(it["id"])) for it in queue]
 
     def move_slot(self, item_id: int, ts: int) -> None:
         """Переносить сповіщений/підтверджений шортс на інший час; старий слот віддається черзі."""
@@ -342,22 +389,38 @@ class Scheduler:
             self.db.x("UPDATE slots SET state='done' WHERE slot_at=? AND item_id=?", (item["slot_at"], item_id))
 
     # ---------- слоти ----------
-    def _day_slots(self, day) -> list[int]:
-        out = []
-        for hm in self.cfg["slots"]:
+    def _day_slots(self, day, lane: str = "short") -> list[int]:
+        def at(hm: str) -> int:
             h, m = map(int, str(hm).split(":"))
-            out.append(int(datetime(day.year, day.month, day.day, h, m, tzinfo=self.cfg["tz"]).timestamp()))
+            return int(datetime(day.year, day.month, day.day, h, m, tzinfo=self.cfg["tz"]).timestamp())
+        shorts = [at(hm) for hm in self.cfg["slots"]]
+        if lane == "short":
+            return shorts
+        if not highlights_on(self.cfg):
+            return []
+        out = []
+        for hm in self.cfg["highlights"]["slots"]:
+            ts = at(hm)
+            while ts in shorts:  # той самий час, що й у шортса, — хайлайт на хвилину пізніше
+                ts += 60
+            out.append(ts)
         return out
 
     def ensure_slots(self, now: int) -> None:
         today = local_dt(self.cfg, now).date()
-        wanted = set()
-        for d in (today, today + timedelta(days=1)):
-            wanted.update(self._day_slots(d))
-        for ts in wanted:
-            self.db.x("INSERT OR IGNORE INTO slots(slot_at, source, state) VALUES (?, 'config', 'pending')", (ts,))
+        wanted: dict[int, str] = {}
+        for lane in ("highlight", "short"):  # шортс перемагає, якщо час збігся
+            for d in (today, today + timedelta(days=1)):
+                for ts in self._day_slots(d, lane):
+                    wanted[ts] = lane
+        for ts, lane in wanted.items():
+            self.db.x("INSERT OR IGNORE INTO slots(slot_at, source, state, lane) VALUES (?, 'config', 'pending', ?)",
+                      (ts, lane))
+            self.db.x("UPDATE slots SET lane=? WHERE slot_at=? AND source='config' AND state='pending' "
+                      "AND item_id IS NULL", (lane, ts))
         # Слоти, прибрані з config.json, ще не використані — видаляємо
-        for s in self.db.q("SELECT slot_at FROM slots WHERE source='config' AND state='pending' AND slot_at>?", (now,)):
+        for s in self.db.q("SELECT slot_at FROM slots WHERE source='config' AND state='pending' AND slot_at>? "
+                           "AND item_id IS NULL", (now,)):
             if s["slot_at"] not in wanted:
                 self.db.x("DELETE FROM slots WHERE slot_at=?", (s["slot_at"],))
 
@@ -394,7 +457,8 @@ class Scheduler:
             item = self.db.get_item(s["item_id"]) if s["item_id"] else planned.get(s["slot_at"])
             kind = (item["status"] if item and s["item_id"] else "planned" if item else
                     "paused" if self.db.get("paused") == "1" else "empty")
-            out.append({"slot_at": s["slot_at"], "manual": s["source"] == "manual", "item": item, "kind": kind})
+            out.append({"slot_at": s["slot_at"], "manual": s["source"] == "manual", "item": item, "kind": kind,
+                        "lane": s.get("lane") or "short"})
         return out
 
     def upcoming(self, now: int, limit: int = 6) -> list[dict]:
@@ -565,9 +629,9 @@ class Scheduler:
             min_lead = forced
         for s in self.db.q("SELECT * FROM slots WHERE state='pending' AND slot_at>? AND slot_at<=? "
                            "ORDER BY slot_at", (now + min_lead, now + lead)):
-            item = self._next_item()
+            item = self._next_item(s.get("lane") or "short")
             if not item:
-                return
+                continue  # для цієї доріжки (шортси / хайлайти) черга порожня
             with self.db.tx():
                 self.db.conn.execute("UPDATE slots SET item_id=?, state='notified' WHERE slot_at=?",
                                      (item["id"], s["slot_at"]))
@@ -585,8 +649,8 @@ class Scheduler:
             self.db.event(item["id"], "notified", {"slot": s["slot_at"]})
             log.info("Сповіщення: #%s на слот %s", item["id"], fmt_slot(self.cfg, s["slot_at"]))
 
-    def _next_item(self) -> dict | None:
-        for item in self.db.queue():
+    def _next_item(self, kind: str = "short") -> dict | None:
+        for item in self.db.queue(kind):
             if Path(item["mp4"]).exists() and Path(item["json"]).exists():
                 return item
             log.warning("#%s: файл зник (%s) — прибираю з черги", item["id"], item["mp4"])
@@ -646,7 +710,7 @@ class Scheduler:
         if not ai.enabled(self.cfg) or (self._ai_thread and self._ai_thread.is_alive()):
             return
         todo = []
-        for item in self.db.items("status IN ('queued','notified')"):
+        for item in self.db.items("status IN ('queued','notified') AND kind!='highlight'"):
             if int(self.db.get(f"ai_tries:{item['id']}") or 0) >= 3:
                 continue
             try:

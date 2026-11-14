@@ -93,10 +93,13 @@ class App:
         st_names = {"notified": "⏳ чекає підтвердження", "approved": "👍 підтверджено", "publishing": "⏫ публікується"}
         for it in active:
             slot = fmt_slot(self.cfg, it["slot_at"], now) if it["slot_at"] else ""
-            lines.append(f"▶️ #{it['id']} {esc(Path(it['mp4']).stem)} — {st_names[it['status']]} {slot}")
+            hl = "🎞 " if it.get("kind") == "highlight" else ""
+            lines.append(f"▶️ #{it['id']} {hl}{esc(Path(it['mp4']).stem)} — {st_names[it['status']]} {slot}")
         plan = self.scheduler.projection(now)
         for n, (it, ts) in enumerate(plan[:25], 1):
             game = f"[{esc(it['game'])}] " if it["game"] else ""
+            if it.get("kind") == "highlight":
+                game = "🎞 хайлайт · "
             sk = f" (пропусків: {it['skips']})" if it["skips"] else ""
             when = f" → <b>{fmt_when(self.cfg, ts, now)}</b>" if ts else ""
             lines.append(f"{n}. #{it['id']} {game}{esc(Path(it['mp4']).stem)}{when}{sk}")
@@ -115,7 +118,7 @@ class App:
         kinds = {"notified": "⏳ чекає підтвердження", "approved": "👍 підтверджено", "publishing": "⏫ публікується",
                  "planned": "📦 з черги"}
         for s in self.scheduler.slot_plan(now, 6):
-            src = " (тестовий)" if s["manual"] else ""
+            src = " (тестовий)" if s["manual"] else " 🎞 хайлайт" if s.get("lane") == "highlight" else ""
             it = s["item"]
             who = (f"#{it['id']} {esc(Path(it['mp4']).stem)} — {kinds.get(s['kind'], s['kind'])}" if it else
                    "⏸ пауза" if s["kind"] == "paused" else "порожньо (черга порожня)")

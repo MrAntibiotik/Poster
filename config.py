@@ -43,6 +43,15 @@ DEFAULTS: dict = {
                                 "XSplit.Core.exe", "Twitch Studio.exe", "PRISMLiveStudio.exe", "vMix64.exe",
                                 "WorldOfTanks.exe", "wgc.exe", "lgc.exe"]},
     "max_skips": 3,
+    # Хайлайти (довгі горизонтальні відео від shorts-autocut): окрема черга і свій час публікації,
+    # лише YouTube як звичайне відео (не Shorts). folder "" — Робочий стіл\Хайлайти
+    "highlights": {
+        "enabled": True,
+        "folder": "",
+        "slots": ["18:00"],        # 1–3 рази на день; окремо від слотів шортсів
+        "privacy": "",             # "" — як для шортсів (platforms.youtube.privacy); або public / unlisted / private
+        "category_id": "20",
+    },
     "ready_status": "ready_to_post",
     # Хештеги, що ЗАВЖДИ додаються в кінець назви (YouTube) і підписів (TikTok / Instagram / Facebook)
     "always_hashtags": {
@@ -206,7 +215,41 @@ def load_config(path: str | os.PathLike | None = None) -> dict:
     except ValueError as e:
         raise ConfigError("reports.daily_time / health_check_time: очікується час «HH:MM»") from e
     cfg["tz"] = ZoneInfo(cfg["timezone"])
+    hl = cfg["highlights"]
+    try:
+        hl["slots"] = sorted({_hm(x) for x in (hl.get("slots") or [])})[:3]
+    except ValueError as e:
+        raise ConfigError("highlights.slots: очікується час «HH:MM»") from e
+    folder = str(hl.get("folder") or "").strip()
+    if folder:
+        fp = Path(os.path.expandvars(folder))
+        hl["folder_path"] = (fp if fp.is_absolute() else root / fp).resolve()
+    else:
+        hl["folder_path"] = desktop_dir() / "Хайлайти"
     return cfg
+
+
+def desktop_dir() -> Path:
+    """Справжній Робочий стіл (у т.ч. перенесений в OneDrive)."""
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders") as k:
+                d = Path(os.path.expandvars(winreg.QueryValueEx(k, "Desktop")[0]))
+                if d.is_dir():
+                    return d
+        except OSError:
+            pass
+        for d in (Path.home() / "OneDrive" / "Desktop", Path.home() / "OneDrive" / "Робочий стіл"):
+            if d.is_dir():
+                return d
+    return Path.home() / "Desktop"
+
+
+def highlights_on(cfg: dict) -> bool:
+    hl = cfg.get("highlights") or {}
+    return bool(hl.get("enabled")) and bool(hl.get("slots"))
 
 
 def _hm(value) -> str:

@@ -1,4 +1,4 @@
-"""YouTube Shorts через YouTube Data API v3 (OAuth)."""
+"""YouTube Shorts (і хайлайти — звичайні відео) через YouTube Data API v3 (OAuth)."""
 from __future__ import annotations
 
 import logging
@@ -81,12 +81,16 @@ class YouTube(Platform):
         from googleapiclient.errors import HttpError
         from googleapiclient.http import MediaFileUpload
 
-        title = _clean(meta.yt_title)[:100].strip() or "Shorts"
+        highlight = getattr(meta, "kind", "short") == "highlight"
+        title = _clean(meta.yt_title)[:100].strip() or ("World of Tanks" if highlight else "Shorts")
         desc = _clean(meta.yt_description)
         tags_line = " ".join(t for t in meta.hashtags if t.lower() not in desc.lower())
         if tags_line:
             desc = f"{desc}\n\n{tags_line}".strip()
-        if self.pcfg.get("add_shorts_hashtag") and "#shorts" not in (desc + title).lower():
+        if highlight:  # звичайне відео: без #Shorts
+            desc = re.sub(r"(?i)\s*#shorts\b", "", desc).strip()
+            title = re.sub(r"(?i)\s*#shorts\b", "", title).strip() or "World of Tanks"
+        elif self.pcfg.get("add_shorts_hashtag") and "#shorts" not in (desc + title).lower():
             desc = f"{desc}\n#Shorts".strip()
         tags, total = [], 0
         for t in meta.yt_tags:
@@ -96,9 +100,14 @@ class YouTube(Platform):
                 total += len(t) + 3
         lang = self.pcfg.get("language") or "uk"
         privacy = self.pcfg.get("privacy", "public")
+        category = str(self.pcfg.get("category_id", "20"))
+        if highlight:
+            hl = self.cfg.get("highlights") or {}
+            privacy = hl.get("privacy") or privacy
+            category = str(hl.get("category_id") or category)
         body = {
             "snippet": {"title": title, "description": desc[:5000], "tags": tags,
-                        "categoryId": str(self.pcfg.get("category_id", "20")),
+                        "categoryId": category,
                         "defaultLanguage": lang, "defaultAudioLanguage": lang},
             "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False, "embeddable": True},
         }
@@ -120,7 +129,7 @@ class YouTube(Platform):
             if fd:
                 fd.close()
         vid = resp["id"]
-        out = {"id": vid, "url": f"https://youtube.com/shorts/{vid}"}
+        out = {"id": vid, "url": f"https://youtu.be/{vid}" if highlight else f"https://youtube.com/shorts/{vid}"}
         real = (resp.get("status") or {}).get("privacyStatus") or privacy
         out["privacy"] = real
         if real != privacy:

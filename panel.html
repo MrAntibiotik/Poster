@@ -437,6 +437,16 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <div class="two"><div><label class="f">ffmpeg</label><input type="text" data-set="ffmpeg"></div>
         <div><label class="f">ffprobe</label><input type="text" data-set="ffprobe"></div></div>
       <label class="f">Версія Graph API (Meta)</label><input type="text" data-set="graph_api_version" style="max-width:160px">
+      <h2 style="margin-top:18px">🎞 Хайлайти (довгі відео від shorts-autocut)</h2>
+      <p class="muted">Окрема черга: свій час публікації, лише YouTube як звичайне відео (не Shorts), шортси не зсуваються.
+        Підтвердження — у боті, як для шортсів (підпис «🎞 ХАЙЛАЙТ»).</p>
+      <label class="check"><input type="checkbox" data-set="highlights.enabled"> Публікувати хайлайти</label>
+      <label class="f">Папка хайлайтів (порожньо — Робочий стіл\Хайлайти, туди їх кладе shorts-autocut)</label>
+      <div class="pw"><input type="text" data-set="highlights.folder" placeholder="Робочий стіл\Хайлайти"><button class="btn" data-pick="highlights.folder" title="Обрати папку">📂</button></div>
+      <div class="two"><div><label class="f">Час публікації (1–3 через кому)</label><input type="text" data-set="highlights.slots" placeholder="18:00"></div>
+        <div><label class="f">Видимість на YouTube</label><select data-set="highlights.privacy">
+          <option value="">як у шортсів</option><option value="public">публічне</option>
+          <option value="unlisted">за посиланням</option><option value="private">приватне</option></select></div></div>
       <div class="row" style="margin-top:12px"><button class="btn primary" data-save-settings>Зберегти розклад і папки</button></div>
     </div>
   </section>
@@ -975,7 +985,8 @@ $("#shutdown").addEventListener("click", async () => {
 
 /* ---------- вибір папки ---------- */
 const PICK_NAMES = {"paths.ready": "папку з готовими шортсами", "paths.posted": "папку для опублікованих",
-  "paths.skipped": "папку для пропущених", "paths.cancelled": "папку для скасованих", "regenerate_cwd": "робочу папку команди"};
+  "paths.skipped": "папку для пропущених", "paths.cancelled": "папку для скасованих", "regenerate_cwd": "робочу папку команди",
+  "highlights.folder": "папку з хайлайтами"};
 let fsTarget = null, fsCur = "", fsSep = "/";
 async function pickFolder(key, btn){
   const input = $(`[data-set="${key}"]`), initial = (input && input.value) || (S && S.settings[key]) || "";

@@ -16,6 +16,12 @@
     "tokens": "tokens",
     "log": "log.txt"
   },
+  "highlights": {
+    "enabled": true,
+    "folder": "",
+    "slots": ["18:00"],
+    "privacy": ""
+  },
   "ready_status": "ready_to_post",
   "always_hashtags": {
     "tags": ["#wot", "#wotua", "#mrantibiotik", "#танки"],

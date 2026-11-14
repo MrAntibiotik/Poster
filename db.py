@@ -104,6 +104,12 @@ class DB:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.executescript(SCHEMA)
+            # нові колонки в старих базах: тип відео (short / highlight) і «доріжка» слоту
+            for table, col, ddl in (("items", "kind", "TEXT NOT NULL DEFAULT 'short'"),
+                                    ("slots", "lane", "TEXT NOT NULL DEFAULT 'short'")):
+                cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+                if col not in cols:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
 
     # ---- базові операції ----
     def q(self, sql: str, args=()) -> list[dict]:
@@ -159,14 +165,15 @@ class DB:
         vals.append(item_id)
         self.x(f"UPDATE items SET {', '.join(sets)} WHERE id=?", vals)
 
-    def add_item(self, mp4: str, json_path: str, game: str) -> int | None:
+    def add_item(self, mp4: str, json_path: str, game: str, kind: str = "short",
+                 disabled: list[str] | None = None) -> int | None:
         with self.tx():
             if self.conn.execute("SELECT 1 FROM items WHERE mp4=?", (mp4,)).fetchone():
                 return None
             qpos = self.next_qpos()
             cur = self.conn.execute(
-                "INSERT INTO items(mp4, json, game, added_at, qpos) VALUES (?,?,?,?,?)",
-                (mp4, json_path, game, now_ts(), qpos),
+                "INSERT INTO items(mp4, json, game, added_at, qpos, kind, disabled) VALUES (?,?,?,?,?,?,?)",
+                (mp4, json_path, game, now_ts(), qpos, kind, json.dumps(disabled or [])),
             )
             return cur.lastrowid
 
@@ -178,7 +185,10 @@ class DB:
         r = self.one("SELECT COALESCE(MIN(qpos), 1) AS m FROM items WHERE status='queued'")
         return int(r["m"]) - 1
 
-    def queue(self) -> list[dict]:
+    def queue(self, kind: str | None = None) -> list[dict]:
+        """Черга; kind — лише шортси ("short") або лише хайлайти ("highlight")."""
+        if kind:
+            return self.items("status='queued' AND kind=?", (kind,))
         return self.items("status='queued'")
 
     def known_paths(self) -> set[str]:
