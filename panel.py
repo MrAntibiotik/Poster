@@ -766,7 +766,7 @@ class Panel:
             out.append({
                 "id": item["id"], "name": Path(item["mp4"]).stem, "ignored": ignored,
                 "exists": Path(item["mp4"]).exists(),
-                "errors": {NAMES.get(p, p): str(r.get("error", ""))[:200] for p, r in item["errors"].items()}
+                "errors": {NAMES.get(p, p): str(r.get("error", ""))[:900] for p, r in item["errors"].items()}
                 or ({"—": "не опубліковано ніде"} if item["status"] == "failed" else {}),
                 "ok": [NAMES.get(p, p) for p, r in item["results"].items() if r.get("status") == "ok"],
                 "retry": fmt_when(cfg, when, now) if when else "",

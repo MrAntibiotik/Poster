@@ -548,9 +548,11 @@ class Bot:
     @staticmethod
     def _short_note(note: str) -> str:
         n = str(note or "").lower()
-        if "тією ж частотою" in n:
+        if "крайній варіант" in n or "30 к/с" in n:
+            return "копія 30 к/с"
+        if "сувора копія" in n or "тією ж частотою" in n:
             return "полегшена копія"
-        if "перекодовано" in n or "копію під вимоги" in n or "не прийняв оригінал" in n:
+        if "перекодовано" in n or "копію під вимоги" in n or "копія під вимоги" in n or "не прийняв оригінал" in n:
             return "копія під вимоги Reels"
         if "приват" in n:
             return "приватне"
@@ -562,10 +564,15 @@ class Bot:
         from reports import ICONS, explain_error
         lines = []
         targets = [p for p in PLATFORMS if p in self.app.platforms and p not in item["disabled"]]
+        current = self.db.get(f"pubnow:{item['id']}") if publishing else None
         for p in PLATFORMS:
             r = item["results"].get(p)
             icon = ICONS.get(p, "•")
             if p in item["disabled"]:
+                continue
+            if p == current:  # саме зараз публікується (стару помилку не показуємо — вона може вже не бути актуальною)
+                tr = self.db.get(f"pubtry:{item['id']}:{p}")
+                lines.append(f"{icon} {NAMES[p]} — ⏳ публікується…" + (f" (спроба {tr})" if tr else ""))
                 continue
             if not r:
                 if publishing and p in targets:

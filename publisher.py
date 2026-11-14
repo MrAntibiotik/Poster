@@ -65,7 +65,9 @@ class Publisher:
         for key in targets:
             if results.get(key, {}).get("status") == "ok":
                 continue  # уже опубліковано (відновлення після збою/перезапуску)
+            db.set(f"pubnow:{item_id}", key)  # яка платформа зараз — для підпису відео
             results[key] = self._publish_one(key, item, meta)
+            db.set(f"pubnow:{item_id}", None)
             db.update_item(item_id, results=results)
             app.bot.refresh(item_id)  # у підписі відео видно, куди вже вийшло
 
@@ -142,8 +144,12 @@ class Publisher:
                 last = e
                 log.warning("#%s %s: спроба %d/%d невдала: %s", item["id"], key, i, attempts, e,
                             exc_info=not isinstance(e, (OSError,)) and log.isEnabledFor(logging.DEBUG))
+                if "не прийняв відео" in str(e):
+                    break  # Instagram уже перепробував усі варіанти файлу — повторювати все ще раз марно
                 if i < attempts:
+                    app.db.set(f"pubtry:{item['id']}:{key}", f"{i + 1}/{attempts}")
                     self.sleep(pause)
+        app.db.set(f"pubtry:{item['id']}:{key}", None)
         app.db.event(item["id"], "platform_error", {"platform": key, "error": str(last)[:300]})
         return {"status": "error", "attempts": attempts, "error": str(last)[:500]}
 

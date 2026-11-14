@@ -69,6 +69,26 @@ class RetryTest(FlowBase):
         self.assertIn(999, self.app.bot.tg.deleted)  # статус — у підписі відео, окреме повідомлення прибрано
         self.assertIsNone(self.app.db.get(f"itemmsg:{self.item['id']}"))
 
+    def test_caption_shows_current_platform_while_retrying(self):
+        db, bot = self.app.db, self.app.bot
+        db.update_item(self.item["id"], status="publishing")
+        db.set(f"pubnow:{self.item['id']}", "instagram")
+        db.set(f"pubtry:{self.item['id']}:instagram", "2/3")
+        cap = bot.caption(db.get_item(self.item["id"]))
+        self.assertIn("📸 Instagram — ⏳ публікується… (спроба 2/3)", cap)
+        self.assertNotIn("ProcessingFailed", cap)  # стара помилка не плутає
+
+    def test_instagram_all_variants_failed_no_outer_retry(self):
+        calls = []
+
+        class Rejects:
+            def publish(self, path, meta):
+                calls.append(1)
+                raise RuntimeError("Instagram не прийняв відео (3 спроб): …")
+        self.app.platforms["instagram"] = Rejects()
+        self.button(f"rf:{self.item['id']}")
+        self.assertEqual(len(calls), 1)  # без ще двох повних кіл по 3 варіанти файлу
+
     def test_retry_in_free_slot(self):
         self.button(f"rq:{self.item['id']}")
         when = self.app.scheduler.retry_at(self.item["id"])

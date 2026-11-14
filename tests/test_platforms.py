@@ -192,8 +192,8 @@ class InstagramSpecTest(Base):
         self.cfg["platforms"]["instagram"]["max_upload_mb"] = 0.00001
         f = self.http(meta_graph, self.routes(Resp({"success": True})))
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
-        self.assertEqual(modes, ["safe60"])  # оригінал і важку копію пропущено
-        self.assertIn("тією ж частотою кадрів", r["note"])
+        self.assertEqual(modes, [""])  # важкий оригінал пропущено, першою йде копія під вимоги Reels
+        self.assertIn("копія під вимоги Reels", r["note"])
         self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)
 
     def test_spurious_400_but_container_finished(self):

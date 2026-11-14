@@ -150,8 +150,10 @@ class Instagram(_MetaBase):
             tokens.append(("користувача", user))
         size_mb = os.path.getsize(video_path) / 1024 / 1024
         big = size_mb > float(self.pcfg.get("max_upload_mb", 100) or 10 ** 6)
+        # Порядок спроб: оригінал (якщо легкий і за вимогами) → копія під вимоги Reels (вона вже не раз
+        # проходила і з важкими файлами) → сувора копія 10 Мбіт/с → крайній варіант 30 к/с.
         files = ([] if problems or big else [("оригінал", lambda: video_path)]) + \
-            ([] if big else [("копія під вимоги Reels", lambda: media.instagram_copy(video_path, self.cfg))]) + \
+            [("копія під вимоги Reels", lambda: media.instagram_copy(video_path, self.cfg))] + \
             [("сувора копія (та ж частота кадрів, 10 Мбіт/с)",
               lambda: media.instagram_copy(video_path, self.cfg, mode="safe60")),
              ("крайній варіант (30 к/с, 6 Мбіт/с)", lambda: media.instagram_copy(video_path, self.cfg, mode="safe30"))]
@@ -167,8 +169,8 @@ class Instagram(_MetaBase):
                     errors.append(f"{fname}" + (f" (токен {tname})" if len(tokens) > 1 else "") + f" — {short_error(e)}")
                     continue
                 notes = []
-                if big and fname.startswith("сувора"):
-                    notes.append(f"файл {size_mb:.0f} МБ — завантажено копію з тією ж частотою кадрів ≤10 Мбіт/с "
+                if big:
+                    notes.append(f"файл {size_mb:.0f} МБ — завантажено {fname} "
                                  "(Instagram однаково стискає Reels до ~3–5 Мбіт/с)")
                 elif problems:
                     notes.append("перекодовано під вимоги Reels (" + ", ".join(problems) + ")")
