@@ -1513,7 +1513,8 @@ class Bot:
         item = self.db.get_item(item_id)
         now = now_ts()
         rows = []
-        if item["slot_at"]:
+        passed = bool(item["slot_at"] and item["slot_at"] <= now + 60)
+        if item["slot_at"] and not passed:  # минулий слот «залишити» не можна — це було б «зараз»
             rows.append([{"text": f"✅ Залишити: {fmt_when(self.cfg, item['slot_at'], now)}",
                           "callback_data": f"tk:{item_id}"}])
         free = self.app.scheduler.future_slots(now, 8)
@@ -1528,7 +1529,8 @@ class Bot:
                 "🕐 <b>Крок 3/3. Коли публікуємо?</b>" if dialog else
                 f"🕐 <b>Коли опублікувати шортс #{item_id}?</b>" if item["status"] == "queued" else
                 f"🕐 <b>Новий час для шортса #{item_id}</b>")
-        self.tmp(chat, f"{head}\nОберіть вільний слот, «Свій час» (напр. <code>завтра 18:30</code>) або «Зараз».",
+        note = (f"\n⚠️ Слот {fmt_slot(self.cfg, item['slot_at'], now)} уже минув — оберіть новий час." if passed else "")
+        self.tmp(chat, f"{head}{note}\nОберіть вільний слот, «Свій час» (напр. <code>завтра 18:30</code>) або «⚡ Зараз».",
                  reply_markup={"inline_keyboard": rows})
 
     def time_button(self, chat: int, item_id: int, action: str, rest: list, answer) -> None:
@@ -1562,6 +1564,9 @@ class Bot:
             answer("Публікую зараз…")
             return self._apply_time(chat, item, st, "now")
         if action == "tk":
+            if item["slot_at"] and item["slot_at"] <= now_ts() + 60:  # стара кнопка, а слот уже минув
+                answer("Цей слот уже минув — оберіть новий час", True)
+                return self._ask_time(chat, item_id, dialog=dialog)
             answer("Час залишено")
             return self._apply_time(chat, item, st, None)
         if action == "ts" and rest:
@@ -1597,7 +1602,8 @@ class Bot:
         dialog = st.get("mode") == "dialog"
         self.dialog_set(chat, None)
         item = self.db.get_item(item_id)
-        now_pub = choice == "now" or (dialog and choice is None and self.cfg.get("publish_on_approve"))
+        # Час обрано явно (крок 3/3 або «Залишити») — публікуємо саме тоді, навіть якщо ввімкнено «одразу після підтвердження».
+        now_pub = choice == "now"
         if dialog or now_pub:
             if item["status"] == "notified":
                 self.db.update_item(item_id, status="approved")
@@ -1790,7 +1796,7 @@ class Bot:
             if item["status"] == "notified":
                 self.db.update_item(item_id, status="approved")
                 self.db.event(item_id, "approved", {"by": "panel"})
-            if when == "now" or (when == "keep" and self.cfg.get("publish_on_approve")):
+            if when == "now":  # у панелі час обрано явно — «залишити» означає «в цей слот», а не «зараз»
                 app.scheduler.release_slot(item_id)
                 app.publisher.start(item_id)
                 return f"🚀 #{item_id} публікується зараз"

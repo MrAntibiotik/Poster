@@ -732,7 +732,7 @@ function openEditor(id){
   $("#imName").value = it.title; $("#imTags").value = it.tags;
   $("#imAlways").textContent = it.always ? "У кінець назви й підписів автоматично додаються: " + it.always : "";
   const opts = [];
-  if (it.ts) opts.push(`<option value="keep">✅ Залишити: ${esc(it.when)}</option>`);
+  if (it.ts && it.ts * 1000 > Date.now() + 60000) opts.push(`<option value="keep">✅ Залишити: ${esc(it.when)}</option>`);
   opts.push(`<option value="now">⚡ Зараз</option>`);
   S.free_slots.filter(f => f.ts !== it.ts).forEach(f => opts.push(`<option value="${f.ts}">📦 ${esc(f.label)}</option>`));
   opts.push(`<option value="custom">⌨️ Свій час…</option>`);

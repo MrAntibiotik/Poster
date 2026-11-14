@@ -52,6 +52,38 @@ class TimeTest(FlowBase):
         self.assertIn("Крок 3/3", self.app.bot.tg.sent[-1][1])
         return item
 
+    def test_keep_slot_never_publishes_now(self):
+        """«Залишити: сьогодні 13:00» = опублікувати о 13:00, навіть з «публікувати одразу після підтвердження»."""
+        self.cfg["publish_on_approve"] = True
+        item = self.start()
+        keep = [b for b in self.kb() if b["callback_data"].startswith("tk:")][0]
+        self.assertIn("13:00", keep["text"])
+        self.button(keep["callback_data"])
+        it = self.app.db.get_item(item["id"])
+        self.assertEqual((it["status"], it["slot_at"]), ("approved", self.ts(11, "13:00")))
+        self.app.scheduler.tick(self.ts(11, "12:30"))
+        self.assertEqual(self.app.db.get_item(item["id"])["status"], "approved")
+        self.app.scheduler.tick(self.ts(11, "13:00"))
+        self.assertEqual(self.app.db.get_item(item["id"])["status"], "posted")
+
+    def test_passed_slot_cannot_be_kept(self):
+        self.cfg["on_missed_approval"] = "wait"
+        for n in "ab":
+            self.make_short(n, age=1000 - ord(n))
+        self.app.scheduler.tick(self.ts(11, "12:00"))
+        item = self.app.db.items("status='notified'")[0]
+        self.app.scheduler.tick(self.ts(11, "13:00"))  # слот минув, шортс чекає
+        import config
+        config.FAKE_NOW = self.ts(11, "13:20")
+        self.press(f"pub:{item['id']}", item)
+        self.say("Назва")
+        self.say("shorts")
+        texts = [b["text"] for b in self.kb()]
+        self.assertFalse(any(t.startswith("✅ Залишити") for t in texts))
+        self.assertIn("уже минув", self.app.bot.tg.sent[-1][1])
+        self.button(f"tk:{item['id']}")  # стара кнопка «Залишити»
+        self.assertEqual(self.app.db.get_item(item["id"])["status"], "notified")  # не опубліковано одразу
+
     def test_pick_free_slot_and_queue_moves_up(self):
         item = self.start()
         labels = [b["text"] for b in self.kb()]
