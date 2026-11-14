@@ -79,6 +79,13 @@ def config_path(key: str) -> Path:
     return channel_dir(key) / "config.json"
 
 
+def db_path(key: str) -> Path:
+    """База (черга, слоти) каналу."""
+    raw = read_raw(key)
+    data = Path(os.path.expandvars(str((raw.get("paths") or {}).get("data") or "data")))
+    return (data if data.is_absolute() else channel_dir(key) / data) / "poster.sqlite3"
+
+
 def exists(key: str) -> bool:
     return config_path(key).exists()
 
