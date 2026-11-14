@@ -54,13 +54,13 @@ HELP_VIEWER = (
 BTN = {
     "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
     "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
-    "⛔ Стоп публікацій": "/stop", "✅ Відновити публікації": "/go",
+    "⛔ Стоп публікацій": "/stop", "✅ Відновити публікації": "/go", "🇬🇧 EU-канал": "/eu",
     "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed", "🎮 Стрім": "/stream", "⬆️ Оновити": "/update", "📄 Журнал": "/log",
 }
 VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
 
 # Кнопка «Меню» біля поля введення (setMyCommands)
-KBD_VERSION = "4"  # збільшується, коли змінюється набір кнопок — бот надішле нові
+KBD_VERSION = "5"  # збільшується, коли змінюється набір кнопок — бот надішле нові
 
 COMMANDS = [
     ("menu", "Показати кнопки керування"),
@@ -74,6 +74,7 @@ COMMANDS = [
     ("resume", "Відновити розклад"),
     ("stop", "⛔ Зупинити ВСІ публікації (навіть підтверджені)"),
     ("go", "Відновити публікації після стопу"),
+    ("eu", "🇬🇧 EU-канал: черга, слоти, керування"),
     ("platforms", "Увімкнути / вимкнути платформи"),
     ("failed", "Невдалі публікації: причина й повтор"),
     ("users", "Хто має доступ"),
@@ -154,6 +155,9 @@ class Bot:
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня", "🧪 Тест-слот"],
                     ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "🎮 Стрім", "⬆️ Оновити"],
                     [stop, "📄 Журнал", "❓ Довідка"]]
+            import eu_tab
+            if eu_tab.available(self.cfg):
+                rows.append(["🇬🇧 EU-канал"])
         else:
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня"]]
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
@@ -1095,6 +1099,19 @@ class Bot:
                     self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
             except TelegramError as e:
                 log.debug("edit users: %s", e)
+            return
+        if action == "eu" and rest:
+            if self.role(chat) != "admin":
+                return answer("⛔ Лише для адміністратора", True)
+            import eu_tab
+            toast = eu_tab.action(rest[0]) if rest[0] != "refresh" else "🔄 Оновлюю…"
+            answer(toast[:200])
+            text, kb = eu_tab.view()
+            try:
+                self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
+            except TelegramError as e:
+                if "not modified" not in str(e):
+                    log.debug("edit eu: %s", e)
             return
         if action == "dup" and rest:
             if self.role(chat) != "admin":
@@ -2075,6 +2092,23 @@ class Bot:
             reply(app.queue_text() + ("\n\n👇 Оберіть відео, щоб опублікувати його коли захочете" if kb else ""), kb=kb)
         elif cmd == "/status":
             reply(app.status_text())
+        elif cmd == "/eu":
+            import eu_tab
+            if not eu_tab.available(self.cfg):
+                return reply("🇬🇧 EU-канал ще не створено — панель керування → вкладка «🇬🇧 EN-канал» → «Створити».", False)
+            wait = self.task_start(chat, "⏳ Читаю чергу EU-каналу…")
+
+            def work():
+                try:
+                    text, kb = eu_tab.view()
+                except Exception as e:  # noqa: BLE001
+                    log.exception("EU-канал")
+                    text, kb = f"❌ Не вдалося прочитати EU-канал: {esc(str(e))}", None
+                self.task_done(chat, wait, text, kb)
+            if getattr(app.publisher, "sync", False):
+                work()
+            else:
+                threading.Thread(target=work, daemon=True, name="eu-cmd").start()
         elif cmd == "/report":
             from reports import daily_report
             reply(daily_report(app))
