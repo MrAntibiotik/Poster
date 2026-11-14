@@ -87,15 +87,18 @@ class Scheduler:
             self._last_scan = now
             self.scan(now)
         self.ensure_slots(now)
-        self.resume_publishing()
-        if hasattr(self.app.bot, "resume_bulk"):
-            self.app.bot.resume_bulk()
+        stopped = self.db.get("stopped") == "1"  # «⛔ Стоп публікацій»: ні публікацій, ні нових сповіщень
+        if not stopped:
+            self.resume_publishing()
+            if hasattr(self.app.bot, "resume_bulk"):
+                self.app.bot.resume_bulk()
         pending_refresh = self.db.get("refresh_item")
         if pending_refresh:
             self.db.set("refresh_item", None)
             self.app.bot.refresh(int(pending_refresh))
-        self.process_due_slots(now)
-        self.process_notifications(now)
+        if not stopped:
+            self.process_due_slots(now)
+            self.process_notifications(now)
         self.maybe_daily_report(now)
         self.maybe_stats(now)
         self.maybe_health_check(now)
@@ -160,6 +163,11 @@ class Scheduler:
                 continue
             found.append((order, path, str(js.resolve()), game))
         added = []
+        import dupes
+        try:
+            dupes.backfill(self.db)
+        except Exception as e:  # noqa: BLE001
+            log.debug("Відбитки старих шортсів: %s", e)
         for _, path, js, game in sorted(found):
             if path in missing:  # файл повернувся (напр. знову вибрали ту саму папку) — назад у чергу
                 item_id = missing[path]
@@ -170,6 +178,17 @@ class Scheduler:
                 continue
             item_id = self.db.add_item(path, js, game)
             if item_id:
+                fp = dupes.fingerprint(path)
+                self.db.x("UPDATE items SET fp=? WHERE id=?", (fp, item_id))
+                dup = dupes.find_duplicate(self.db, path, fp, exclude_id=item_id)
+                if dup:  # уже публікувався / уже в черзі — не ставимо, питаємо
+                    kind, other = dup
+                    self.db.update_item(item_id, status="duplicate", note=f"{kind}:{other['id']}")
+                    self.db.event(item_id, "duplicate", {"file": Path(path).name, "kind": kind, "of": other["id"]})
+                    log.info("#%s схожий на #%s (%s) — питаю, чи публікувати ще раз: %s", item_id, other["id"], kind, path)
+                    if hasattr(self.app.bot, "ask_duplicate"):
+                        self.app.bot.ask_duplicate(item_id, other, kind)
+                    continue
                 added.append(item_id)
                 self.db.event(item_id, "queued", {"file": Path(path).name})
                 log.info("У чергу додано #%s: %s", item_id, path)
@@ -181,6 +200,9 @@ class Scheduler:
         """Прибирає з черги відео, файлів яких більше немає або які не з поточної папки з шортсами."""
         ready = ready.resolve()
         removed = []
+        for item in self.db.items("status='duplicate'"):  # файл-повтор прибрали вручну — питання вже не актуальне
+            if not Path(item["mp4"]).exists():
+                self.db.update_item(item["id"], status="cancelled", note="файл видалено")
         for item in self.db.items("status IN ('queued','notified')"):
             mp4 = Path(item["mp4"])
             gone = not mp4.exists()

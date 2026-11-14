@@ -106,7 +106,7 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
 <header>
   <div class="bar">
     <div class="logo">🎬 poster <span id="chanName" class="pill hidden"></span> <span id="ver" class="muted small" style="font-weight:400"></span></div>
-    <span id="hBot" class="pill"></span><span id="hMode" class="pill"></span><span id="hPause" class="pill hidden"></span>
+    <span id="hBot" class="pill"></span><span id="hMode" class="pill"></span><span id="hPause" class="pill hidden"></span><span id="hStop" class="pill hidden"></span>
   </div>
   <nav id="tabs">
     <button data-tab="home" class="on">🏠 Головна</button>
@@ -144,7 +144,7 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
           <button class="btn" data-act="shortcut" title="Ярлик панелі на робочому столі й у меню «Пуск»">🖥 Ярлик</button></div>
         <p class="small" id="updHome"></p></div>
       <div class="card"><h2>Розклад</h2><div id="pauseState" class="big"></div>
-        <div class="row"><button class="btn" id="bPause"></button></div>
+        <div class="row"><button class="btn" id="bPause"></button><button class="btn" id="bStopPub"></button></div>
         <p class="muted small">На паузі нові шортси не надсилаються, а слоти минають порожніми.</p>
         <p class="small" id="powerInfo"></p>
         <div class="row"><button class="btn" data-act="stream" data-hours="4">🎮 Стрім 4 год</button>
@@ -647,6 +647,9 @@ async function refresh(){
   pill($("#hBot"), s.running ? "Бот працює" : "Бот зупинено", s.running ? "ok" : "bad");
   pill($("#hMode"), s.dry_run ? "Тестовий режим" : "Бойовий режим", s.dry_run ? "warn" : "ok");
   pill($("#hPause"), "Розклад на паузі", "warn"); $("#hPause").classList.toggle("hidden", !s.paused);
+  pill($("#hStop"), "⛔ Публікації зупинено", "bad"); $("#hStop").classList.toggle("hidden", !s.stopped);
+  $("#bStopPub").textContent = s.stopped ? "✅ Відновити публікації" : "⛔ Стоп публікацій";
+  $("#bStopPub").dataset.act = s.stopped ? "go_pub" : "stop_pub";
   $("#restartBanner").classList.toggle("hidden", !(s.restart_needed && s.running));
   $("#foreignBanner").classList.toggle("hidden", !s.foreign_bot);
   $("#foreignCmd").textContent = s.foreign_bot || "";

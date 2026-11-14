@@ -312,6 +312,14 @@ class Panel:
             return "Бот перезапущено"
         if name == "channel":
             return self.channel_action(str(data.get("key") or "en"), str(data.get("op") or ""), data)
+        if name == "stop_pub":  # «⛔ Стоп публікацій»: нічого не публікується, навіть підтверджене
+            self.db.set("stopped", "1")
+            self.db.event(None, "stopped", {"by": "panel"})
+            return "Публікації зупинено"
+        if name == "go_pub":
+            self.db.set("stopped", None)
+            self.db.event(None, "resumed_publishing", {"by": "panel"})
+            return "Публікації відновлено"
         if name == "pause":
             self.db.set("paused", "1")
             return "Розклад призупинено"
@@ -851,6 +859,7 @@ class Panel:
             "running": running,
             "foreign_bot": owner["cmd"] if control.is_foreign(owner) else None,
             "paused": db.get("paused") == "1",
+            "stopped": db.get("stopped") == "1",
             "dry_run": bool(cfg.get("dry_run")),
             "restart_needed": self.restart_needed,
             "autostart": control.autostart_installed() if control.WIN else None,

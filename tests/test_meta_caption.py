@@ -81,7 +81,7 @@ class AutoMetaTest(FlowBase):
         d = self.cfg["paths"]["ready"] / game if game else self.cfg["paths"]["ready"]
         d.mkdir(parents=True, exist_ok=True)
         p = d / name
-        p.write_bytes(b"\x00" * 1024)
+        p.write_bytes(b"\x00" * 1024 + str(p).encode())
         os.utime(p, (os.path.getmtime(p) - age,) * 2)
         return p
 

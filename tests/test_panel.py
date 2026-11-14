@@ -172,9 +172,9 @@ class PanelTest(unittest.TestCase):
         self.login()
         lib = self.tmp / "Мої шортси"
         (lib / "WoT").mkdir(parents=True)
-        (lib / "WoT" / "a.mp4").write_bytes(b"0")
+        (lib / "WoT" / "a.mp4").write_bytes(b"0a")
         (lib / "WoT" / "a.json").write_text('{"status": "ready_to_post"}', encoding="utf-8")
-        (lib / "WoT" / "b.mp4").write_bytes(b"0")  # без json — тексти створяться автоматично
+        (lib / "WoT" / "b.mp4").write_bytes(b"0b")  # без json — тексти створяться автоматично
         st, j = self.req("POST", "/api/fs", {"path": "Мої шортси"})  # відносний шлях -> повний
         self.assertEqual(st, 200)
         self.assertEqual(Path(j["path"]), lib.resolve())
