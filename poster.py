@@ -144,6 +144,11 @@ def restart_after_update(cfg: dict, lock) -> None:
     root = Path(__file__).resolve().parent
     log.info("Перезапуск після оновлення")
     try:
+        import channels
+        channels.restart_running(cfg)  # додаткові канали (EN) — теж на новий код
+    except Exception as e:  # noqa: BLE001
+        log.warning("Перезапуск каналів: %s", e)
+    try:
         lock.close()
     except OSError:
         pass
@@ -180,8 +185,10 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
     app.db.set("pid", os.getpid())
     app.bot.setup_commands()
     app.bot.start_panel_worker()
+    import channels
     import control
     threading.Thread(target=control.ensure_shortcut_once, args=(app.db,), daemon=True).start()
+    threading.Thread(target=channels.autostart_all, args=(cfg,), daemon=True).start()
     if app.db.get("captions_v") != "2":  # один раз: підписи вже надісланих відео — у новому вигляді й з актуальним станом
         app.db.set("captions_v", "2")
         for it in app.db.items("posted_at > ? OR status IN ('notified','approved','failed')", (now_ts() - 7 * 86400,),

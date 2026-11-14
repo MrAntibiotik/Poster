@@ -66,7 +66,37 @@ def extract_frames(path: str | Path, cfg: dict, count: int = 4) -> list[bytes]:
     return frames
 
 
+def language(cfg: dict) -> str:
+    """Мова текстів ШІ: «uk» (за замовчуванням) або «en» (англомовний канал)."""
+    return "en" if str(settings(cfg).get("language") or "uk").lower().startswith("en") else "uk"
+
+
+def build_prompt_en(cfg: dict, game: str, filename: str, n_tags: int, has_frames: bool) -> str:
+    s = settings(cfg)
+    channel = s.get("channel_description") or "English-language gaming YouTube channel"
+    lines = [
+        f"You are the social media editor of this channel: {channel}.",
+        f"Write texts for a vertical short from the game \"{game or 'unknown game'}\".",
+        f"File name (may be a hint or meaningless): \"{filename}\".",
+        "Frames from the video are attached." if has_frames else "No frames — rely on the game and the file name.",
+        "",
+        "Requirements (everything in natural US English):",
+        "• title — a catchy YouTube Shorts title up to 70 characters, no quotes, at most 1 emoji, "
+        "no false clickbait; do not invent details that are not visible in the frames;",
+        "• description — 1–2 sentences;",
+        f"• hashtags — exactly {n_tags} hashtags with #: the game, the moment/genre, #shorts;",
+        "• tiktok — a TikTok caption: 1 short sentence + these hashtags;",
+        "• instagram — an Instagram Reels caption: 1–2 sentences + these hashtags.",
+    ]
+    extra = (s.get("extra_prompt") or "").strip()
+    if extra:
+        lines += ["", f"Extra wishes from the author: {extra}"]
+    return "\n".join(lines)
+
+
 def build_prompt(cfg: dict, game: str, filename: str, n_tags: int, has_frames: bool) -> str:
+    if language(cfg) == "en":
+        return build_prompt_en(cfg, game, filename, n_tags, has_frames)
     s = settings(cfg)
     channel = s.get("channel_description") or "український ігровий YouTube-канал"
     lines = [
@@ -95,8 +125,9 @@ def normalize(result: dict, cfg: dict, game: str, n_tags: int) -> dict:
         raise AIError("ШІ не повернуло назву")
     tags = _hashtags([t for t in re.split(r"[\s,]+", " ".join(map(str, result.get("hashtags") or []))) if t])
     table = (cfg.get("auto_meta") or {}).get("hashtags") or {}
-    pool = game_hashtags(cfg, game) + _hashtags(table.get("*") or []) + \
-        ["#shorts", "#gaming", "#ігри", "#gameplay", "#українською", "#геймінг"]
+    extra_pool = (["#shorts", "#gaming", "#gameplay", "#worldoftanks", "#wot"] if language(cfg) == "en" else
+                  ["#shorts", "#gaming", "#ігри", "#gameplay", "#українською", "#геймінг"])
+    pool = game_hashtags(cfg, game) + _hashtags(table.get("*") or []) + extra_pool
     for t in pool:  # добираємо до потрібної кількості
         if len(tags) >= n_tags:
             break
