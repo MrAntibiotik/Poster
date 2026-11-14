@@ -503,7 +503,7 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
         перед оновленням робиться резервна копія (папка <code>data\backup</code>).</p>
       <div class="row"><span>У вас: <b id="updLocal"></b></span><span>На GitHub: <b id="updRemote">—</b></span></div>
       <label class="check"><input type="checkbox" data-set="updates.auto"> Оновлюватися автоматично</label>
-      <div class="two"><div><label class="f">Перевіряти кожні, хв</label><input type="number" min="1" max="1440" data-set="updates.check_minutes"></div></div>
+      <div class="two"><div><label class="f">Перевіряти кожні, хв</label><input type="number" min="60" max="1440" data-set="updates.check_minutes"></div></div>
       <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button>
         <button class="btn" data-act="update_check">🔍 Перевірити зараз</button>
         <button class="btn" data-act="update_now" id="bUpdNow">⬆️ Оновити зараз</button></div>

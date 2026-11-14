@@ -99,6 +99,24 @@ class AutoUpdateFlowTest(FlowBase):
         finally:
             updater.check, updater.apply = orig
 
+    def test_checks_at_most_hourly(self):
+        self.cfg["updates"] = {"auto": True, "check_minutes": 5}       # навіть якщо в налаштуваннях 5 хв
+        checks = []
+        orig = updater.check
+        updater.check = lambda cfg: checks.append(1) or {"local": "1", "remote": "1", "newer": False}
+        try:
+            sch = self.app.scheduler
+            for hm in ("09:00", "09:05", "09:30", "09:59"):
+                sch.tick(self.ts(11, hm))
+                if sch._upd_thread:
+                    sch._upd_thread.join()
+            self.assertEqual(len(checks), 1)
+            sch.tick(self.ts(11, "10:00"))
+            sch._upd_thread.join()
+            self.assertEqual(len(checks), 2)
+        finally:
+            updater.check = orig
+
     def test_update_button_works_even_with_auto_off(self):
         calls = []
         orig = (updater.check, updater.apply)

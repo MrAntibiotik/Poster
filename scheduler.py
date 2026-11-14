@@ -712,7 +712,7 @@ class Scheduler:
             self.db.set("control", None)
             self.db.set("update_available", "manual")
         last = int(self.db.get("update_check_ts") or 0)
-        every = max(1.0, float(up.get("check_minutes") or 5)) * 60
+        every = max(60.0, float(up.get("check_minutes") or 60)) * 60   # не частіше ніж раз на годину
         if up.get("auto") and now - last >= every and not (self._upd_thread and self._upd_thread.is_alive()):
             self.db.set("update_check_ts", now)
 
