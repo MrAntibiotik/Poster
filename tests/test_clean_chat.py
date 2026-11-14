@@ -137,6 +137,24 @@ class CleanChatTest(FlowBase):
         bot.ensure_keyboard()
         self.assertEqual(len(tg.sent), n)  # уже є — не дублюємо
 
+    def test_log_in_bot(self):
+        from pathlib import Path as P
+        log = P(self.cfg["paths"]["log"])
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(
+            "2026-11-14 20:01:02,123 [INFO] scheduler: усе гаразд\n"
+            "2026-11-14 20:05:00,001 [WARNING] platforms.meta_graph: Instagram: копія — відмова: Video Transcoding Error\n"
+            "2026-11-14 20:06:00,001 [ERROR] publisher: YouTube впав, токен 123:abcdefghijklmnop\n", encoding="utf-8")
+        self.cfg["secrets"]["TELEGRAM_BOT_TOKEN"] = "123:abcdefghijklmnop"
+        self.say("📄 Журнал", 7001)
+        text = self.app.bot.tg.sent[-1][1]
+        self.assertIn("Video Transcoding Error", text)
+        self.assertNotIn("усе гаразд", text)  # лише помилки
+        self.assertNotIn("abcdefghijklmnop", text)  # секрети приховано
+        text, _ = self.app.bot.log_text("instagram", mode="ig")
+        self.assertIn("Transcoding", text)
+        self.assertNotIn("YouTube впав", text)
+
     def test_service_messages_expire(self):
         tg = self.app.bot.tg
         self.app.bot.send("🟢 poster запущено")

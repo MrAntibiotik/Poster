@@ -40,6 +40,7 @@ HELP_ADMIN = (
     "/platforms — увімкнути / вимкнути платформи для всіх шортсів\n"
     "/failed — невдалі публікації: причина, повтор зараз / пізніше / у вільний слот\n"
     "/update — оновити програму з GitHub зараз\n"
+    "/log — журнал (помилки); /log instagram — лише рядки з цим словом\n"
     "/clean — прибрати з чату все, крім відео шортсів, звітів і аналітики\n"
     "/stream — режим стріму: ПК не засне (і за бажанням публікації чекають кінця стріму)\n"
     "/menu — показати кнопки\n"
@@ -53,12 +54,12 @@ HELP_VIEWER = (
 BTN = {
     "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
     "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
-    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed", "🎮 Стрім": "/stream", "⬆️ Оновити": "/update",
+    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed", "🎮 Стрім": "/stream", "⬆️ Оновити": "/update", "📄 Журнал": "/log",
 }
 VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
 
 # Кнопка «Меню» біля поля введення (setMyCommands)
-KBD_VERSION = "2"  # збільшується, коли змінюється набір кнопок — бот надішле нові
+KBD_VERSION = "3"  # збільшується, коли змінюється набір кнопок — бот надішле нові
 
 COMMANDS = [
     ("menu", "Показати кнопки керування"),
@@ -74,6 +75,7 @@ COMMANDS = [
     ("failed", "Невдалі публікації: причина й повтор"),
     ("users", "Хто має доступ"),
     ("update", "Оновити програму зараз"),
+    ("log", "Журнал: помилки й попередження"),
     ("stream", "Режим стріму: ПК не засне"),
     ("clean", "Прибрати чат — лишити тільки відео"),
     ("help", "Довідка"),
@@ -143,11 +145,53 @@ class Bot:
         if self.role(chat_id) == "admin":
             pause = "▶️ Продовжити" if self.paused() else "⏸ Пауза"
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня", "🧪 Тест-слот"],
-                    ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "🎮 Стрім", "⬆️ Оновити", "❓ Довідка"]]
+                    ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "🎮 Стрім", "⬆️ Оновити"], ["📄 Журнал", "❓ Довідка"]]
         else:
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня"]]
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
                 "is_persistent": True}
+
+    def log_text(self, flt: str = "", only_errors: bool = True, mode: str = "err") -> tuple[str, dict]:
+        """Журнал у Telegram: останні рядки (за замовчуванням — лише помилки й попередження), без секретів."""
+        path = Path(self.cfg["paths"]["log"])
+        lines = []
+        try:
+            with open(path, "rb") as f:
+                f.seek(max(0, path.stat().st_size - 300_000))
+                lines = f.read().decode("utf-8", errors="replace").splitlines()[1:]
+        except OSError:
+            pass
+        flt = (flt or "").strip().lower()
+        out = []
+        for line in lines:
+            m = re.match(r"\d{4}-(\d\d)-(\d\d) (\d\d:\d\d):\d\d,\d+ \[(\w+)\] [\w.]+: (.*)", line)
+            if not m:
+                continue
+            level, msg = m.group(4), m.group(5)
+            if only_errors and level not in ("WARNING", "ERROR", "CRITICAL"):
+                continue
+            if flt and flt not in msg.lower():
+                continue
+            for v in self.cfg["secrets"].values():
+                if v and len(v) > 12:
+                    msg = msg.replace(v, v[:4] + "…")
+            icon = {"WARNING": "⚠️", "ERROR": "❌", "CRITICAL": "🛑"}.get(level, "•")
+            out.append(f"{icon} <b>{m.group(2)}.{m.group(1)} {m.group(3)}</b> {esc(msg[:350])}")
+        title = {"err": "помилки й попередження", "all": "усі події", "ig": "Instagram", "yt": "YouTube",
+                 "fb": "Facebook", "tt": "TikTok"}.get(mode, f"«{flt}»")
+        head = f"📄 <b>Журнал: {title}</b>"
+        body, size = [], len(head)
+        for line in reversed(out):  # найновіші, скільки вміщається в одне повідомлення
+            if size + len(line) + 2 > 3800:
+                break
+            body.insert(0, line)
+            size += len(line) + 2
+        text = head + ("\n\n" + "\n\n".join(body) if body else "\n\nНічого не знайдено — і це добре 🙂")
+        kb = {"inline_keyboard": [
+            [{"text": "⚠️ Помилки", "callback_data": "log:0:err"}, {"text": "📜 Усе", "callback_data": "log:0:all"}],
+            [{"text": "📸 IG", "callback_data": "log:0:ig"}, {"text": "▶️ YT", "callback_data": "log:0:yt"},
+             {"text": "📘 FB", "callback_data": "log:0:fb"}, {"text": "🎵 TT", "callback_data": "log:0:tt"}]]}
+        return text, kb
 
     def details_text(self, item_id: int) -> str:
         """Повні причини помилок і що пробувала програма — для «🧾 Деталі» (Telegram і панель)."""
@@ -1021,6 +1065,16 @@ class Bot:
                 self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
             except TelegramError as e:
                 log.debug("edit platforms: %s", e)
+            return
+        if action == "log":
+            answer()
+            mode = (rest[0] if rest else "err")
+            flt = {"err": "", "all": "", "ig": "instagram", "yt": "youtube", "fb": "facebook", "tt": "tiktok"}.get(mode, "")
+            text, kb = self.log_text(flt, only_errors=mode in ("err", "ig", "yt", "fb", "tt"), mode=mode)
+            try:
+                self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
+            except TelegramError as e:
+                log.debug("log edit: %s", e)
             return
         if action == "err":
             answer()
@@ -1978,6 +2032,11 @@ class Bot:
             self.send("▶️ Розклад відновлено.", keyboard=True)
         elif cmd == "/clean":
             self.clean_chat(chat, latest=(self._last_incoming or {}).get(chat))
+        elif cmd == "/log":
+            if role != "admin":
+                return reply("⛔ Лише для адміністратора.", False)
+            text, kb = self.log_text(" ".join(args), only_errors=not args)
+            reply(text, kb=kb)
         elif cmd == "/update":
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)
