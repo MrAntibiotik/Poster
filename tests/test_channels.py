@@ -80,6 +80,21 @@ class ChannelsTest(unittest.TestCase):
             self.assertTrue(channels.start("en"))
         self.assertEqual(sb.call_args.kwargs["config"], str(channels.config_path("en")))
 
+    def test_channel_panel_runs_program_from_code_folder(self):
+        """Панель EN-каналу: poster.py — з папки програми, а не з channels/en (там лише налаштування)."""
+        import panel
+        d = channels.create(self.main_cfg, "en")
+        pnl = panel.Panel(str(d / "config.json"))
+        self.assertEqual(pnl.root, d.resolve())
+        with mock.patch.object(panel.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="ok", stderr="")
+            pnl.run_poster("check")
+        args, kw = run.call_args
+        self.assertEqual(args[0][1], str(ROOT / "poster.py"))
+        self.assertTrue((ROOT / "poster.py").exists())
+        self.assertEqual(kw["cwd"], panel.ROOT)
+        self.assertIn(str(d / "config.json"), args[0])
+
     def test_autostart_skipped_inside_channel(self):
         with mock.patch.object(channels, "keys") as k:
             channels.autostart_all({"channel": {"key": "en"}})

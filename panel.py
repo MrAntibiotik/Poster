@@ -274,9 +274,10 @@ class Panel:
         threading.Thread(target=run, daemon=True, name=f"job-{name}").start()
 
     def run_poster(self, *args, timeout: int = 180) -> tuple[int, str]:
-        r = subprocess.run([control.python_exe(windowless=False), str(self.root / "poster.py"),
+        # код програми — поруч із panel.py (ROOT); self.root — папка налаштувань (для EN-каналу — channels/en)
+        r = subprocess.run([control.python_exe(windowless=False), str(ROOT / "poster.py"),
                             "--config", self.cfg["config_path"], *args],
-                           cwd=self.root, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = re.sub(r"^\d{4}-\d\d-\d\d [\d:,]+ \[\w+\] [\w.]+: .*\n?", "", r.stdout + r.stderr, flags=re.M)
         return r.returncode, out.strip()
@@ -404,7 +405,7 @@ class Panel:
 
             def run():
                 new = updater.apply(self.cfg)
-                updater.spawn([str(self.root / "panel.py"), "--config", self.cfg["config_path"], "--no-browser"])
+                updater.spawn([str(ROOT / "panel.py"), "--config", self.cfg["config_path"], "--no-browser"])
                 return f"Оновлено до {new}. Панель перезапускається — оновіть сторінку за ~10 с"
             self.job("update", run)
             return "Завантажую оновлення…"
