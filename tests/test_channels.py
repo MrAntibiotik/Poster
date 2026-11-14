@@ -95,6 +95,24 @@ class ChannelsTest(unittest.TestCase):
         self.assertEqual(kw["cwd"], panel.ROOT)
         self.assertIn(str(d / "config.json"), args[0])
 
+    def test_channel_client_secret_never_overwrites_main(self):
+        import json as J
+        import panel
+        main_secret = Path(self.main_cfg["platforms"]["youtube"]["client_secrets_file"])
+        main_secret.write_text(J.dumps({"installed": {"client_id": "MAIN"}}), encoding="utf-8")
+        d = channels.create(self.main_cfg, "en")
+        (d / "tokens").mkdir(exist_ok=True)
+        (d / "tokens" / "youtube_token.json").write_text("{}", encoding="utf-8")   # токен від старого ключа
+        pnl = panel.Panel(str(d / "config.json"))
+        msg = pnl.youtube_secret(J.dumps({"installed": {"client_id": "POSTER-EU"}}))
+        self.assertIn("Авторизувати", msg)
+        self.assertEqual(J.loads(main_secret.read_text())["installed"]["client_id"], "MAIN")   # основний цілий
+        self.assertEqual(J.loads((d / "client_secret.json").read_text())["installed"]["client_id"], "POSTER-EU")
+        self.assertFalse((d / "tokens" / "youtube_token.json").exists())                     # старий токен прибрано
+        from config import load_config
+        self.assertEqual(Path(load_config(d / "config.json")["platforms"]["youtube"]["client_secrets_file"]),
+                         (d / "client_secret.json").resolve())
+
     def test_autostart_skipped_inside_channel(self):
         with mock.patch.object(channels, "keys") as k:
             channels.autostart_all({"channel": {"key": "en"}})

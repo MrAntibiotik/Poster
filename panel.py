@@ -559,8 +559,25 @@ class Panel:
         if "web" in data and "installed" not in data:
             raise ValueError("Потрібен OAuth-клієнт типу «Desktop app», а не «Web application»")
         path = Path(self.cfg["platforms"]["youtube"]["client_secrets_file"])
+        if self.cfg.get("channel"):
+            # додатковий канал (EU): свій ключ — у своїй папці. НІКОЛИ не перезаписувати ключ основного каналу.
+            path = Path(self.cfg["root"]) / "client_secret.json"
+            raw = self.raw_config()
+            raw.setdefault("platforms", {}).setdefault("youtube", {})["client_secrets_file"] = "client_secret.json"
+            Path(self.cfg["config_path"]).write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        old_id = ""
+        try:
+            old = json.loads(path.read_text(encoding="utf-8"))
+            old_id = (old.get("installed") or old.get("web") or {}).get("client_id", "")
+        except (OSError, ValueError):
+            pass
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        return f"Збережено {path.name}"
+        new_id = (data.get("installed") or {}).get("client_id", "")
+        token = Path(self.cfg["paths"]["tokens"]) / "youtube_token.json"
+        if old_id != new_id and token.exists():
+            token.unlink()                    # токен від іншого ключа не працюватиме — авторизуйтесь заново
+        self.reload()
+        return f"Збережено {path}" + (" — тепер натисніть «Авторизувати YouTube»" if not token.exists() else "")
 
     def youtube_auth(self) -> str:
         from platforms.youtube import YouTube
