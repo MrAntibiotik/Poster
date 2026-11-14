@@ -35,10 +35,14 @@ def python_exe(windowless: bool = True) -> str:
     return sys.executable
 
 
-def start_bot(port: int, window: bool = False, wait: int = 30) -> bool:
+def start_bot(port: int, window: bool = False, wait: int = 30, config: str | None = None) -> bool:
+    """config — шлях до config.json (для додаткового каналу); без нього — основний config.json."""
     if is_running(port):
         return True
-    args = [python_exe(windowless=not window), str(ROOT / "poster.py"), "run"]
+    args = [python_exe(windowless=not window), str(ROOT / "poster.py")]
+    if config:
+        args += ["--config", str(config)]
+    args.append("run")
     if WIN:
         flags = subprocess.CREATE_NEW_CONSOLE if window else (subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW)
         subprocess.Popen(args, cwd=ROOT, creationflags=flags, close_fds=True)
@@ -50,6 +54,22 @@ def start_bot(port: int, window: bool = False, wait: int = 30) -> bool:
         if is_running(port):
             return True
     return False
+
+
+def spawn_panel(config: str, port: int) -> None:
+    """Панель керування для іншого config.json (додатковий канал) — у фоні, без відкриття браузера."""
+    args = [python_exe(windowless=True), str(ROOT / "panel.py"), "--config", str(config), "--port", str(int(port)),
+            "--no-browser"]
+    if WIN:
+        subprocess.Popen(args, cwd=ROOT, creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                         close_fds=True)
+    else:
+        subprocess.Popen(args, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    for _ in range(40):
+        time.sleep(0.25)
+        if is_running(port):
+            return
 
 
 def port_owner(port: int) -> dict | None:

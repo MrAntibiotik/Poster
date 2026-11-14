@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.13-59"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.14-60"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -50,9 +50,12 @@ DEFAULTS: dict = {
         "in_title": True,
         "in_captions": True,
     },
+    # Постійний підпис каналу: в опис YouTube і підписи TikTok / Instagram / Facebook (порожньо — без підпису)
+    "footer": {"text": "", "in_description": True, "in_captions": True},
     # Відео без json: програма сама створить json (назва — з імені файлу, хештеги — за папкою гри)
     "auto_meta": {
         "enabled": True,
+        "default_title": "",  # назва для безликих файлів; {game} — гра. Порожньо — «WoT — епічний момент 🔥»
         "hashtags": {
             "*": ["#shorts", "#gaming", "#ігри"],
             "WoT": ["#wot", "#worldoftanks", "#танки", "#shorts"],
@@ -70,6 +73,7 @@ DEFAULTS: dict = {
         "temperature": 0.9,
         "channel_description": "український ігровий YouTube-канал",
         "extra_prompt": "",
+        "language": "uk",  # мова текстів ШІ: uk або en
     },
     "ffmpeg": "ffmpeg",
     "ffprobe": "ffprobe",

@@ -105,7 +105,7 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
 <div id="app" class="hidden">
 <header>
   <div class="bar">
-    <div class="logo">🎬 poster <span id="ver" class="muted small" style="font-weight:400"></span></div>
+    <div class="logo">🎬 poster <span id="chanName" class="pill hidden"></span> <span id="ver" class="muted small" style="font-weight:400"></span></div>
     <span id="hBot" class="pill"></span><span id="hMode" class="pill"></span><span id="hPause" class="pill hidden"></span>
   </div>
   <nav id="tabs">
@@ -116,6 +116,7 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
     <button data-tab="tt">🎵 TikTok</button>
     <button data-tab="ai">🤖 ШІ</button>
     <button data-tab="sched">🗓 Розклад і папки</button>
+    <button data-tab="chan" id="tabChan">🇬🇧 EN-канал</button>
     <button data-tab="log">📄 Журнал</button>
     <button data-tab="upd">🔄 Оновлення</button>
     <button data-tab="sec">🔐 Безпека</button>
@@ -256,7 +257,9 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <h3>Публікація</h3>
       <label class="check"><input type="checkbox" data-set="platforms.youtube.enabled"> Публікувати на YouTube</label>
       <div class="two"><div><label class="f">Доступ до відео</label><select data-set="platforms.youtube.privacy">
-        <option value="public">Публічне</option><option value="unlisted">За посиланням</option><option value="private">Приватне</option></select></div></div>
+        <option value="public">Публічне</option><option value="unlisted">За посиланням</option><option value="private">Приватне</option></select></div>
+        <div><label class="f">Мова відео</label><select data-set="platforms.youtube.language">
+        <option value="uk">Українська</option><option value="en">English</option></select></div></div>
       <label class="check"><input type="checkbox" data-set="platforms.youtube.add_shorts_hashtag"> Додавати #Shorts в опис</label>
       <label class="check"><input type="checkbox" data-set="platforms.youtube.notify_subscribers"> Сповіщати підписників</label>
       <div class="row"><button class="btn primary" data-save-settings>Зберегти</button></div>
@@ -333,6 +336,8 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <label class="check"><input type="checkbox" data-set="ai.enabled"> Використовувати ШІ для відео без json</label>
       <div class="two"><div><label class="f">Кількість хештегів</label><input type="number" min="1" max="15" data-set="ai.hashtags_count"></div>
         <div><label class="f">Модель Gemini</label><input type="text" data-set="ai.model"></div></div>
+      <div class="two"><div><label class="f">Мова текстів</label><select data-set="ai.language">
+        <option value="uk">Українська</option><option value="en">English (англомовний канал)</option></select></div></div>
       <label class="f">Опис каналу (ШІ підлаштує стиль)</label><input type="text" data-set="ai.channel_description">
       <label class="f">Додаткові побажання (необов'язково)</label>
       <textarea data-set="ai.extra_prompt" rows="2" placeholder="Напр.: жартівливий тон, згадувати назву танка, якщо видно"></textarea>
@@ -399,6 +404,14 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <label class="check"><input type="checkbox" data-set="always_hashtags.in_captions"> У підписах TikTok / Instagram / Facebook</label>
       <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
     </div>
+    <div class="card"><h2>✍️ Підпис каналу</h2>
+      <p class="muted small">Постійний рядок під кожним відео: в опис YouTube і в підписи TikTok / Instagram / Facebook (перед хештегами).
+        Наприклад: «🇺🇦 Ukrainian veteran on the road to 1000 subscribers — subscribe to support 🛡️♥️». Порожньо — без підпису.</p>
+      <label class="f">Текст підпису</label><input type="text" data-set="footer.text">
+      <label class="check"><input type="checkbox" data-set="footer.in_description"> В описі YouTube</label>
+      <label class="check"><input type="checkbox" data-set="footer.in_captions"> У підписах TikTok / Instagram / Facebook</label>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
+    </div>
     <div class="card"><h2>🏷 Тексти для відео без json</h2>
       <p class="muted small">Якщо поруч із відео немає json, програма створить його сама: <b>назва — з імені файлу</b>
         (наприклад «бій_на_прохорівці.mp4» → «Бій на прохорівці»; безликі назви на кшталт «2026-11-10 21-33.mp4» → «WoT — епічний момент 🔥»),
@@ -406,6 +419,8 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <label class="check"><input type="checkbox" data-set="auto_meta.enabled"> Публікувати відео без json (створювати тексти автоматично)</label>
       <label class="f">Хештеги за грою — один рядок на гру: «Назва папки гри: #тег #тег». Рядок «*» — для всіх інших.</label>
       <textarea data-set="auto_meta.hashtags" rows="4" placeholder="WoT: #wot #worldoftanks #танки #shorts&#10;*: #shorts #gaming"></textarea>
+      <label class="f">Назва для безликих файлів ({game} — гра; порожньо — «WoT — епічний момент 🔥»)</label>
+      <input type="text" data-set="auto_meta.default_title" placeholder="{game} — insane moment 🔥">
       <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
     </div>
     <div class="card"><h2>📂 Папки й інструменти</h2>
@@ -427,6 +442,50 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
   </section>
 
   <!-- ================= ЖУРНАЛ ================= -->
+
+  <!-- ================= EN-КАНАЛ ================= -->
+  <section data-page="chan" class="hidden">
+    <div class="card"><h2>🇬🇧 Англомовний канал <span id="chStatus" class="pill"></span></h2>
+      <p class="small">Окремий канал зі <b>своєю чергою, розкладом і акаунтами</b> (YouTube, TikTok, Instagram, Facebook) —
+        напр. для англомовних шортсів з реплеїв. Код спільний з цим каналом, а налаштування, токени й база лежать окремо
+        в папці <code id="chDir">channels\en</code>. Шортси з цієї папки сюди не потрапляють, і навпаки.</p>
+      <div id="chCreate" class="hidden">
+        <label class="f">Папка готових англомовних шортсів (можна змінити пізніше; порожньо — channels\en\ready)</label>
+        <input type="text" id="chReady" placeholder="C:\ShortsTool\output_en">
+        <p class="muted small">Стартові налаштування: розклад за часом Нью-Йорка (11:00, 14:00, 17:00, 19:30, 21:30), тексти ШІ англійською,
+          хештеги #worldoftanks #wot #shorts, підпис «🇺🇦 Ukrainian veteran on the road to 1000 subscribers — subscribe to support 🛡️♥️».
+          Публікація спершу лише на YouTube — інші платформи вмикаються в панелі каналу.</p>
+        <div class="row" style="margin-top:10px"><button class="btn primary" data-ch="create">➕ Створити EN-канал</button></div>
+      </div>
+      <div id="chMain" class="hidden">
+        <table class="small" style="margin:8px 0">
+          <tr><td>Бот каналу</td><td id="chBot"></td></tr>
+          <tr><td>Telegram</td><td id="chTg"></td></tr>
+          <tr><td>YouTube</td><td id="chYt"></td></tr>
+          <tr><td>Платформи</td><td id="chPlat"></td></tr>
+          <tr><td>Розклад</td><td id="chSlots"></td></tr>
+          <tr><td>Папка шортсів</td><td><code id="chReadyNow"></code></td></tr>
+          <tr><td>Підпис</td><td id="chFooter"></td></tr>
+        </table>
+        <div class="row">
+          <button class="btn primary" data-ch="panel">⚙️ Відкрити панель каналу</button>
+          <button class="btn" data-ch="start" id="chStart">▶️ Запустити бота каналу</button>
+          <button class="btn" data-ch="stop" id="chStop">⏹ Зупинити</button>
+        </div>
+        <label class="check"><input type="checkbox" id="chAuto"> Запускати разом з основним ботом (і перезапускати після оновлень)</label>
+        <h3>Перше налаштування — у панелі каналу</h3>
+        <ol class="steps small">
+          <li>«⚙️ Відкрити панель каналу» → створіть пароль (окремий від цієї панелі).</li>
+          <li>«✈️ Telegram і доступ»: <b>новий бот</b> у @BotFather (два канали не можуть ділити одного бота). Ваш chat_id уже підставлено.</li>
+          <li>«▶️ YouTube» → «Авторизувати» → у вікні Google <b>виберіть англомовний канал</b> (бренд-акаунт). client_secret.json — той самий, що тут.</li>
+          <li>За бажанням: «📸 Instagram + Facebook» і «🎵 TikTok» — окремі англомовні акаунти, потім увімкніть їх на «🏠 Головна».</li>
+          <li>«🗓 Розклад і папки»: папка з англомовними шортсами (туди складає їх автонарізка реплеїв), слоти, підпис каналу.</li>
+          <li>Поверніться сюди і натисніть «▶️ Запустити бота каналу».</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
   <section data-page="log" class="hidden">
     <div class="card"><h2>📄 Журнал (останні рядки)</h2>
       <div class="row"><label class="check" style="margin:0"><input type="checkbox" id="logFollow" checked> Оновлювати автоматично</label>
@@ -676,8 +735,43 @@ async function refresh(){
 
   if ($("#logFollow").checked) { const box = $("#logBox"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
     box.textContent = s.log || "журнал порожній"; if (atEnd) box.scrollTop = box.scrollHeight; }
+  renderChannels(s);
   if (!formsFilled) fillForms(s);
 }
+
+
+/* ---------- додатковий канал (EN) ---------- */
+function renderChannels(s){
+  const c = s.channels || {list: []};
+  $("#tabChan").classList.toggle("hidden", !!c.is_channel);
+  $("#chanName").classList.toggle("hidden", !c.is_channel);
+  if (c.is_channel) { $("#chanName").textContent = c.name; document.title = "poster — " + c.name; return; }
+  const ch = c.list[0]; if (!ch) return;
+  $("#chCreate").classList.toggle("hidden", ch.exists);
+  $("#chMain").classList.toggle("hidden", !ch.exists);
+  if (!ch.exists) { pill($("#chStatus"), "Не створено", "warn"); return; }
+  if (ch.error) { pill($("#chStatus"), "Помилка: " + ch.error, "bad"); return; }
+  pill($("#chStatus"), ch.running ? "Бот працює" : "Бот зупинено", ch.running ? "ok" : "bad");
+  $("#chDir").textContent = ch.dir;
+  $("#chBot").textContent = ch.running ? "🟢 Працює" : "🔴 Зупинено";
+  $("#chTg").textContent = ch.telegram_ready ? "✅ Бот і chat_id задано" : "⚠️ Немає свого бота — панель каналу → «✈️ Telegram і доступ»";
+  $("#chYt").textContent = ch.youtube_authorized ? "✅ Авторизовано" : "⚠️ Не авторизовано — панель каналу → «▶️ YouTube»";
+  $("#chPlat").textContent = (ch.platforms || []).join(", ") || "жодної";
+  $("#chSlots").textContent = (ch.slots || []).join(", ") + " (" + (ch.timezone || "") + ")";
+  $("#chReadyNow").textContent = ch.ready;
+  $("#chFooter").textContent = ch.footer || "—";
+  $("#chStart").disabled = ch.running; $("#chStop").disabled = !ch.running;
+  if (document.activeElement !== $("#chAuto")) $("#chAuto").checked = !!ch.autostart;
+}
+document.addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-ch]"); if (!b) return;
+  const op = b.dataset.ch, body = {name: "channel", key: "en", op};
+  if (op === "create") body.ready = $("#chReady").value.trim();
+  if (op === "stop" && !confirm("Зупинити бота EN-каналу?")) return;
+  run(() => api("/api/action", body), b, op === "start" ? "Запускаю бота каналу…" : op === "panel" ? "Відкриваю панель каналу…" : null)
+    .then(j => { if (op === "panel" && j && j.message) { const u = j.message.split(" ").pop(); window.open(u, "_blank"); } });
+});
+$("#chAuto").addEventListener("change", ev => run(() => api("/api/action", {name: "channel", key: "en", op: "autostart", on: ev.target.checked})));
 
 function fillForms(s){
   formsFilled = true;

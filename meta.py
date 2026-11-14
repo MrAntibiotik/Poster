@@ -145,12 +145,19 @@ def load_meta(json_path: str | Path, title_override: str | None = None) -> PostM
 GENERIC_NAME = re.compile(r"(?i)^(vid|video|clip|short|shorts|replay|obs|img|mov|record|recording|запис|відео)?[\s\d]*$")
 
 
-def title_from_filename(stem: str, game: str = "") -> str:
-    """«бій_на_прохорівці» -> «Бій на прохорівці»; безлике «2026-11-10 21-33-05» -> «WoT — епічний момент 🔥»."""
+# імена від автонарізки шортсів: «rec_battle_01_dmg_3837», «battle_02_assist_2650_dmg_900»
+AUTOCUT_NAME = re.compile(r"(?i)^(?:.*\s)?battle \d+(?: (?:dmg|assist) \d+)*$")
+
+
+def title_from_filename(stem: str, game: str = "", default_title: str = "") -> str:
+    """«бій_на_прохорівці» -> «Бій на прохорівці»; безлике «2026-11-10 21-33-05» -> «WoT — епічний момент 🔥».
+    default_title — своя назва для безликих файлів ({game} — назва гри), напр. «{game} — insane moment 🔥»."""
     name = re.sub(r"[_\-.]+", " ", stem)
     name = re.sub(r"\s+", " ", name).strip()
     letters = sum(ch.isalpha() for ch in name)
-    if letters < 3 or GENERIC_NAME.match(name):
+    if letters < 3 or GENERIC_NAME.match(name) or AUTOCUT_NAME.match(name):
+        if default_title.strip():
+            return default_title.replace("{game}", game or "").strip(" —-")
         return f"{game} — епічний момент 🔥" if game else "Епічний ігровий момент 🔥"
     return (name[:1].upper() + name[1:])[:100]
 
@@ -165,7 +172,7 @@ def game_hashtags(cfg: dict, game: str) -> list[str]:
 
 def auto_meta_json(mp4: Path, game: str, cfg: dict) -> dict:
     """json для відео, у якого його немає (замість generate_meta.py)."""
-    title = title_from_filename(mp4.stem, game)
+    title = title_from_filename(mp4.stem, game, str((cfg.get("auto_meta") or {}).get("default_title") or ""))
     tags = game_hashtags(cfg, game)
     line = " ".join(tags)
     return {
@@ -184,8 +191,41 @@ def _strip_tags(text: str, tags: list[str]) -> str:
     return re.sub(r"\s+", " ", "".join(words)).strip()
 
 
+TRAILING_TAGS = re.compile(r"(#[\w\d_]+(?:\s+#[\w\d_]+)*)\s*$", re.UNICODE)
+
+
+def _add_footer(text: str, footer: str) -> str:
+    """Підпис каналу перед хештегами в кінці тексту (або просто в кінець). Без дублів."""
+    text = (text or "").strip()
+    if not footer or footer in text:
+        return text
+    m = TRAILING_TAGS.search(text)
+    if m and m.start() > 0:
+        return f"{text[:m.start()].rstrip()}\n\n{footer}\n\n{m.group(1)}".strip()
+    if m:  # текст — самі хештеги
+        return f"{footer}\n\n{m.group(1)}"
+    return f"{text}\n\n{footer}".strip()
+
+
+def apply_footer(meta: PostMeta, cfg: dict) -> PostMeta:
+    """Постійний підпис каналу (config «footer»): в опис YouTube і в підписи TikTok / Instagram / Facebook."""
+    conf = cfg.get("footer") or {}
+    footer = str(conf.get("text") or "").strip()
+    if not footer:
+        return meta
+    if conf.get("in_description", True):
+        meta.yt_description = _add_footer(meta.yt_description, footer)
+    if conf.get("in_captions", True):
+        meta.tiktok_text = _add_footer(meta.tiktok_text, footer)
+        meta.instagram_text = _add_footer(meta.instagram_text, footer)
+        meta.facebook_text = _add_footer(meta.facebook_text, footer)
+    return meta
+
+
 def apply_always_hashtags(meta: PostMeta, cfg: dict) -> PostMeta:
-    """Додає обов'язкові хештеги в кінець назви й підписів (без дублів; назва YouTube ≤ 100 символів)."""
+    """Додає обов'язкові хештеги в кінець назви й підписів (без дублів; назва YouTube ≤ 100 символів).
+    Спершу — постійний підпис каналу (footer), якщо він заданий."""
+    meta = apply_footer(meta, cfg)
     conf = cfg.get("always_hashtags") or {}
     tags = _hashtags(conf.get("tags") or [])
     if not tags:

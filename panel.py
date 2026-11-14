@@ -69,7 +69,8 @@ FIELDS = {
     "auto_meta.enabled": "bool", "auto_meta.hashtags": "tagmap",
     "always_hashtags.tags": "taglist", "always_hashtags.in_title": "bool", "always_hashtags.in_captions": "bool",
     "ai.enabled": "bool", "ai.model": "str", "ai.hashtags_count": "int", "ai.channel_description": "str",
-    "ai.extra_prompt": "str",
+    "ai.extra_prompt": "str", "ai.language": "lang", "platforms.youtube.language": "lang",
+    "footer.text": "str", "footer.in_description": "bool", "footer.in_captions": "bool", "auto_meta.default_title": "str",
     "on_missed_approval": "missed", "updates.auto": "bool", "updates.check_minutes": "int", "power.sleep_between_slots": "bool",
     "power.wake_before_minutes": "int", "power.quiet_minutes": "int", "power.hold_during_stream": "bool",
     "power.no_sleep_apps": "applist",
@@ -111,6 +112,10 @@ def coerce(kind: str, value):
     if kind == "missed":
         if value not in ("wait", "skip", "auto"):
             raise ValueError("wait / skip / auto")
+        return value
+    if kind == "lang":
+        if value not in ("uk", "en"):
+            raise ValueError("uk / en")
         return value
     if kind == "privacy":
         if value not in ("public", "unlisted", "private"):
@@ -286,7 +291,7 @@ class Panel:
                 raise ValueError("Спершу впишіть токен бота і свій chat_id: вкладка «✈️ Telegram і доступ» → Зберегти")
         self._owner_cache = (0, None)
         if name == "start":
-            if not control.start_bot(port):
+            if not control.start_bot(port, config=self.cfg["config_path"]):
                 raise ValueError("Бот не запустився. " + self.last_error())
             self.restart_needed = False
             return "Бот запущено"
@@ -300,10 +305,12 @@ class Panel:
                 raise ValueError("Бот не зупинився. Закрийте вікно бота або в Диспетчері завдань завершіть "
                                  "процеси pythonw.exe / python.exe, потім натисніть «Запустити».")
             time.sleep(1)
-            if not control.start_bot(port):
+            if not control.start_bot(port, config=self.cfg["config_path"]):
                 raise ValueError("Бот не запустився. " + self.last_error())
             self.restart_needed = False
             return "Бот перезапущено"
+        if name == "channel":
+            return self.channel_action(str(data.get("key") or "en"), str(data.get("op") or ""), data)
         if name == "pause":
             self.db.set("paused", "1")
             return "Розклад призупинено"
@@ -449,6 +456,43 @@ class Panel:
         if name == "retry":
             raise ValueError("Повтор — командою /retry N у Telegram")
         raise ValueError(f"Невідома дія {name}")
+
+    def channel_action(self, key: str, op: str, data: dict) -> str:
+        """Вкладка «🇬🇧 EN-канал»: створити, запустити/зупинити бота каналу, відкрити його панель."""
+        import channels
+        if self.cfg.get("channel"):
+            raise ValueError("Керування каналами — у панелі основного каналу")
+        if op == "create":
+            ready = str(data.get("ready") or "").strip() or None
+            d = channels.create(self.cfg, key, ready)
+            return f"Канал створено: {d}. Далі — «Відкрити панель каналу»: Telegram-бот, YouTube, папка шортсів."
+        if op == "start":
+            if not channels.start(key):
+                raise ValueError("Бот каналу не запустився — подивіться журнал у панелі каналу")
+            return "Бот каналу запущено"
+        if op == "stop":
+            if not channels.stop(key):
+                raise ValueError("Бот каналу не зупинився")
+            return "Бот каналу зупинено"
+        if op == "panel":
+            url = channels.open_panel(key)
+            return f"Панель каналу: {url}"
+        if op == "autostart":
+            channels.set_autostart(key, bool(data.get("on")))
+            return "Автозапуск каналу " + ("увімкнено" if data.get("on") else "вимкнено")
+        raise ValueError(f"Невідома дія «{op}»")
+
+    def channels_state(self) -> dict:
+        import channels
+        if self.cfg.get("channel"):
+            return {"is_channel": True, "name": self.cfg["channel"].get("name") or "", "list": []}
+        out = []
+        for key in channels.TEMPLATES:
+            try:
+                out.append(channels.status(key))
+            except Exception as e:  # noqa: BLE001
+                out.append({"key": key, "exists": True, "error": str(e)})
+        return {"is_channel": False, "name": "", "list": out}
 
     def last_error(self) -> str:
         """Остання помилка служби з журналу — щоб показати причину просто в панелі."""
@@ -836,6 +880,7 @@ class Panel:
                                                                      and cfg["secrets"].get("GEMINI_API_KEY")),
             "path_problems": self.path_problems(cfg),
             "root": str(self.root), "now": local_dt(cfg, now).strftime("%d.%m.%Y %H:%M"),
+            "channels": self.channels_state(),
         }
 
     # ---------------- пароль ----------------
