@@ -180,6 +180,8 @@ class Instagram(_MetaBase):
                     notes.append("завантажено з токеном користувача")
                 if notes:
                     out["note"] = "Instagram: " + "; ".join(notes)
+                if errors:  # що не пройшло перед успіхом — для «🧾 Деталі»
+                    out["tried"] = errors[:6]
                 return out
         try:
             about = media.ig_summary(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))

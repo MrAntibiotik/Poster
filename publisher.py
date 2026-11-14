@@ -150,8 +150,8 @@ class Publisher:
                     app.db.set(f"pubtry:{item['id']}:{key}", f"{i + 1}/{attempts}")
                     self.sleep(pause)
         app.db.set(f"pubtry:{item['id']}:{key}", None)
-        app.db.event(item["id"], "platform_error", {"platform": key, "error": str(last)[:300]})
-        return {"status": "error", "attempts": attempts, "error": str(last)[:500]}
+        app.db.event(item["id"], "platform_error", {"platform": key, "error": str(last)[:2000]})
+        return {"status": "error", "attempts": attempts, "error": str(last)[:2000]}
 
     def _write_json(self, path: str, item: dict, results: dict, status: str, now: int) -> None:
         try:

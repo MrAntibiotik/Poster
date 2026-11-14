@@ -149,6 +149,43 @@ class Bot:
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
                 "is_persistent": True}
 
+    def details_text(self, item_id: int) -> str:
+        """Повні причини помилок і що пробувала програма — для «🧾 Деталі» (Telegram і панель)."""
+        from platforms.meta_graph import short_error
+        item = self.db.get_item(item_id)
+        if not item:
+            return "Шортс не знайдено"
+        lines = [f"🧾 <b>Деталі публікації #{item_id}</b>", esc(Path(item["mp4"]).name)]
+        for p in PLATFORMS:
+            r = item["results"].get(p)
+            if not r:
+                continue
+            if r.get("status") == "ok":
+                lines.append(f"\n✅ <b>{NAMES[p]}</b>" + (f" — {esc(str(r.get('note')))}" if r.get("note") else ""))
+                for t in r.get("tried") or []:
+                    lines.append(f"   ✖️ не пройшло: {esc(str(t)[:400])}")
+            else:
+                lines.append(f"\n❌ <b>{NAMES[p]}</b> (спроб: {r.get('attempts', '?')})")
+                err = str(r.get("error", ""))
+                for part in err.split("; ") if "спроб)" in err else [err]:
+                    lines.append(f"   • {esc(short_error(part) if len(part) > 400 else part)}")
+        evs = self.db.q("SELECT ts, details FROM events WHERE item_id=? AND kind='platform_error' ORDER BY ts DESC LIMIT 6",
+                        (item_id,))
+        if evs:
+            lines.append("\n<b>Останні помилки (журнал)</b>")
+            for e in evs:
+                try:
+                    d = json.loads(e["details"] or "{}")
+                except ValueError:
+                    d = {}
+                lines.append(f"• {local_dt(self.cfg, e['ts']):%d.%m %H:%M} {NAMES.get(d.get('platform'), d.get('platform', ''))}: "
+                             f"{esc(short_error(d.get('error', '')))}")
+        text = "\n".join(lines)
+        return text if len(text) < 4000 else text[:3990] + "…"
+
+    def has_details(self, item: dict) -> bool:
+        return any(r.get("status") != "ok" or r.get("tried") for r in item["results"].values())
+
     def publish_all(self, by="") -> str:
         """Опублікувати всі шортси, що чекають на підтвердження (пропущені слоти) — по черзі, з поточними назвами."""
         items = [i for i in self.db.items("status='notified'", order="slot_at")
@@ -672,10 +709,14 @@ class Bot:
 
     def keyboard(self, item: dict) -> dict | None:
         if item["status"] in ("failed", "posted"):
+            det = [{"text": "🧾 Деталі", "callback_data": f"err:{item['id']}"}] if self.has_details(item) else []
             if self.failed_errors(item) or item["status"] == "failed":
                 if not self.db.get(f"ignored:{item['id']}"):
-                    return self.retry_keyboard(item["id"])
-            return None
+                    kb = self.retry_keyboard(item["id"])
+                    if det:
+                        kb["inline_keyboard"].append(det)
+                    return kb
+            return {"inline_keyboard": [det]} if det else None
         if item["status"] == "cancelled":
             return {"inline_keyboard": [[{"text": "↩️ Повернути в чергу", "callback_data": f"cr:{item['id']}"}]]} \
                 if Path(item["mp4"]).exists() else None
@@ -981,6 +1022,9 @@ class Bot:
             except TelegramError as e:
                 log.debug("edit platforms: %s", e)
             return
+        if action == "err":
+            answer()
+            return self.say(chat, self.details_text(target))  # зникне при наступній дії
         if action in ("cx", "cr", "pall"):
             try:
                 if action == "cx":
@@ -1727,6 +1771,8 @@ class Bot:
             return text
         if op == "publish_all":
             return self.publish_all(by="panel")
+        if op == "details":
+            return self.details_text(int(cmd.get("id") or 0))
         if op in ("report", "stats", "top"):
             from reports import collect, daily_report, weekly_top
             if op == "report":

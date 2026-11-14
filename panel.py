@@ -357,6 +357,8 @@ class Panel:
                 raise ValueError("Невідомо що відкрити")
             control.open_path(target)
             return "Відкрито"
+        if name == "details":
+            return self.bot_call({"op": "details", "id": int(data.get("id"))}, 30)
         if name == "publish_all":
             return self.bot_call({"op": "publish_all"}, 60)
         if name == "item":
@@ -818,7 +820,8 @@ class Panel:
         posted = [{"id": i["id"], "name": Path(i["mp4"]).stem,
                    "when": local_dt(cfg, i["posted_at"]).strftime("%d.%m %H:%M") if i["posted_at"] else "",
                    "links": {p: r.get("url") for p, r in i["results"].items() if r.get("status") == "ok"},
-                   "errors": {p: r.get("error") for p, r in i["results"].items() if r.get("status") != "ok"}}
+                   "errors": {p: r.get("error") for p, r in i["results"].items() if r.get("status") != "ok"},
+                   "details": any(r.get("status") != "ok" or r.get("tried") for r in i["results"].values())}
                   for i in db.items("status='posted'", order="posted_at DESC")[:10]]
         owners = [int(x) for x in re.findall(r"-?\d+", cfg["secrets"]["TELEGRAM_CHAT_ID"] or "")]
         users = [{**u, "owner": u["chat_id"] in owners} for u in db.users()]
@@ -828,12 +831,12 @@ class Panel:
         log_path = Path(cfg["paths"]["log"])
         if log_path.exists():
             with open(log_path, "rb") as f:
-                f.seek(max(0, log_path.stat().st_size - 20000))
+                f.seek(max(0, log_path.stat().st_size - 80000))
                 log_tail = f.read().decode("utf-8", errors="replace").split("\n", 1)[-1]
             for v in cfg["secrets"].values():
                 if v and len(v) > 12:
                     log_tail = log_tail.replace(v, mask(v))
-            log_tail = "\n".join(log_tail.splitlines()[-120:])
+            log_tail = "\n".join(log_tail.splitlines()[-400:])
 
         running = control.is_running(cfg["lock_port"])
         owner = None

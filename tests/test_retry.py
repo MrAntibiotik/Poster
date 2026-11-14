@@ -89,6 +89,15 @@ class RetryTest(FlowBase):
         self.button(f"rf:{self.item['id']}")
         self.assertEqual(len(calls), 1)  # без ще двох повних кіл по 3 варіанти файлу
 
+    def test_details_button(self):
+        kb = str(self.app.bot.keyboard(self.app.db.get_item(self.item["id"])))
+        self.assertIn(f"err:{self.item['id']}", kb)
+        self.button(f"err:{self.item['id']}")
+        text = self.app.bot.tg.sent[-1][1]
+        self.assertIn("🧾 <b>Деталі публікації", text)
+        self.assertIn("❌ <b>Instagram</b>", text)
+        self.assertIn("ProcessingFailedError", text)  # повний текст причини
+
     def test_retry_in_free_slot(self):
         self.button(f"rq:{self.item['id']}")
         when = self.app.scheduler.retry_at(self.item["id"])

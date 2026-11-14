@@ -489,6 +489,8 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
   <section data-page="log" class="hidden">
     <div class="card"><h2>📄 Журнал (останні рядки)</h2>
       <div class="row"><label class="check" style="margin:0"><input type="checkbox" id="logFollow" checked> Оновлювати автоматично</label>
+        <label class="check" style="margin:0"><input type="checkbox" id="logErr"> Лише помилки й попередження</label>
+        <input type="text" id="logFind" placeholder="Пошук, напр. Instagram" style="max-width:220px">
         <button class="btn" data-open="log">Відкрити log.txt</button><button class="btn" data-open="folder">📂 Папка програми</button></div>
       <pre id="logBox" style="max-height:70vh"></pre></div>
   </section>
@@ -559,6 +561,10 @@ button.chip.off{background:var(--chip);color:var(--muted);text-decoration:line-t
       <button class="btn primary" id="imPub">🚀 Підтвердити публікацію</button></div>
     <p class="muted small" id="imNote"></p>
   </div>
+</div>
+<div class="modal hidden" id="detModal" role="dialog" aria-modal="true">
+  <div class="card"><div class="out" id="detBody" style="max-height:70vh"></div>
+    <div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn" id="detClose">Закрити</button></div></div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -706,12 +712,14 @@ async function refresh(){
     <td><div class="row">
       <button class="btn primary" data-fail="${f.id}" data-op="now">🔁 Зараз</button>
       <button class="btn" data-fail="${f.id}" data-op="slot">📦 У вільний слот</button>
+      <button class="btn" data-det="${f.id}">🧾 Деталі</button>
       ${f.ignored ? `<button class="btn" data-fail="${f.id}" data-op="unignore">↩️ Повернути</button>`
                   : `<button class="btn" data-fail="${f.id}" data-op="ignore">✖️ Ігнорувати</button>`}
     </div></td></tr>`).join("") || '<tr><td class="muted">немає — усе опубліковано ✅</td></tr>';
   $("#posted").innerHTML = s.posted.map(i => `<tr><td>${esc(i.when)}</td><td>${esc(i.name)}</td><td>${
     Object.entries(i.links).map(([p, u]) => u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(s.platforms[p].name)}</a>` : esc(s.platforms[p].name)).join(" · ")}${
-    Object.keys(i.errors).length ? ' <span class="pill bad">помилки: ' + Object.keys(i.errors).map(p => esc(s.platforms[p].name)).join(", ") + "</span>" : ""}</td></tr>`).join("") || '<tr><td class="muted">ще нічого</td></tr>';
+    Object.keys(i.errors).length ? ' <span class="pill bad">помилки: ' + Object.keys(i.errors).map(p => esc(s.platforms[p].name)).join(", ") + "</span>" : ""}${
+    i.details ? ` <button class="btn" data-det="${i.id}" title="Повні причини помилок і що пробувала програма">🧾 Деталі</button>` : ""}</td></tr>`).join("") || '<tr><td class="muted">ще нічого</td></tr>';
 
   const roles = {admin:"🛠 Адмін", viewer:"👁 Глядач", pending:"⏳ Запит", blocked:"🚫 Відхилено"};
   $("#users").innerHTML = s.users.map(u => `<tr><td>${esc(u.name || "")}${u.owner ? ' <span class="pill">головний</span>' : ""}</td><td>${u.chat_id}</td><td>${roles[u.role] || u.role}</td><td><div class="row">${
@@ -734,7 +742,10 @@ async function refresh(){
   pill($("#aiStatus"), aiOn ? "увімкнено" : (sec.GEMINI_API_KEY.set ? "вимкнено" : "немає ключа"), aiOn ? "ok" : "warn");
 
   if ($("#logFollow").checked) { const box = $("#logBox"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
-    box.textContent = s.log || "журнал порожній"; if (atEnd) box.scrollTop = box.scrollHeight; }
+    let lines = (s.log || "").split("\n");
+    if ($("#logErr").checked) lines = lines.filter(l => /\[(WARNING|ERROR|CRITICAL)\]/.test(l));
+    const q = $("#logFind").value.trim().toLowerCase(); if (q) lines = lines.filter(l => l.toLowerCase().includes(q));
+    box.textContent = lines.join("\n") || (s.log ? "нічого не знайдено" : "журнал порожній"); if (atEnd) box.scrollTop = box.scrollHeight; }
   renderChannels(s);
   if (!formsFilled) fillForms(s);
 }
@@ -841,6 +852,9 @@ function openEditor(id){
 function closeEditor(){ $("#itemModal").classList.add("hidden"); $("#imVideo").pause(); $("#imVideo").removeAttribute("src"); $("#imVideo").load(); EDIT = null; }
 $("#imWhen").addEventListener("change", () => $("#imCustom").classList.toggle("hidden", $("#imWhen").value !== "custom"));
 $("#imCancel").addEventListener("click", closeEditor);
+$("#detClose").addEventListener("click", () => $("#detModal").classList.add("hidden"));
+$("#detModal").addEventListener("click", ev => { if (ev.target.id === "detModal") $("#detModal").classList.add("hidden"); });
+["#logErr", "#logFind"].forEach(sel => $(sel).addEventListener("input", () => S && refresh()));
 $("#itemModal").addEventListener("click", ev => { if (ev.target.id === "itemModal") closeEditor(); });
 async function submitEditor(op, btn){
   if (!EDIT) return;
@@ -886,6 +900,10 @@ document.addEventListener("click", ev => {
     if (op === "publish") { if (!confirm("Опублікувати шортс #" + body.id + " зараз?")) return; body.when = "now"; }
     if (b.dataset.platform) body.platform = b.dataset.platform;
     run(() => api("/api/action", body), b, op === "regen" ? "Перегенеровую…" : null);
+  } else if (b.dataset.det) {
+    api("/api/action", {name:"details", id:+b.dataset.det}).then(j => {
+      $("#detBody").innerHTML = tgHtml(j.message || ""); $("#detModal").classList.remove("hidden");
+    }).catch(e => toast(e.message, "err"));
   } else if (b.dataset.period) {
     $("#repOut").classList.remove("hidden"); $("#repOut").dataset.h = "";
     run(() => api("/api/action", {name:"analytics", days:+b.dataset.period}), b);

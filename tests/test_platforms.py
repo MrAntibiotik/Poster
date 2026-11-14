@@ -235,6 +235,7 @@ class InstagramSpecTest(Base):
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertEqual(r["id"], "M1")
         self.assertIn("не прийняв оригінал", r["note"])
+        self.assertIn("2207026", r["tried"][0])  # чому не пройшов оригінал — збережено для «🧾 Деталі»
         ups = [c for c in f.calls if "rupload" in c[1]]
         self.assertEqual([u[2]["data"][:1] for u in ups], [b"x", b"x", b"c"])  # оригінал (2 рази), потім копія
         self.assertEqual(len([c for c in f.calls if c[1].endswith("/IG1/media")]), 2)  # новий контейнер
