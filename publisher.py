@@ -65,6 +65,8 @@ class Publisher:
         app, db = self.app, self.app.db
         item = db.get_item(item_id)
         meta = apply_always_hashtags(load_meta(item["json"], item["title_override"]), app.cfg)
+        if item.get("kind") == "highlight":
+            meta.kind = "highlight"
         results = dict(item["results"])
         log.info("Публікую #%s «%s» (%s)", item_id, meta.yt_title, item["mp4"])
         app.bot.refresh(item_id)

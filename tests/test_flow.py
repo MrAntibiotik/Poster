@@ -70,6 +70,7 @@ class FlowBase(unittest.TestCase):
             "always_hashtags": {"tags": []},
             "on_missed_approval": "skip",
             "updates": {"auto": False},  # більшість тестів перевіряють пропуск; wait/auto — у test_power
+            "highlights": {"enabled": False},  # не чіпати справжню папку Робочий стіл\Хайлайти
         }
         (self.tmp / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
         for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):

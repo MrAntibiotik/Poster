@@ -74,6 +74,8 @@ FIELDS = {
     "on_missed_approval": "missed", "updates.auto": "bool", "updates.check_minutes": "int", "power.sleep_between_slots": "bool",
     "power.wake_before_minutes": "int", "power.quiet_minutes": "int", "power.hold_during_stream": "bool",
     "power.no_sleep_apps": "applist",
+    "highlights.enabled": "bool", "highlights.folder": "str", "highlights.slots": "hlslots",
+    "highlights.privacy": "privacy_opt",
 }
 
 
@@ -120,6 +122,16 @@ def coerce(kind: str, value):
     if kind == "privacy":
         if value not in ("public", "unlisted", "private"):
             raise ValueError("public / unlisted / private")
+        return value
+    if kind == "hlslots":
+        items = value if isinstance(value, list) else re.split(r"[,\s;]+", str(value))
+        slots = sorted({_hm(x) for x in items if str(x).strip()})
+        if not 1 <= len(slots) <= 3:
+            raise ValueError("хайлайти: від 1 до 3 разів на день, напр. 18:00")
+        return slots
+    if kind == "privacy_opt":
+        if value not in ("", "public", "unlisted", "private"):
+            raise ValueError("порожньо / public / unlisted / private")
         return value
     if kind == "slots":
         items = value if isinstance(value, list) else re.split(r"[,\s;]+", str(value))
@@ -359,6 +371,7 @@ class Panel:
             return "Виконую…"
         if name == "open":
             target = {"ready": self.cfg["paths"]["ready"], "posted": self.cfg["paths"]["posted"],
+                      "highlights": self.cfg["highlights"]["folder_path"],
                       "skipped": self.cfg["paths"]["skipped"], "cancelled": self.cfg["paths"]["cancelled"],
                       "log": self.cfg["paths"]["log"],
                       "folder": self.root}.get(data.get("what"))
@@ -816,6 +829,7 @@ class Panel:
         settings["auto_meta.hashtags"] = tagmap_to_text(settings["auto_meta.hashtags"])
         settings["always_hashtags.tags"] = " ".join(settings["always_hashtags.tags"] or [])
         settings["power.no_sleep_apps"] = ", ".join(settings["power.no_sleep_apps"] or [])
+        settings["highlights.slots"] = ", ".join(settings["highlights.slots"] or [])
         secrets_ = {n: {"set": bool(v), "value": v if n in PUBLIC_IDS else mask(v), "label": SECRET_LABELS.get(n, n)}
                     for n, v in cfg["secrets"].items()}
 

@@ -752,6 +752,8 @@ class Bot:
         meta = meta or self._meta(item)
         slot = fmt_slot(self.cfg, item["slot_at"]) if item["slot_at"] else "—"
         head = f"🎬 <b>{esc(meta.yt_title)}</b>"
+        if item.get("kind") == "highlight":
+            head = "🎞 <b>ХАЙЛАЙТ</b> · YouTube, звичайне відео\n" + head
         tags = esc(" ".join(meta.hashtags))
         hint = ""
         if item["status"] == "notified" and self.cfg.get("ask_texts_before_publish"):

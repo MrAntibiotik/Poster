@@ -106,6 +106,14 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(self.req("POST", "/api/settings", {"slots": ["25:00"]})[0], 400)
         self.assertEqual(self.req("POST", "/api/settings", {"slots": [f"1{i}:00" for i in range(7)]})[0], 400)
         self.assertEqual(json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))["slots"], ["09:05", "21:00"])
+        # хайлайти: папка, час (1–3), видимість
+        st, r = self.req("POST", "/api/settings", {"highlights.enabled": True, "highlights.folder": "D:/Хайлайти",
+                                                   "highlights.slots": "18:00, 9:30", "highlights.privacy": ""})
+        self.assertEqual(st, 200, r)
+        hl = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))["highlights"]
+        self.assertEqual(hl, {"enabled": True, "folder": "D:/Хайлайти", "slots": ["09:30", "18:00"], "privacy": ""})
+        self.assertEqual(self.req("POST", "/api/settings", {"highlights.slots": "10:00,11:00,12:00,13:00"})[0], 400)
+        self.assertEqual(self.req("GET", "/api/state")[1]["settings"]["highlights.slots"], "09:30, 18:00")
         st, r = self.req("POST", "/api/settings", {"regenerate_command": 'python "D:/My Shorts/gen.py" {mp4}'})
         self.assertEqual(json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))["regenerate_command"],
                          ["python", "D:/My Shorts/gen.py", "{mp4}"])
