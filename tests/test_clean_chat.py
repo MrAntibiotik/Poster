@@ -125,6 +125,18 @@ class CleanChatTest(FlowBase):
         self.assertIn(old["msg_id"], tg.deleted)
         self.assertEqual(tg.sent[-1][0], "video")
 
+    def test_keyboard_restored_after_cleanup(self):
+        tg, bot = self.app.bot.tg, self.app.bot
+        bot.ensure_keyboard()
+        kb = tg.sent[-1][2]
+        self.assertIn("⬆️ Оновити", str(kb))
+        first = self.last_id()
+        bot.clean_chat(42)
+        self.assertNotIn(first, tg.deleted)  # повідомлення з кнопками не прибирається
+        n = len(tg.sent)
+        bot.ensure_keyboard()
+        self.assertEqual(len(tg.sent), n)  # уже є — не дублюємо
+
     def test_service_messages_expire(self):
         tg = self.app.bot.tg
         self.app.bot.send("🟢 poster запущено")

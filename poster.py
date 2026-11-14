@@ -197,13 +197,17 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
                 app.bot.refresh(it["id"])
             except Exception as e:  # noqa: BLE001
                 log.debug("refresh #%s: %s", it["id"], e)
-    if app.db.get("chat_cleaned") != "3":  # один раз після оновлення — прибрати старе «сміття» з чату
-        app.db.set("chat_cleaned", "3")
+    if app.db.get("chat_cleaned") != "4":  # один раз після оновлення — прибрати старе «сміття» з чату
+        app.db.set("chat_cleaned", "4")
         for cid in app.bot.recipients():
             try:
                 app.bot.clean_chat(cid)
             except Exception as e:  # noqa: BLE001
                 log.warning("Прибирання чату %s: %s", cid, e)
+    try:
+        app.bot.ensure_keyboard()  # кнопки внизу (у т.ч. «⬆️ Оновити») — завжди на місці
+    except Exception as e:  # noqa: BLE001
+        log.warning("Кнопки: %s", e)
     from config import VERSION
     log.info("Версія %s", VERSION)
     log.info("poster запущено. Платформи: %s. dry_run=%s", list(app.platforms), cfg.get("dry_run"))

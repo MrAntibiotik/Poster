@@ -58,6 +58,8 @@ BTN = {
 VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
 
 # Кнопка «Меню» біля поля введення (setMyCommands)
+KBD_VERSION = "2"  # збільшується, коли змінюється набір кнопок — бот надішле нові
+
 COMMANDS = [
     ("menu", "Показати кнопки керування"),
     ("queue", "Черга шортсів"),
@@ -71,6 +73,9 @@ COMMANDS = [
     ("platforms", "Увімкнути / вимкнути платформи"),
     ("failed", "Невдалі публікації: причина й повтор"),
     ("users", "Хто має доступ"),
+    ("update", "Оновити програму зараз"),
+    ("stream", "Режим стріму: ПК не засне"),
+    ("clean", "Прибрати чат — лишити тільки відео"),
     ("help", "Довідка"),
 ]
 
@@ -243,6 +248,15 @@ class Bot:
                           "callback_data": f"plat:0:{p}"}])
         lines.append("\nДля окремого шортса — кнопки «Вимкнути платформу» під ним.")
         return "\n".join(lines), {"inline_keyboard": rows}
+
+    def ensure_keyboard(self) -> None:
+        """Кнопки внизу тримаються на повідомленні, яке їх надіслало. Якщо його видалено (прибирання чату) —
+        Telegram ховає кнопки. Тож завжди лишаємо одне коротке повідомлення з актуальними кнопками."""
+        for cid in self.recipients():
+            if self.db.get(f"keep:{cid}:kbd") and self.db.get(f"kbd_v:{cid}") == KBD_VERSION:
+                continue
+            self.say(cid, "⌨️ Кнопки керування — внизу", html_mode=False, reply_markup=self.reply_keyboard(cid))
+            self.db.set(f"kbd_v:{cid}", KBD_VERSION)
 
     def setup_commands(self) -> None:
         """Кнопка «Меню» в Telegram зі списком команд (best-effort)."""
