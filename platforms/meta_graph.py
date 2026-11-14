@@ -208,29 +208,22 @@ class Instagram(_MetaBase):
         log.info("Instagram: контейнер %s, завантажую %s (%.1f МБ)", cid, video_path,
                  os.path.getsize(video_path) / 1024 / 1024)
         upload_error = None
-        for attempt in range(2):  # 400 від rupload буває випадковою — одна повторна відправка того ж файлу
-            try:
-                g.upload_binary(uri, video_path)
-                upload_error = None
-                break
-            except PublishError as e:
-                upload_error = e  # буває хибна 400 — відео все одно обробляється; перевіримо контейнер
-                log.warning("Instagram rupload (спроба %s): %s", attempt + 1, e)
-                if attempt == 0:
-                    st0 = g.get(cid, fields="status_code").get("status_code")
-                    if st0 == "FINISHED":
-                        break
-                    time.sleep(10)
+        try:
+            g.upload_binary(uri, video_path)
+        except PublishError as e:
+            # 400 від rupload буває хибною: файл дійшов і обробляється. Повторно в той самий контейнер НЕ шлемо —
+            # друга відправка ламає обробку («Video Transcoding Error: both HD and SD progressive failed»).
+            upload_error = e
+            log.warning("Instagram rupload: %s — перевіряю, чи відео все одно обробляється", e)
 
         start = time.time()
         deadline = start + (3 * 60 if upload_error else 20 * 60)
         while True:
             st = g.get(cid, fields="status_code,status")
             code = st.get("status_code")
-            if code == "IN_PROGRESS" and upload_error and deadline < start + 10 * 60:
-                # 400 від rupload могла бути хибною: відео дійшло й обробляється — чекаємо довше
-                log.info("Instagram: попри помилку завантаження відео обробляється — чекаю до 10 хв")
-                deadline = start + 10 * 60
+            if code == "IN_PROGRESS" and upload_error and deadline < start + 20 * 60:
+                log.info("Instagram: попри помилку завантаження відео обробляється — чекаю до 20 хв")
+                deadline = start + 20 * 60
             if code == "FINISHED":
                 if upload_error:
                     log.info("Instagram: попри помилку завантаження контейнер готовий — публікую")

@@ -222,14 +222,13 @@ class InstagramSpecTest(Base):
         finally:
             meta_graph.time = orig
         self.assertEqual(r["id"], "M1")  # 30 × 10 с = 5 хв обробки — дочекались
-        self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 2)  # одна повторна відправка
+        self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)  # той самий файл удруге не шлемо
 
     def test_processing_failed_retries_with_copy(self):
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
         self.media.ig_problems = lambda p: []
-        routes = self.routes([self.fail(), self.fail(), Resp({"success": True})])
-        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS"}),
-                                    Resp({"status_code": "ERROR", "status": "Error: code 2207026"}),
+        routes = self.routes([self.fail(), Resp({"success": True})])
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "ERROR", "status": "Error: code 2207026"}),
                                     Resp({"status_code": "FINISHED"})])
         f = self.http(meta_graph, routes)
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
@@ -237,7 +236,7 @@ class InstagramSpecTest(Base):
         self.assertIn("не прийняв оригінал", r["note"])
         self.assertIn("2207026", r["tried"][0])  # чому не пройшов оригінал — збережено для «🧾 Деталі»
         ups = [c for c in f.calls if "rupload" in c[1]]
-        self.assertEqual([u[2]["data"][:1] for u in ups], [b"x", b"x", b"c"])  # оригінал (2 рази), потім копія
+        self.assertEqual([u[2]["data"][:1] for u in ups], [b"x", b"c"])  # оригінал, потім копія (без повторів)
         self.assertEqual(len([c for c in f.calls if c[1].endswith("/IG1/media")]), 2)  # новий контейнер
 
     def test_user_token_fallback(self):
@@ -260,7 +259,7 @@ class InstagramSpecTest(Base):
         self.assertEqual(r["id"], "M1")
         self.assertIn("токеном користувача", r["note"])
         auths = [c[2]["headers"]["Authorization"] for c in f.calls if "rupload" in c[1]]
-        self.assertEqual(auths, ["OAuth PAGE"] * 8 + ["OAuth USER"])  # 4 файли × 2 відправки, потім токен користувача
+        self.assertEqual(auths, ["OAuth PAGE"] * 4 + ["OAuth USER"])  # 4 варіанти файлу, потім токен користувача
 
     def test_all_attempts_fail_message(self):
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
