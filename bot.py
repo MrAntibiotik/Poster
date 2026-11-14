@@ -54,12 +54,13 @@ HELP_VIEWER = (
 BTN = {
     "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
     "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
+    "⛔ Стоп публікацій": "/stop", "✅ Відновити публікації": "/go",
     "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed", "🎮 Стрім": "/stream", "⬆️ Оновити": "/update", "📄 Журнал": "/log",
 }
 VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
 
 # Кнопка «Меню» біля поля введення (setMyCommands)
-KBD_VERSION = "3"  # збільшується, коли змінюється набір кнопок — бот надішле нові
+KBD_VERSION = "4"  # збільшується, коли змінюється набір кнопок — бот надішле нові
 
 COMMANDS = [
     ("menu", "Показати кнопки керування"),
@@ -71,6 +72,8 @@ COMMANDS = [
     ("testslot", "Тестовий слот через 10 хв"),
     ("pause", "Призупинити розклад"),
     ("resume", "Відновити розклад"),
+    ("stop", "⛔ Зупинити ВСІ публікації (навіть підтверджені)"),
+    ("go", "Відновити публікації після стопу"),
     ("platforms", "Увімкнути / вимкнути платформи"),
     ("failed", "Невдалі публікації: причина й повтор"),
     ("users", "Хто має доступ"),
@@ -141,11 +144,16 @@ class Bot:
     def paused(self) -> bool:
         return self.db.get("paused") == "1"
 
+    def stopped(self) -> bool:
+        return self.db.get("stopped") == "1"
+
     def reply_keyboard(self, chat_id: int) -> dict:
         if self.role(chat_id) == "admin":
             pause = "▶️ Продовжити" if self.paused() else "⏸ Пауза"
+            stop = "✅ Відновити публікації" if self.stopped() else "⛔ Стоп публікацій"
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня", "🧪 Тест-слот"],
-                    ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "🎮 Стрім", "⬆️ Оновити"], ["📄 Журнал", "❓ Довідка"]]
+                    ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "🎮 Стрім", "⬆️ Оновити"],
+                    [stop, "📄 Журнал", "❓ Довідка"]]
         else:
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня"]]
         return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True,
@@ -558,6 +566,45 @@ class Bot:
         for cid in (self.recipients() if to == "all" else self.admins()):
             self.say(cid, text, html_mode, self.reply_keyboard(cid) if keyboard else None, keep=keep, ttl=AUTO_TTL,
                      kind=kind)
+
+    # ---------- повтори ----------
+    def ask_duplicate(self, item_id: int, other: dict, kind: str) -> None:
+        """Шортс уже публікувався / уже в черзі — питаємо, чи справді публікувати ще раз."""
+        item = self.db.get_item(item_id)
+        name = esc(Path(item["mp4"]).stem)
+        how = "той самий файл" if kind == "same" else "та сама назва"
+        if other["status"] == "posted":
+            when = fmt_when(self.cfg, other["posted_at"]) if other.get("posted_at") else "раніше"
+            links = [f'<a href="{esc(r["url"])}">{NAMES.get(k, k)}</a>' for k, r in (other.get("results") or {}).items()
+                     if isinstance(r, dict) and r.get("status") == "ok" and r.get("url")]
+            state = f"уже <b>опубліковано</b> {when}" + (f": {', '.join(links)}" if links else "")
+        else:
+            state = f"уже <b>в роботі</b> (#{other['id']}, {other['status']})"
+        text = (f"⚠️ <b>Схоже на повтор</b> ({how})\n{name}\n\nЦей шортс {state}.\n"
+                "Я <b>не ставлю його в чергу</b>. Опублікувати ще раз?")
+        kb = {"inline_keyboard": [[{"text": "🔁 Так, ще раз", "callback_data": f"dup:{item_id}:yes"},
+                                   {"text": "🗑 Ні, прибрати", "callback_data": f"dup:{item_id}:no"}]]}
+        for cid in self.admins():
+            self.say(cid, text, True, kb, keep=True)
+
+    def resolve_duplicate(self, item_id: int, yes: bool, by=None) -> str:
+        item = self.db.get_item(item_id)
+        if not item or item["status"] != "duplicate":
+            return "Уже вирішено"
+        if yes:
+            self.db.update_item(item_id, status="queued", qpos=self.db.next_qpos(), note=None)
+            self.db.event(item_id, "queued", {"file": Path(item["mp4"]).name, "duplicate_ok": True, "by": by})
+            self.app.scheduler.announce_queued([item_id])
+            return f"🔁 #{item_id} у черзі — буде опубліковано ще раз"
+        from meta import move_pair
+        try:
+            mp4, js = move_pair(item["mp4"], item["json"], Path(self.cfg["paths"]["cancelled"]))
+        except OSError as e:
+            mp4, js = item["mp4"], item["json"]
+            log.warning("Повтор #%s: не вдалося перенести файл: %s", item_id, e)
+        self.db.update_item(item_id, status="cancelled", mp4=mp4, json=js, note="повтор")
+        self.db.event(item_id, "cancelled", {"by": by, "duplicate": True})
+        return f"🗑 #{item_id} прибрано (файл — у папці «Скасовані»)"
 
     def notify_reauth(self, key: str, reason: str) -> None:
         k = f"reauth_{key}"
@@ -1048,6 +1095,16 @@ class Bot:
                     self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
             except TelegramError as e:
                 log.debug("edit users: %s", e)
+            return
+        if action == "dup" and rest:
+            if self.role(chat) != "admin":
+                return answer("⛔ Лише для адміністратора", True)
+            result = self.resolve_duplicate(target, rest[0] == "yes", by=chat)
+            answer(result[:200])
+            try:
+                self.tg.edit_text(chat, cq["message"]["message_id"], result, None)
+            except TelegramError as e:
+                log.debug("edit dup: %s", e)
             return
         if action == "noop":
             return answer("Натисніть на платформу нижче, щоб вимкнути/увімкнути її")
@@ -2021,6 +2078,17 @@ class Bot:
         elif cmd == "/report":
             from reports import daily_report
             reply(daily_report(app))
+        elif cmd == "/stop":
+            self.db.set("stopped", "1")
+            self.db.event(None, "stopped", {"by": chat})
+            self.send("⛔ <b>Публікації зупинено.</b> Нічого не публікується — навіть підтверджене чи «⚡ зараз». "
+                      "Те, що зараз вантажиться, зупиниться перед наступною платформою.\n"
+                      "Відновити — «✅ Відновити публікації».", html_mode=True, keyboard=True)
+        elif cmd == "/go":
+            self.db.set("stopped", None)
+            self.db.event(None, "resumed_publishing", {"by": chat})
+            self.send("✅ Публікації відновлено. Пропущені слоти: підтверджені шортси (до 2 год тому) вийдуть одразу, "
+                      "решта — повернуться на початок черги.", keyboard=True)
         elif cmd == "/pause":
             self.db.set("paused", "1")
             self.db.event(None, "paused", {"by": chat})

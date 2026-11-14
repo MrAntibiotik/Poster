@@ -27,6 +27,14 @@ class Publisher:
             return item_id in self.active
 
     def start(self, item_id: int) -> None:
+        if self.app.db.get("stopped") == "1":  # «⛔ Стоп публікацій» — не починаємо нічого
+            log.info("#%s: публікації зупинено — не публікую", item_id)
+            if getattr(self.app.bot, "send", None) and self.app.db.get(f"stop_told:{item_id}") != "1":
+                self.app.db.set(f"stop_told:{item_id}", "1")
+                self.app.bot.send(f"⛔ Публікації зупинено — #{item_id} не публікую. «✅ Відновити публікації», "
+                                  "щоб продовжити.")
+            return
+        self.app.db.set(f"stop_told:{item_id}", None)
         with self._lock:
             if item_id in self.active:
                 return
@@ -65,6 +73,10 @@ class Publisher:
         for key in targets:
             if results.get(key, {}).get("status") == "ok":
                 continue  # уже опубліковано (відновлення після збою/перезапуску)
+            if db.get("stopped") == "1":  # «⛔ Стоп» під час публікації: решту платформ — після відновлення
+                log.info("#%s: публікації зупинено — %s та далі після «Відновити»", item_id, key)
+                app.bot.refresh(item_id)
+                return
             db.set(f"pubnow:{item_id}", key)  # яка платформа зараз — для підпису відео
             results[key] = self._publish_one(key, item, meta)
             db.set(f"pubnow:{item_id}", None)

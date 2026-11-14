@@ -120,6 +120,8 @@ class App:
             who = (f"#{it['id']} {esc(Path(it['mp4']).stem)} — {kinds.get(s['kind'], s['kind'])}" if it else
                    "⏸ пауза" if s["kind"] == "paused" else "порожньо (черга порожня)")
             lines.append(f"• {fmt_when(self.cfg, s['slot_at'], now)}{src}: {who}")
+        if self.db.get("stopped") == "1":
+            lines.append("⛔ <b>Публікації зупинено</b> — нічого не публікується («✅ Відновити публікації»)")
         if self.db.get("paused") == "1":
             lines.append("⏸ <b>Розклад на паузі</b> — нові шортси не надсилаються")
         lines.append(f"\n📦 У черзі: {len(self.db.queue())}")

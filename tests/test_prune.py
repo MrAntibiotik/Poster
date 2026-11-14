@@ -16,7 +16,7 @@ class PruneTest(FlowBase):
     def video(self, rel: str, root: Path | None = None) -> Path:
         p = (root or self.cfg["paths"]["ready"]) / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(b"0")
+        p.write_bytes(b"0" + str(p).encode())
         os.utime(p, (os.path.getmtime(p) - 300,) * 2)
         return p
 

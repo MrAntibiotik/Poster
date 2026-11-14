@@ -104,6 +104,10 @@ class DB:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.executescript(SCHEMA)
+            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(items)")}
+            if "fp" not in cols:  # відбиток вмісту — захист від повторних публікацій (dupes.py)
+                self.conn.execute("ALTER TABLE items ADD COLUMN fp TEXT")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS items_fp ON items(fp)")
 
     # ---- базові операції ----
     def q(self, sql: str, args=()) -> list[dict]:

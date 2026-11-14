@@ -106,7 +106,7 @@ class FlowBase(unittest.TestCase):
     def make_short(self, name, game="WoT", age=120):
         d = self.cfg["paths"]["ready"] / game
         d.mkdir(parents=True, exist_ok=True)
-        (d / f"{name}.mp4").write_bytes(b"\x00" * 1024)
+        (d / f"{name}.mp4").write_bytes(b"\x00" * 1024 + f"{game}/{name}".encode())
         (d / f"{name}.json").write_text(json.dumps({
             "status": "ready_to_post",
             "youtube": {"title": f"Титул {name}", "description": "Опис", "tags": ["wot", "танки"],
