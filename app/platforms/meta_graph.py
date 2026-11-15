@@ -274,6 +274,8 @@ class Instagram(_MetaBase):
             for fname, get_file in files:
                 self._check_stop()
                 try:
+                    if fname != "оригінал":
+                        self.report("готую копію для Instagram")
                     out = self._publish_file(get_file(), meta, token)
                 except PublishError as e:
                     if not self._upload_rejected(e):
@@ -320,6 +322,7 @@ class Instagram(_MetaBase):
         uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
         log.info("Instagram: контейнер %s, завантажую %s (%.1f МБ)", cid, video_path,
                  os.path.getsize(video_path) / 1024 / 1024)
+        self.report(f"завантажую файл ({os.path.getsize(video_path) / 1024 / 1024:.0f} МБ)")
         upload_error = None
         try:
             g.upload_binary(uri, video_path)
@@ -332,9 +335,11 @@ class Instagram(_MetaBase):
 
         start = time.time()
         deadline = start + (3 * 60 if upload_error else 20 * 60)
+        self.report("Instagram обробляє відео")
         while True:
             st = g.get(cid, fields="status_code,status")
             code = st.get("status_code")
+            self.report("Instagram обробляє відео")   # «живий»: остання перевірка щойно
             if code == "IN_PROGRESS" and upload_error and deadline < start + 20 * 60:
                 log.info("Instagram: попри помилку завантаження відео обробляється — чекаю до 20 хв")
                 deadline = start + 20 * 60
@@ -362,6 +367,7 @@ class Instagram(_MetaBase):
                 time.sleep(1)
 
         self._check_stop()   # відео готове, але натиснули «Стоп» — не публікуємо
+        self.report("публікую готове відео")
         mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
         out = {"id": mid, "url": ""}
         try:  # після публікації — помилки не критичні (щоб не опублікувати двічі)

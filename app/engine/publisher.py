@@ -196,8 +196,10 @@ class Publisher:
         last = None
         try:
             plat.should_stop = lambda: app.db.get("stopped") == "1"
+            plat.report = lambda phase, _i=item["id"]: self._report(_i, phase)
         except AttributeError:
             pass
+        self._report(item["id"], "завантажую")
         for i in range(1, attempts + 1):
             if app.db.get("stopped") == "1":
                 return None
@@ -244,6 +246,23 @@ class Publisher:
         app.db.set(f"pubtry:{item['id']}:{key}", None)
         app.db.event(item["id"], "platform_error", {"platform": key, "error": str(last)[:2000]})
         return {"status": "error", "attempts": attempts, "error": str(last)[:2000]}
+
+    def _report(self, item_id: int, phase: str) -> None:
+        """Етап публікації для картки: що робимо, з якого часу, і коли востаннє було «живе» підтвердження."""
+        import json as _json
+        now = now_ts()
+        try:
+            old = _json.loads(self.app.db.get(f"pubphase:{item_id}") or "{}")
+        except ValueError:
+            old = {}
+        since = old.get("since") if old.get("phase") == phase else now
+        self.app.db.set(f"pubphase:{item_id}", _json.dumps({"phase": phase, "since": since, "beat": now},
+                                                           ensure_ascii=False))
+        if old.get("phase") != phase and hasattr(self.app.bot, "refresh"):
+            try:
+                self.app.bot.refresh(item_id)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _retry_after_limit(self, item_id: int, ts: int) -> None:
         """Платформа обмежила запити — повтор невдалих платформ ставимо на час після паузи (сам, без кнопок)."""

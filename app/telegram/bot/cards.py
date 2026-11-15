@@ -175,13 +175,36 @@ class CardsMixin:
             return "резервний токен"
         return ""
 
+    def _phase_text(self, item_id: int) -> str:
+        """«⏳ Instagram обробляє відео · 7 хв (перевірено 23:58)» або попередження, якщо давно немає відповіді."""
+        import json as _json
+        try:
+            ph = _json.loads(self.db.get(f"pubphase:{item_id}") or "{}")
+        except ValueError:
+            ph = {}
+        if not ph.get("phase"):
+            return "⏳ публікується…"
+        now = now_ts()
+        mins = max(0, (now - int(ph.get("since") or now)) // 60)
+        quiet = (now - int(ph.get("beat") or now)) // 60
+        dur = f" · {mins} хв" if mins else ""
+        beat = local_dt(self.cfg, int(ph.get("beat") or now)).strftime("%H:%M")
+        phase = str(ph["phase"])
+        limit = 25 if "копію" in phase else 15 if phase.startswith("завантаж") else 6   # копія/завантаження — довгі кроки
+        if quiet >= limit:
+            return (f"⚠️ {esc(ph['phase'])}{dur}, але вже {quiet} хв без відповіді (остання {beat}) — "
+                    "можливо, зависло: «⛔ Стоп» і «🔁 Повторити»")
+        return f"⏳ {esc(ph['phase'])}{dur} (перевірено {beat})"
+
     def _results(self, item: dict, publishing: bool = False) -> str:
         from app.insights.reports import ICONS, explain_error
         lines = []
         targets = [p for p in PLATFORMS if p in self.app.platforms and p not in item["disabled"]]
         # «зараз публікується» — лише якщо публікація справді йде (після перезапуску / «Стоп» позначка застаріла)
-        current = (self.db.get(f"pubnow:{item['id']}")
-                   if publishing and self.app.publisher.is_active(item["id"]) else None)
+        pos = self.app.publisher.position(item["id"]) if publishing and hasattr(self.app.publisher, "position") \
+            else None
+        current = self.db.get(f"pubnow:{item['id']}") if pos == 0 else None   # лише той, що справді йде
+        in_work = publishing and self.app.publisher.is_active(item["id"])
         for p in PLATFORMS:
             r = item["results"].get(p)
             icon = ICONS.get(p, "•")
@@ -189,7 +212,10 @@ class CardsMixin:
                 continue
             if p == current:  # саме зараз публікується (стару помилку не показуємо — вона може вже не бути актуальною)
                 tr = self.db.get(f"pubtry:{item['id']}:{p}")
-                lines.append(f"{icon} {NAMES[p]} — ⏳ публікується…" + (f" (спроба {tr})" if tr else ""))
+                lines.append(f"{icon} {NAMES[p]} — {self._phase_text(item['id'])}" + (f" (спроба {tr})" if tr else ""))
+                continue
+            if in_work and p in targets and (not r or r.get("status") != "ok"):
+                lines.append(f"{icon} {NAMES[p]} — ⏳ далі")   # стара помилка неактуальна: платформа ще попереду
                 continue
             if not r:
                 if publishing and p in targets:

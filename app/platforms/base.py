@@ -29,6 +29,7 @@ class Platform:
     name = ""
 
     should_stop = staticmethod(lambda: False)   # Publisher підставляє перевірку «⛔ Стоп публікацій»
+    report = staticmethod(lambda phase: None)    # Publisher підставляє: етап публікації для картки («обробка…»)
 
     def __init__(self, cfg: dict):
         self.cfg = cfg

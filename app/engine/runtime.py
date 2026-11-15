@@ -128,7 +128,8 @@ class App:
                     and not Path(ig_now).stem.startswith(Path(it["mp4"]).stem):
                 state = "📸 чекає черги в Instagram (по одному відео)"
             elif cur:
-                state = f"{NAMES.get(cur, cur)} — вантажиться / обробляється" + (f", спроба {tr}" if tr else "")
+                phase = self.bot._phase_text(it["id"]) if hasattr(self.bot, "_phase_text") else "вантажиться"
+                state = f"{NAMES.get(cur, cur)} — {phase}" + (f", спроба {tr}" if tr else "")
             else:
                 state = "готується"
             out.append(f"• {name} — {state}{ok}")

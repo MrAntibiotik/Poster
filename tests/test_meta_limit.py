@@ -273,9 +273,22 @@ class StatusNowTest(FlowBase):
         app.db.update_item(a["id"], status="publishing", results={"youtube": {"status": "ok"}})
         app.db.update_item(b["id"], status="publishing")
         app.publisher.active.add(a["id"])
+        app.publisher.running = a["id"]
         app.db.set(f"pubnow:{a['id']}", "instagram")
+        app.publisher._report(a["id"], "Instagram обробляє відео")
         text = app.status_text()
-        self.assertIn(f"#{a['id']} a — Instagram — вантажиться / обробляється (вже: YT ✅)", text)
+        self.assertIn(f"#{a['id']} a — Instagram — ⏳ Instagram обробляє відео (перевірено", text)
+        self.assertIn("(вже: YT ✅)", text)
+        cap = app.bot.caption(app.db.get_item(a["id"]))
+        self.assertIn("Instagram — ⏳ Instagram обробляє відео", cap)
+        from app.core import config
+        import json as J
+        ph = J.loads(app.db.get(f"pubphase:{a['id']}"))
+        ph["beat"] -= 10 * 60                                   # 10 хв без відповіді
+        app.db.set(f"pubphase:{a['id']}", J.dumps(ph))
+        config.FAKE_NOW = None
+        self.assertIn("можливо, зависло", app.bot.caption(app.db.get_item(a["id"])))
+        app.publisher.running = None
         self.assertIn(f"#{b['id']} b — ⚠️ перервано", text)
         app.publisher.active.discard(a["id"])
 

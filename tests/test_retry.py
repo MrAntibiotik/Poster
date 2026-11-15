@@ -75,9 +75,12 @@ class RetryTest(FlowBase):
         db.set(f"pubnow:{self.item['id']}", "instagram")
         db.set(f"pubtry:{self.item['id']}:instagram", "2/3")
         self.app.publisher.active.add(self.item["id"])   # публікація справді йде
+        self.app.publisher.running = self.item["id"]
         cap = bot.caption(db.get_item(self.item["id"]))
         self.app.publisher.active.discard(self.item["id"])
-        self.assertIn("📸 Instagram — ⏳ публікується… (спроба 2/3)", cap)
+        self.app.publisher.running = None
+        self.assertIn("📸 Instagram — ⏳ ", cap)
+        self.assertIn("(спроба 2/3)", cap)
         self.assertNotIn("ProcessingFailed", cap)  # стара помилка не плутає
 
     def test_instagram_all_variants_failed_no_outer_retry(self):
