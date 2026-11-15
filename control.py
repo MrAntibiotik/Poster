@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -248,3 +249,45 @@ def ensure_shortcut_once(db) -> None:
     except Exception as e:  # noqa: BLE001
         import logging
         logging.getLogger("control").warning("Ярлик панелі: %s", e)
+
+
+def kill_other_panels(port: int | None = None) -> int:
+    """Закриває інші копії панелі (panel.py), як panel.bat. port — лише ту, що на цьому порту
+    (основна панель — без --port або з --port 8770). Повертає, скільки процесів зупинено."""
+    me = os.getpid()
+    pids = []
+    if WIN:
+        ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
+              "Where-Object { $_.CommandLine -like '*panel.py*' } | ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }")
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=30,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            rows = [ln.split("|", 1) for ln in r.stdout.splitlines() if "|" in ln]
+        except (OSError, subprocess.SubprocessError):
+            rows = []
+    else:
+        rows = []
+        for d in Path("/proc").glob("[0-9]*"):
+            try:
+                cmd = (d / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            except OSError:
+                continue
+            if "panel.py" in cmd:
+                rows.append((d.name, cmd))
+    for pid_s, cmd in rows:
+        try:
+            pid = int(pid_s.strip())
+        except ValueError:
+            continue
+        if pid == me:
+            continue
+        if port is not None:
+            m = re.search(r"--port\s+(\d+)", cmd)
+            their = int(m.group(1)) if m else 8770
+            if their != int(port):
+                continue
+        pids.append(pid)
+    for pid in pids:
+        kill(pid)
+    return len(pids)

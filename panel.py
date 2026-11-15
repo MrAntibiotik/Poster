@@ -1222,6 +1222,12 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
                 control.kill(old)
                 time.sleep(1.5)
                 continue
+            if attempt < 2:  # не знайшли, хто тримає порт, — закриваємо всі старі копії панелі на цьому порту
+                n = control.kill_other_panels(panel.port)
+                log.info("Закрито старих копій панелі: %s", n)
+                if n:
+                    time.sleep(1.5)
+                    continue
             log.info("Панель уже відкрита — відкриваю браузер")
             if open_browser:
                 webbrowser.open(url)
