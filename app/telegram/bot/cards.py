@@ -121,6 +121,9 @@ class CardsMixin:
         if st == "approved":
             return f"👍 Підтверджено — публікація о {slot}{edited}"
         if st == "publishing":
+            if self.db.get("stopped") == "1" and not self.app.publisher.is_active(item["id"]):
+                return ("⛔ <b>Публікацію зупинено</b> — решта платформ після «✅ Відновити публікації»"
+                        + self._results(item, publishing=True))
             return "⏫ <b>Публікується…</b>" + self._results(item, publishing=True)
         if st in ("posted", "failed"):
             targets = [p for p in PLATFORMS if p in self.app.platforms and p not in item["disabled"]] or \
@@ -181,7 +184,7 @@ class CardsMixin:
                 continue
             if not r:
                 if publishing and p in targets:
-                    lines.append(f"{icon} {NAMES[p]} — ⏳")
+                    lines.append(f"{icon} {NAMES[p]} — " + ("⏸" if self.db.get("stopped") == "1" else "⏳"))
                 continue
             if r.get("status") == "ok":
                 lock = {"SELF_ONLY": " 🔒", "private": " 🔒", "unlisted": " 🔗"}.get(r.get("privacy"), "")

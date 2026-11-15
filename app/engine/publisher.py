@@ -9,7 +9,7 @@ from pathlib import Path
 from app.core import media
 from app.core.config import PLATFORMS, local_dt, now_ts
 from app.core.meta import apply_always_hashtags, highlight_description, load_meta, move_pair, read_json, write_json
-from app.platforms import RateLimited, TokenExpired
+from app.platforms import RateLimited, Stopped, TokenExpired
 
 log = logging.getLogger("publisher")
 
@@ -84,8 +84,15 @@ class Publisher:
                 app.bot.refresh(item_id)
                 return
             db.set(f"pubnow:{item_id}", key)  # яка платформа зараз — для підпису відео
-            results[key] = self._publish_one(key, item, meta)
+            res = self._publish_one(key, item, meta)
             db.set(f"pubnow:{item_id}", None)
+            if res is None:   # «⛔ Стоп» посеред публікації — ця й наступні платформи після «Відновити»
+                log.info("#%s: публікацію зупинено на %s — продовжиться після «Відновити»", item_id, key)
+                with self._lock:
+                    self.active.discard(item_id)
+                app.bot.refresh(item_id)
+                return
+            results[key] = res
             db.update_item(item_id, results=results)
             app.bot.refresh(item_id)  # у підписі відео видно, куди вже вийшло
 
@@ -138,7 +145,13 @@ class Publisher:
         attempts = max(1, int(app.cfg["retry"]["attempts"]))
         pause = int(app.cfg["retry"]["pause_seconds"])
         last = None
+        try:
+            plat.should_stop = lambda: app.db.get("stopped") == "1"
+        except AttributeError:
+            pass
         for i in range(1, attempts + 1):
+            if app.db.get("stopped") == "1":
+                return None
             try:
                 if app.cfg.get("dry_run"):
                     r = {"id": f"dry-{key}-{item['id']}", "url": f"https://example.com/{key}/{item['id']}",
@@ -155,6 +168,9 @@ class Publisher:
                 if hasattr(app.bot, "resolve"):
                     app.bot.resolve(f"reauth_{key}")
                 return {"status": "ok", "attempts": i, "published_at": now_ts(), **r}
+            except Stopped:
+                app.db.set(f"pubtry:{item['id']}:{key}", None)
+                return None
             except RateLimited as e:
                 # повтори одразу лише подовжують блокування — публікація піде сама після паузи
                 log.warning("#%s %s: %s", item["id"], key, e)

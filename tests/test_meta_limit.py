@@ -200,3 +200,34 @@ class GoneStatsTest(FlowBase):
         config.FAKE_NOW = now + 8 * 3600
         collect(self.app)
         self.assertEqual(P.calls, 1)
+
+
+class StopMidPublishTest(FlowBase):
+    def test_stop_interrupts_instagram(self):
+        from app.platforms import Stopped
+        self.cfg["dry_run"] = False
+        db = self.app.db
+
+        class SlowIG:
+            should_stop = staticmethod(lambda: False)
+
+            def publish(self, path, meta):
+                db.set("stopped", "1")            # користувач натиснув «⛔ Стоп» під час обробки
+                if self.should_stop():
+                    raise Stopped("стоп")
+                return {"id": "x", "url": "u"}
+        ig = SlowIG()
+        self.app.platforms = {"youtube": Ok(), "instagram": ig}
+        self.make_short("a")
+        self.app.scheduler.tick(self.ts(11, "12:00"))
+        it = self.app.db.items("status='notified'")[0]
+        self.press(f"pub:{it['id']}", it)
+        db.update_item(it["id"], status="publishing")
+        self.app.publisher.run(it["id"])
+        item = db.get_item(it["id"])
+        self.assertEqual(item["status"], "publishing")          # продовжиться після «Відновити»
+        self.assertNotIn("instagram", item["results"])          # не записано як помилку
+        self.assertEqual(item["results"]["youtube"]["status"], "ok")
+        cap = self.app.bot.caption(item)
+        self.assertIn("Публікацію зупинено", cap)
+        self.assertIn("Instagram — ⏸", cap)

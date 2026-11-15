@@ -11,7 +11,7 @@ from pathlib import Path
 
 import requests
 
-from .base import Platform, PublishError, RateLimited, TokenExpired
+from .base import Platform, PublishError, RateLimited, Stopped, TokenExpired
 
 log = logging.getLogger("meta")
 
@@ -228,8 +228,18 @@ class Instagram(_MetaBase):
         файл — оригінал (якщо відповідає вимогам Reels), потім копія під вимоги Instagram;
         токен — токен сторінки, потім токен користувача (у прикладах Meta саме він).
         Помилка 400 від rupload не означає провал: спершу перевіряємо стан контейнера."""
-        with Instagram._upload_lock:   # по одному відео за раз: паралельні великі завантаження Instagram відхиляє
+        # по одному відео за раз: паралельні великі завантаження Instagram відхиляє; поки чекаємо — слухаємо «Стоп»
+        while not Instagram._upload_lock.acquire(timeout=3):
+            self._check_stop()
+        try:
+            self._check_stop()
             return self._publish_locked(video_path, meta)
+        finally:
+            Instagram._upload_lock.release()
+
+    def _check_stop(self) -> None:
+        if self.should_stop():
+            raise Stopped("публікації зупинено")
 
     _upload_lock = threading.Lock()
 
@@ -255,6 +265,7 @@ class Instagram(_MetaBase):
         errors = []
         for tname, token in tokens:
             for fname, get_file in files:
+                self._check_stop()
                 try:
                     out = self._publish_file(get_file(), meta, token)
                 except PublishError as e:
@@ -333,9 +344,12 @@ class Instagram(_MetaBase):
                     waited = int((time.time() - start) / 60)
                     raise PublishError(f"{upload_error}{self._container_reason(g, cid)} (чекали {waited} хв)")
                 raise PublishError("Instagram: обробка відео триває понад 20 хв")
-            # перевіряємо рідше, що довше обробка: кожен запит з'їдає годинну квоту Meta
-            time.sleep(15 if time.time() - start < 120 else 30)
+            # перевіряємо рідше, що довше обробка: кожен запит з'їдає годинну квоту Meta; «Стоп» — щосекунди
+            for _ in range(15 if time.time() - start < 120 else 30):
+                self._check_stop()
+                time.sleep(1)
 
+        self._check_stop()   # відео готове, але натиснули «Стоп» — не публікуємо
         mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
         out = {"id": mid, "url": ""}
         try:  # після публікації — помилки не критичні (щоб не опублікувати двічі)

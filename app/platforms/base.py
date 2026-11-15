@@ -12,6 +12,10 @@ class PublishError(Exception):
     """Будь-яка інша помилка публікації (буде повторена згідно з retry)."""
 
 
+class Stopped(Exception):
+    """Натиснуто «⛔ Стоп публікацій» посеред публікації — платформу не публікуємо, продовжимо після «Відновити»."""
+
+
 class RateLimited(PublishError):
     """Платформа тимчасово обмежила кількість запитів. retry_at — коли можна знову (unix-час)."""
 
@@ -23,6 +27,8 @@ class RateLimited(PublishError):
 class Platform:
     key = ""
     name = ""
+
+    should_stop = staticmethod(lambda: False)   # Publisher підставляє перевірку «⛔ Стоп публікацій»
 
     def __init__(self, cfg: dict):
         self.cfg = cfg
