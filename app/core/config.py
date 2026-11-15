@@ -52,6 +52,10 @@ DEFAULTS: dict = {
         "slots": ["18:00"],        # 1–3 рази на день; окремо від слотів шортсів
         "privacy": "",             # "" — як для шортсів (platforms.youtube.privacy); або public / unlisted / private
         "category_id": "20",
+        # Опис хайлайта на YouTube — опис вашого каналу (порожньо — опис від shorts-autocut + підпис footer).
+        # Зверху — рядок про бій (шкода/засвіт), знизу — усі хештеги (обов'язкові + гри)
+        "description": "",
+        "battle_line": True,
     },
     "ready_status": "ready_to_post",
     # Хештеги, що ЗАВЖДИ додаються в кінець назви (YouTube) і підписів (TikTok / Instagram / Facebook)

@@ -268,6 +268,31 @@ def apply_always_hashtags(meta: PostMeta, cfg: dict) -> PostMeta:
     return meta
 
 
+def highlight_description(meta: PostMeta, cfg: dict, raw_description: str) -> str:
+    """Опис хайлайта: [рядок про бій] + опис каналу (highlights.description) + усі хештеги.
+    Порожній highlights.description — як було (опис від shorts-autocut), але хештеги все одно всі."""
+    hl = cfg.get("highlights") or {}
+    channel = str(hl.get("description") or "").strip()
+    tags = []
+    for t in list(_hashtags((cfg.get("always_hashtags") or {}).get("tags") or [])) + list(meta.hashtags) \
+            + HASHTAG_RE.findall(raw_description or ""):
+        if t.lower() != "#shorts" and t.lower() not in {x.lower() for x in tags}:
+            tags.append(t)
+    tags = tags[:15]   # більше 15 хештегів YouTube ігнорує всі
+    if channel:
+        parts = []
+        if hl.get("battle_line", True):
+            first = re.sub(r"\s*#[\w\d_]+", "", (raw_description or "").strip().split("\n\n")[0]).strip()
+            if first:
+                parts.append(first)
+        parts.append(re.sub(r"\s*#[\w\d_]+\s*$", "", channel).strip())
+    else:
+        parts = [re.sub(r"(?:\s*#[\w\d_]+)+\s*$", "", meta.yt_description or "").strip()]
+    present = {x.lower() for x in HASHTAG_RE.findall("\n".join(parts))}
+    line = " ".join(t for t in tags if t.lower() not in present)
+    return "\n\n".join(p for p in parts + [line] if p).strip()[:5000]
+
+
 def parse_hashtags(text: str) -> list[str]:
     """«wot, #танки shorts» -> ['#wot', '#танки', '#shorts']; «-» -> []."""
     text = (text or "").strip()

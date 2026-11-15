@@ -188,3 +188,35 @@ class YouTubeHighlightBody(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HighlightDescriptionTest(unittest.TestCase):
+    RAW = ("Хайлайт бою: 5717 шкоди і 4411 засвіту. Найяскравіші моменти — на початку відео.\n\n"
+           "Підпишись — підтримай ветерана 🎖️❤️\n\n#worldoftanks")
+
+    def cfg(self, description="", battle=True):
+        return {"highlights": {"description": description, "battle_line": battle},
+                "always_hashtags": {"tags": ["#wot", "#wotua", "#mrantibiotik", "#танки"]}}
+
+    def test_channel_description_with_battle_line_and_all_tags(self):
+        from app.core.meta import PostMeta, highlight_description
+        meta = PostMeta(yt_title="Бій #wot #wotua #mrantibiotik #танки", yt_description=self.RAW,
+                        hashtags=["#worldoftanks", "#shorts"])
+        d = highlight_description(meta, self.cfg("🔴 Стрім українською щодня.\n\n🔹 Twitch — https://x"), self.RAW)
+        self.assertTrue(d.startswith("Хайлайт бою: 5717 шкоди і 4411 засвіту."))
+        self.assertIn("🔴 Стрім українською щодня.\n\n🔹 Twitch — https://x", d)
+        self.assertNotIn("Підпишись — підтримай ветерана", d)          # опис від різака замінено описом каналу
+        self.assertTrue(d.endswith("#wot #wotua #mrantibiotik #танки #worldoftanks"))
+        self.assertNotIn("#shorts", d.lower())
+
+    def test_without_battle_line(self):
+        from app.core.meta import PostMeta, highlight_description
+        d = highlight_description(PostMeta(yt_title="Бій", yt_description=self.RAW), self.cfg("Мій канал", battle=False), self.RAW)
+        self.assertTrue(d.startswith("Мій канал"))
+
+    def test_empty_setting_keeps_cutter_text_but_adds_tags(self):
+        from app.core.meta import PostMeta, highlight_description
+        d = highlight_description(PostMeta(yt_title="Бій", yt_description=self.RAW), self.cfg(), self.RAW)
+        self.assertIn("Підпишись — підтримай ветерана", d)
+        self.assertTrue(d.endswith("#wot #wotua #mrantibiotik #танки #worldoftanks"))
+        self.assertEqual(d.count("#worldoftanks"), 1)

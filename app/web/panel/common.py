@@ -59,7 +59,7 @@ FIELDS = {
     "power.wake_before_minutes": "int", "power.quiet_minutes": "int", "power.hold_during_stream": "bool",
     "power.no_sleep_apps": "applist",
     "highlights.enabled": "bool", "highlights.folder": "str", "highlights.slots": "hlslots",
-    "highlights.privacy": "privacy_opt",
+    "highlights.privacy": "privacy_opt", "highlights.description": "str", "highlights.battle_line": "bool",
 }
 
 

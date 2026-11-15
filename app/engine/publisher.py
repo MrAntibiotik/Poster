@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.core import media
 from app.core.config import PLATFORMS, local_dt, now_ts
-from app.core.meta import apply_always_hashtags, load_meta, move_pair, read_json, write_json
+from app.core.meta import apply_always_hashtags, highlight_description, load_meta, move_pair, read_json, write_json
 from app.platforms import RateLimited, TokenExpired
 
 log = logging.getLogger("publisher")
@@ -67,6 +67,8 @@ class Publisher:
         meta = apply_always_hashtags(load_meta(item["json"], item["title_override"]), app.cfg)
         if item.get("kind") == "highlight":
             meta.kind = "highlight"
+            raw = load_meta(item["json"], item["title_override"]).yt_description
+            meta.yt_description = highlight_description(meta, app.cfg, raw)   # опис каналу + усі хештеги
             thumb = db.get(f"thumb:{item_id}")
             meta.thumbnail = thumb if thumb and Path(thumb).exists() else ""
         results = dict(item["results"])
