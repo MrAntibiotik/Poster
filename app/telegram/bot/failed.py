@@ -44,7 +44,7 @@ class FailedMixin:
 
     def retry_button(self, chat: int, item_id: int, action: str, cq: dict, answer) -> None:
         item = self.db.get_item(item_id)
-        if not item or item["status"] not in ("failed", "posted"):
+        if not item or item["status"] not in ("failed", "posted", "publishing"):
             return answer("Цей шортс уже неактуальний", True)
         if self.app.publisher.is_active(item_id):
             return answer("Уже публікується…", True)
@@ -56,6 +56,8 @@ class FailedMixin:
             return self.refresh(item_id)
         if action == "rf":
             self.db.set(f"ignored:{item_id}", None)
+            if self.db.get("stopped") == "1":
+                return answer("⛔ Публікації зупинено — спершу «✅ Відновити публікації»", True)
             answer("🔁 Повторюю публікацію…")
             self._close_msg(chat, msg_id, "🔁 Повторюю публікацію…", item_id, running=True)
             return self.app.publisher.start(item_id)

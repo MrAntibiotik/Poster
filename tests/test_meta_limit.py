@@ -245,3 +245,18 @@ class StaleProgressTest(FlowBase):
         cap = self.app.bot.caption(db.get_item(it["id"]))
         self.assertIn("Публікацію зупинено", cap)
         self.assertNotIn("публікується…", cap)
+
+
+class StuckPublishingButtonsTest(FlowBase):
+    def test_retry_buttons_on_interrupted(self):
+        self.make_short("a")
+        self.app.scheduler.scan()
+        it = self.app.db.items("status='queued'")[0]
+        self.app.db.update_item(it["id"], status="publishing",
+                                results={"instagram": {"status": "error", "error": "Meta: ліміт"}})
+        item = self.app.db.get_item(it["id"])
+        self.assertIn(f"rf:{it['id']}", json.dumps(self.app.bot.keyboard(item)))
+        self.assertIn("Публікацію перервано", self.app.bot.caption(item))
+        self.app.publisher.active.add(it["id"])
+        self.assertIsNone(self.app.bot.keyboard(item))          # справді публікується — без кнопок
+        self.app.publisher.active.discard(it["id"])
