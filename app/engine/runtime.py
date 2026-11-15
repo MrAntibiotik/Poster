@@ -108,13 +108,19 @@ class App:
             until, usage = 0, 0
         stopped = self.db.get("stopped") == "1"
         busy = False
-        for it in self.db.items("status='publishing'", order="id"):
+        items = self.db.items("status='publishing'", order="id")
+        items.sort(key=lambda i: (self.publisher.position(i["id"]) is None, self.publisher.position(i["id"]) or 0))
+        for it in items:
             busy = True
             name = f"#{it['id']} {esc(Path(it['mp4']).stem)}"
             done = [SHORT[p] for p, r in it["results"].items() if r.get("status") == "ok"]
             ok = f" (вже: {', '.join(done)} ✅)" if done else ""
             if not self.publisher.is_active(it["id"]):
                 out.append(f"• {name} — {'⛔ зупинено' if stopped else '⚠️ перервано (🔁 Повторити під відео)'}{ok}")
+                continue
+            pos = self.publisher.position(it["id"])
+            if pos:
+                out.append(f"• {name} — ⏳ у черзі публікацій: {pos}-й{ok}")
                 continue
             cur = self.db.get(f"pubnow:{it['id']}")
             tr = self.db.get(f"pubtry:{it['id']}:{cur}") if cur else None

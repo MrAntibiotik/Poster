@@ -278,3 +278,45 @@ class StatusNowTest(FlowBase):
         self.assertIn(f"#{a['id']} a — Instagram — вантажиться / обробляється (вже: YT ✅)", text)
         self.assertIn(f"#{b['id']} b — ⚠️ перервано", text)
         app.publisher.active.discard(a["id"])
+
+
+class PublishQueueTest(FlowBase):
+    def test_many_at_once_go_one_by_one(self):
+        import threading
+        self.cfg["dry_run"] = False
+        state = {"now": 0, "max": 0, "order": []}
+        lock = threading.Lock()
+        gate = threading.Event()
+
+        class Slow:
+            def publish(self, path, meta):
+                with lock:
+                    state["now"] += 1
+                    state["max"] = max(state["max"], state["now"])
+                    state["order"].append(Path(path).stem)
+                gate.wait(5)
+                with lock:
+                    state["now"] -= 1
+                return {"id": "x", "url": "u"}
+        app = self.app
+        app.platforms = {"youtube": Slow()}
+        app.publisher.sync = False
+        for n in ("a", "b", "c"):
+            self.make_short(n)
+        app.scheduler.scan()
+        ids = [i["id"] for i in app.db.items("status='queued'", order="id")][:3]
+        for i in ids:
+            app.publisher.start(i)
+        time.sleep(0.3)
+        self.assertEqual([app.publisher.position(i) for i in ids], [0, 1, 2])
+        text = app.status_text()
+        self.assertIn("у черзі публікацій: 1-й", text)
+        self.assertIn("У черзі на публікацію</b> (2-й)", app.bot.caption(app.db.get_item(ids[2])))
+        gate.set()
+        for _ in range(100):
+            if not app.publisher.active:
+                break
+            time.sleep(0.05)
+        self.assertEqual(state["max"], 1)                       # ніколи двоє одночасно
+        self.assertEqual(state["order"], ["a", "b", "c"])        # у порядку натискання
+        self.assertTrue(all(app.db.get_item(i)["status"] == "posted" for i in ids))

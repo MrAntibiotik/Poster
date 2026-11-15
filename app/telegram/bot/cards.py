@@ -121,6 +121,10 @@ class CardsMixin:
         if st == "approved":
             return f"👍 Підтверджено — публікація о {slot}{edited}"
         if st == "publishing":
+            pos = self.app.publisher.position(item["id"]) if hasattr(self.app.publisher, "position") else None
+            if pos:
+                return (f"⏳ <b>У черзі на публікацію</b> ({pos}-й) — шортси публікуються по одному"
+                        + self._results(item, publishing=True))
             if not self.app.publisher.is_active(item["id"]):
                 if self.db.get("stopped") == "1":
                     return ("⛔ <b>Публікацію зупинено</b> — решта платформ після «✅ Відновити публікації»"

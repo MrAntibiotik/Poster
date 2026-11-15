@@ -17,7 +17,10 @@ log = logging.getLogger("publisher")
 class Publisher:
     def __init__(self, app):
         self.app = app
-        self.active: set[int] = set()
+        self.active: set[int] = set()      # у роботі: публікується зараз або чекає в черзі
+        self.waiting: list[int] = []        # черга публікацій — строго по одному шортсу
+        self.running: int | None = None
+        self._worker: threading.Thread | None = None
         self._lock = threading.Lock()
         self.sync = False  # для тестів: публікувати в поточному потоці
         self.sleep = time.sleep
@@ -25,6 +28,13 @@ class Publisher:
     def is_active(self, item_id: int) -> bool:
         with self._lock:
             return item_id in self.active
+
+    def position(self, item_id: int) -> int | None:
+        """0 — публікується зараз; 1, 2… — місце в черзі публікацій; None — не в роботі."""
+        with self._lock:
+            if self.running == item_id:
+                return 0
+            return self.waiting.index(item_id) + 1 if item_id in self.waiting else None
 
     def start(self, item_id: int) -> None:
         if self.app.db.get("stopped") == "1":  # «⛔ Стоп публікацій» — не починаємо нічого
@@ -39,12 +49,49 @@ class Publisher:
             if item_id in self.active:
                 return
             self.active.add(item_id)
+            self.waiting.append(item_id)
+            ahead = len(self.waiting) - 1 + (1 if self.running is not None else 0)
         self.app.db.update_item(item_id, status="publishing")
+        if ahead:
+            log.info("#%s: у черзі публікацій (%s-й) — шортси публікуються по одному", item_id, ahead + 1)
+            if hasattr(self.app.bot, "refresh"):
+                self.app.bot.refresh(item_id)
         if self.sync:
+            self._drain()
+            return
+        with self._lock:
+            if self._worker and self._worker.is_alive():
+                return
+            self._worker = threading.Thread(target=self._drain, daemon=True, name="publisher")
+            self._worker.start()
+
+    def _drain(self) -> None:
+        """Єдиний потік публікацій: бере шортси з черги по одному."""
+        while True:
+            with self._lock:
+                if not self.waiting:
+                    self._worker = None if not self.sync else self._worker
+                    return
+                if self.app.db.get("stopped") == "1":   # «⛔ Стоп»: решта черги чекає «✅ Відновити»
+                    for i in self.waiting:
+                        self.active.discard(i)
+                    left, self.waiting = list(self.waiting), []
+                else:
+                    left = None
+                    item_id = self.waiting.pop(0)
+                    self.running = item_id
+            if left is not None:
+                for i in left:
+                    if hasattr(self.app.bot, "refresh"):
+                        self.app.bot.refresh(i)
+                return
+            for i in list(self.waiting):     # у решти змінилось місце в черзі
+                if hasattr(self.app.bot, "refresh"):
+                    try:
+                        self.app.bot.refresh(i)
+                    except Exception:  # noqa: BLE001
+                        pass
             self._run_safe(item_id)
-        else:
-            threading.Thread(target=self._run_safe, args=(item_id,), daemon=True,
-                             name=f"publish-{item_id}").start()
 
     def _run_safe(self, item_id: int) -> None:
         try:
@@ -56,6 +103,8 @@ class Publisher:
         finally:
             with self._lock:
                 self.active.discard(item_id)
+                if self.running == item_id:
+                    self.running = None
 
     # ------------------------------------------------------------------
     def targets(self, item: dict) -> list[str]:
