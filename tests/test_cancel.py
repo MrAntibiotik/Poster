@@ -122,8 +122,30 @@ class QueueCardTest(FlowBase):
         self.assertEqual(db.get_item(item["id"])["status"], "notified")
 
 
-    def test_queued_without_card_gets_one(self):
+    def test_confirm_from_queue_card(self):
+        self.cfg["telegram"]["queue_cards"] = True
+        self.cfg["ask_texts_before_publish"] = True
         tg, db, sch = self.app.bot.tg, self.app.db, self.app.scheduler
+        self.make_short("c")
+        import config
+        config.FAKE_NOW = self.ts(11, "08:00")
+        sch.scan()
+        item = db.items("status='queued'")[0]
+        kb = str(self.app.bot.keyboard(item))
+        self.assertIn(f"qa:{item['id']}", kb)
+        self.assertIn("10:00", kb)
+        say = lambda t: self.app.bot.handle({"update_id": 1, "message": {  # noqa: E731
+            "message_id": 60, "text": t, "chat": {"id": 42, "type": "private"}}})
+        self.app.bot.handle({"update_id": 1, "callback_query": {"id": "c", "data": f"qa:{item['id']}",
+                             "message": {"message_id": db.tg_msg(item["id"], 42)["msg_id"], "chat": {"id": 42}, "text": ""}}})
+        self.assertIn("Крок 1/2", tg.sent[-1][1])
+        say("Моя назва")
+        say("wot")
+        it = db.get_item(item["id"])
+        self.assertEqual((it["status"], it["slot_at"]), ("approved", self.ts(11, "10:00")))
+
+    def test_queued_without_card_gets_one(self):
+        db, sch = self.app.db, self.app.scheduler
         self.make_short("b")
         import config
         config.FAKE_NOW = self.ts(11, "08:00")

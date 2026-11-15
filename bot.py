@@ -691,8 +691,8 @@ class Bot:
                 return esc(item["note"])
             if item["skips"]:
                 return f"⏭ Пропущено ({item['skips']}/{self.cfg['max_skips']}) — шортс переміщено в кінець черги"
-            return (f"📥 <b>Новий у черзі</b> — за {self.cfg['notify_before_minutes']} хв до часу прийде "
-                    "на підтвердження. Раніше — «🕐 Обрати час / ⚡ зараз».")
+            return ("📥 <b>Новий у черзі</b> — можна підтвердити вже зараз («✅ Підтвердити»), "
+                    f"інакше прийде на підтвердження за {self.cfg['notify_before_minutes']} хв до часу.")
         if st == "skipped":
             return f"⏭ Пропущено {item['skips']} рази — файли перенесено в skipped/"
         if st == "cancelled":
@@ -829,10 +829,15 @@ class Bot:
                 if Path(item["mp4"]).exists() else None
         if item["status"] == "queued":
             i = item["id"]
-            return {"inline_keyboard": [
-                [{"text": "🕐 Обрати час / ⚡ зараз", "callback_data": f"qt:{i}"}],
-                [{"text": "⬆️ Першим у черзі", "callback_data": f"qf:{i}"},
-                 {"text": "🚫 Скасувати", "callback_data": f"qd:{i}"}]]}
+            plan = {it["id"]: ts for it, ts in self.app.scheduler.projection()}
+            rows = []
+            if plan.get(i):
+                rows.append([{"text": f"✅ Підтвердити на {fmt_slot(self.cfg, plan[i])} (назва, хештеги)",
+                              "callback_data": f"qa:{i}"}])
+            rows += [[{"text": "🕐 Інший час / ⚡ зараз", "callback_data": f"qt:{i}"}],
+                     [{"text": "⬆️ Першим у черзі", "callback_data": f"qf:{i}"},
+                      {"text": "🚫 Скасувати", "callback_data": f"qd:{i}"}]]
+            return {"inline_keyboard": rows}
         if item["status"] not in ("notified", "approved"):
             return None
         i = item["id"]
@@ -1267,7 +1272,7 @@ class Bot:
             return self._bg(self.ignored_list, chat)
         if action in ("rf", "rt", "rq", "ri", "ru"):
             return self.retry_button(chat, target, action, cq, answer)
-        if action in ("qp", "qi", "qt", "qf", "qd"):
+        if action in ("qp", "qi", "qt", "qf", "qd", "qa"):
             return self.queue_button(chat, target, action, cq, answer)
         if action in ("time", "tk", "ts", "tc", "tn", "tx"):
             return self.time_button(chat, target, action, rest, answer)
@@ -1773,6 +1778,13 @@ class Bot:
             self.dialog_set(chat, {"item": target, "step": "time", "mode": "queue"})
             answer()
             return self._ask_time(chat, target, dialog=False)
+        if action == "qa":  # підтвердити зараз на запланований час: назва, хештеги — і готово
+            plan = {it["id"]: ts for it, ts in self.app.scheduler.projection()}
+            ts = plan.get(target)
+            if not ts:
+                return answer("Для цього шортса ще немає часу (розклад на паузі?) — оберіть час вручну", True)
+            answer("Назва й хештеги — і шортс вийде о " + fmt_slot(self.cfg, ts))
+            return self._pick_from_queue(chat, item, ts)
         if action == "qf":
             self.db.update_item(target, qpos=self.db.first_qpos())
             plan = {it["id"]: ts for it, ts in self.app.scheduler.projection()}
