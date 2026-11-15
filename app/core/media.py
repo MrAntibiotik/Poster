@@ -20,8 +20,8 @@ class MediaError(Exception):
 
 def run_hidden(args: list[str], timeout: int = 900, cwd: str | None = None) -> subprocess.CompletedProcess:
     kw = {"cwd": cwd or None}
-    if sys.platform == "win32":  # не показувати консольні вікна під pythonw
-        kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if sys.platform == "win32":  # не показувати консольні вікна під pythonw; низький пріоритет — гра/стрім не гальмують
+        kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
     try:
         return subprocess.run(args, capture_output=True, timeout=timeout, **kw)
     except FileNotFoundError as e:
