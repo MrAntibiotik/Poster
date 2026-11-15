@@ -209,4 +209,8 @@ def keyboard(current: int) -> dict:
     row1 = [(1, "Доба"), (7, "Тиждень"), (30, "Місяць")]
     row2 = [(90, "3 міс"), (180, "6 міс"), (365, "Рік")]
     mk = lambda d, t: {"text": ("• " + t + " •") if d == current else t, "callback_data": f"an:{d}"}  # noqa: E731
-    return {"inline_keyboard": [[mk(d, t) for d, t in row1], [mk(d, t) for d, t in row2]]}
+    top = {"text": "• 🏆 Топ тижня •" if current == TOP else "🏆 Топ тижня", "callback_data": f"an:{TOP}"}
+    return {"inline_keyboard": [[mk(d, t) for d, t in row1], [mk(d, t) for d, t in row2], [top]]}
+
+
+TOP = -7   # кнопка «🏆 Топ тижня» у клавіатурі аналітики

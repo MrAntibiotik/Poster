@@ -125,7 +125,8 @@ class AnalyticsTest(FlowBase):
         self.app.bot.handle({"update_id": 1, "message": {"text": "/menu", "chat": {"id": 42, "type": "private"}}})
         kb = tg.sent[-1][2]["keyboard"]
         labels = [b["text"] for row in kb for b in row]
-        self.assertTrue({"📈 Аналітика", "🏆 Топ тижня", "📋 Черга", "⏸ Пауза"} <= set(labels))
+        self.assertTrue({"📈 Аналітика", "📋 Черга", "⏸ Пауза"} <= set(labels))
+        self.assertNotIn("🏆 Топ тижня", labels)          # топ тижня — кнопкою в аналітиці
 
         # глядач теж бачить аналітику
         self.app.db.set_user(777, "viewer", "Друг")
@@ -133,6 +134,14 @@ class AnalyticsTest(FlowBase):
         out = [s[1] for s in tg.sent if s[-1] == 777] + [e[1] for e in tg.edits]  # «⏳…» стає результатом
         self.assertTrue(any("📊 <b>Аналітика: доба</b>" in t for t in out))
         self.assertTrue(any("YouTube" in t for t in out))
+        kb = next(s[2] for s in tg.sent[::-1] if s[-1] == 777 and s[2] and "inline_keyboard" in s[2]) \
+            if any(s[-1] == 777 and s[2] and "inline_keyboard" in s[2] for s in tg.sent) else tg.edits[-1][2]
+        self.assertIn("an:-7", str(kb))                 # «🏆 Топ тижня» під аналітикою
+        self.app.publisher.sync = True
+        self.app.bot._bg = lambda fn, *a: fn(*a)
+        self.app.bot.handle({"update_id": 3, "callback_query": {"id": "c", "data": "an:-7", "message": {
+            "message_id": 555, "chat": {"id": 42}}}})
+        self.assertTrue(any("Топ" in e[1] or "Лідери" in e[1] for e in tg.edits if e[0] == 555))
 
     def test_dry_run_and_errors(self):
         self.cfg["dry_run"] = True

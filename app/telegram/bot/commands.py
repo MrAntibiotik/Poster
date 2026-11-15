@@ -83,6 +83,7 @@ class CommandsMixin:
                         kb = analytics.keyboard(1)
                     else:
                         text = weekly_top(app, stats)
+                        kb = analytics.keyboard(analytics.TOP)
                 except Exception as e:  # noqa: BLE001
                     log.exception("Аналітика")
                     text = f"❌ Не вдалося зібрати статистику: {esc(str(e))}"

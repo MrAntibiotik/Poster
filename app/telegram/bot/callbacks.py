@@ -101,6 +101,21 @@ class CallbacksMixin:
             return
         if action == "an":
             from app.insights import analytics
+            if target == analytics.TOP:   # «🏆 Топ тижня» — тепер у аналітиці
+                answer("🏆 Збираю топ тижня…")
+                mid = cq["message"]["message_id"]
+
+                def top():
+                    from app.insights.reports import collect, weekly_top
+                    try:
+                        text = weekly_top(self.app, collect(self.app))
+                    except Exception as e:  # noqa: BLE001
+                        text = f"❌ Не вдалося зібрати статистику: {esc(str(e))}"
+                    try:
+                        self.tg.edit_text(chat, mid, text, analytics.keyboard(analytics.TOP))
+                    except TelegramError as e:
+                        log.debug("top edit: %s", e)
+                return self._bg(top)
             answer(analytics.PERIODS.get(target, ""))
             try:
                 self.tg.edit_text(chat, cq["message"]["message_id"],
