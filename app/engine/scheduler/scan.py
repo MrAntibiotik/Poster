@@ -27,6 +27,11 @@ class ScanMixin:
         Відео з json — якщо статус ready_to_post; відео без json — json створюється автоматично (auto_meta).
         """
         now = now or now_ts()
+        try:   # Різак переніс відео (напр. у Робочий стіл\Контент) — спершу перейти на нові шляхи, а не «губити» файли
+            from app.channels import cutter_link
+            cutter_link.sync(self.app)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Зв'язок з Різаком: %s", e)
         ready = Path(self.cfg["paths"]["ready"])
         if not ready.exists():
             ready.mkdir(parents=True, exist_ok=True)

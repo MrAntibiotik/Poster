@@ -232,8 +232,12 @@ def load_config(path: str | os.PathLike | None = None) -> dict:
     if folder:
         fp = Path(os.path.expandvars(folder))
         hl["folder_path"] = (fp if fp.is_absolute() else root / fp).resolve()
-    else:
-        hl["folder_path"] = desktop_dir() / "Хайлайти"
+    else:   # папку хайлайтів повідомляє Різак (…\Контент\Мій канал\Хайлайти); інакше — Робочий стіл\Хайлайти
+        try:
+            from app.channels.cutter_link import highlights_folder
+            hl["folder_path"] = highlights_folder() or desktop_dir() / "Хайлайти"
+        except Exception:  # noqa: BLE001
+            hl["folder_path"] = desktop_dir() / "Хайлайти"
     return cfg
 
 
