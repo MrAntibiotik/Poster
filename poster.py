@@ -191,6 +191,7 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
     import control
     threading.Thread(target=control.ensure_shortcut_once, args=(app.db,), daemon=True).start()
     threading.Thread(target=channels.autostart_all, args=(cfg,), daemon=True).start()
+    channels.publish_paths(cfg)  # щоб «Різак» сам знав, куди класти шортси для кожного каналу
     if app.db.get("captions_v") != "2":  # один раз: підписи вже надісланих відео — у новому вигляді й з актуальним станом
         app.db.set("captions_v", "2")
         for it in app.db.items("posted_at > ? OR status IN ('notified','approved','failed')", (now_ts() - 7 * 86400,),

@@ -247,3 +247,34 @@ def restart_running(main_cfg: dict) -> None:
                 log.info("Канал %s перезапущено після оновлення", key)
         except Exception as e:  # noqa: BLE001
             log.warning("Канал %s після оновлення: %s", key, e)
+
+
+def discovery_file() -> Path:
+    """Де інші програми (напр. «Різак» — нарізка шортсів) знаходять папки готових шортсів poster без налаштувань."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".config")
+    return Path(base) / "MrAntibiotik" / "poster.json"
+
+
+def publish_paths(main_cfg: dict) -> Path | None:
+    """Записує шляхи: основний канал і всі додаткові (EN …). Файл перезаписується при кожному запуску бота,
+    тож шляхи завжди актуальні, навіть якщо папку змінили в панелі."""
+    if main_cfg.get("channel"):
+        return None
+    data = {"version": 1, "root": str(ROOT), "ready": str(main_cfg["paths"]["ready"]), "channels": {}}
+    for key in keys():
+        try:
+            st = status(key)
+            Path(st["ready"]).mkdir(parents=True, exist_ok=True)
+            data["channels"][key] = {"name": st["name"], "ready": st["ready"], "timezone": st["timezone"]}
+        except Exception as e:  # noqa: BLE001
+            log.warning("Канал %s: %s", key, e)
+    path = discovery_file()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+        return path
+    except OSError as e:
+        log.warning("Не вдалося записати %s: %s", path, e)
+        return None

@@ -162,3 +162,31 @@ class EnglishTextsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiscoveryTest(unittest.TestCase):
+    def test_publish_paths(self):
+        import json as _json
+        import os as _os
+        import tempfile as _tf
+
+        import channels as ch
+        tmp = Path(_tf.mkdtemp())
+        old_env, old_dir = _os.environ.get("LOCALAPPDATA"), ch.CHANNELS_DIR
+        _os.environ["LOCALAPPDATA"] = str(tmp)
+        ch.CHANNELS_DIR = tmp / "channels"
+        try:
+            (ch.CHANNELS_DIR / "en").mkdir(parents=True)
+            (ch.CHANNELS_DIR / "en" / "config.json").write_text(_json.dumps({"channel": {"name": "EN"}}), encoding="utf-8")
+            path = ch.publish_paths({"paths": {"ready": str(tmp / "ready")}})
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(path, tmp / "MrAntibiotik" / "poster.json")
+            self.assertEqual(data["channels"]["en"]["ready"], str(ch.CHANNELS_DIR / "en" / "ready"))
+            self.assertTrue((ch.CHANNELS_DIR / "en" / "ready").is_dir())
+            self.assertIsNone(ch.publish_paths({"channel": {"key": "en"}, "paths": {}}))  # лише основний бот
+        finally:
+            ch.CHANNELS_DIR = old_dir
+            if old_env is None:
+                _os.environ.pop("LOCALAPPDATA", None)
+            else:
+                _os.environ["LOCALAPPDATA"] = old_env
