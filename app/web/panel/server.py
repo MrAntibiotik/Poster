@@ -244,9 +244,12 @@ def _restart_on_new_code(httpd, every: int = 30) -> None:
             if not control.spawn_allowed(f"panel-{port}", 180):
                 continue   # нову панель на цьому порту вже запускає хтось інший
             log.info("Код оновлено (%s → %s) — перезапускаю панель", VERSION, new)
-            args = [control.python_exe(windowless=True), str(ROOT / "panel.py"), *sys.argv[1:]]
+            args = [control.python_exe(windowless=True), str(ROOT / "panel.py"),
+                    *[a for i, a in enumerate(sys.argv[1:]) if a != "--wait-lock"
+                      and not (i and sys.argv[i] == "--wait-lock")]]
             if "--no-browser" not in args:
                 args.append("--no-browser")
+            args += ["--wait-lock", "30"]   # нова панель дочекається, поки ця звільнить порт
             try:
                 flags = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW) if control.WIN else 0
                 subprocess.Popen(args, cwd=str(ROOT), creationflags=flags, close_fds=True,
@@ -254,10 +257,32 @@ def _restart_on_new_code(httpd, every: int = 30) -> None:
                                  start_new_session=not control.WIN)
             except OSError as e:
                 log.warning("Перезапуск панелі: %s", e)
-            return
+                return
+            try:
+                httpd.shutdown()
+            finally:
+                os._exit(0)   # ця (стара) копія завершується сама — нікого не треба вбивати
 
 
-def serve(config_path: str | None = None, open_browser: bool = True, port: int | None = None) -> int:
+def single_panel_lock(port: int, wait: int = 0):
+    """Тримає 127.0.0.1:(port+20000), поки панель працює. None — інша панель на цьому порту вже є."""
+    import socket
+    deadline = time.time() + wait
+    while True:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("127.0.0.1", int(port) + 20000))
+            s.listen(1)
+            return s
+        except OSError:
+            s.close()
+            if time.time() >= deadline:
+                return None
+            time.sleep(0.5)
+
+
+def serve(config_path: str | None = None, open_browser: bool = True, port: int | None = None,
+          wait_lock: int = 0) -> int:
     from app.core.config import setup_logging
 
     try:
@@ -266,10 +291,18 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
         show_fatal(f"Помилка налаштувань: {e}")
         return 2
     setup_logging(panel.cfg)
-    if port:
-        panel.port = port
+    if port and not (not panel.cfg.get("channel") and port != panel.port):
+        panel.port = port   # основний канал — завжди на своєму порту (не на порту EU-каналу)
     url = f"http://127.0.0.1:{panel.port}/"
     from app.core.config import VERSION
+    # Одна панель на порт: «замок» — локальний порт (порт панелі + 20000). Друга копія виходить одразу,
+    # ще до будь-яких пошуків процесів — так копії не можуть накопичуватися.
+    lock = single_panel_lock(panel.port, wait_lock)
+    if lock is None:
+        log.info("Панель на порту %s уже запущена — ця копія не потрібна", panel.port)
+        if open_browser:
+            webbrowser.open(url)
+        return 0
     pid_file = Path(panel.cfg["paths"]["data"]) / "panel.pid"
     httpd = None
     for attempt in range(3):
@@ -351,9 +384,10 @@ def main() -> int:
     ap.add_argument("--config")
     ap.add_argument("--port", type=int)
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--wait-lock", type=int, default=0, help=argparse.SUPPRESS)
     a = ap.parse_args()
     try:
-        code = serve(a.config, not a.no_browser, a.port)
+        code = serve(a.config, not a.no_browser, a.port, a.wait_lock)
     except SystemExit:
         raise
     except BaseException:  # noqa: BLE001

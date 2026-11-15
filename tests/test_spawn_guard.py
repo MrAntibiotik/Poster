@@ -28,5 +28,20 @@ class SpawnGuardTest(unittest.TestCase):
         kill.assert_not_called()
 
 
+class PanelLockTest(unittest.TestCase):
+    def test_second_copy_exits_immediately(self):
+        import time as T
+        from app.web.panel.server import single_panel_lock
+        first = single_panel_lock(18999)
+        self.assertIsNotNone(first)
+        t0 = T.time()
+        self.assertIsNone(single_panel_lock(18999))          # друга копія — одразу «не потрібна»
+        self.assertLess(T.time() - t0, 1)
+        first.close()
+        again = single_panel_lock(18999, wait=2)
+        self.assertIsNotNone(again)
+        again.close()
+
+
 if __name__ == "__main__":
     unittest.main()
