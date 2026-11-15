@@ -36,24 +36,28 @@ class EuTabTest(FlowBase):
         self.assertFalse(eu_tab.available({**self.cfg, "channel": {"key": "en"}}))   # у боті самого EN-каналу — ні
 
     def test_view_and_controls(self):
+        import json
         channels.create(self.cfg, "en")
-        q = "📦 Черга: 2\n1. #3 [WoT] replay_448136 → завтра 11:00\n🕐 Найближчі слоти\n• завтра 11:00: #3"
-        with mock.patch.object(eu_tab.subprocess, "run", return_value=mock.Mock(stdout=q, stderr="")) as run, \
-                mock.patch.object(channels.control, "is_running", return_value=False):
+        en = DB(channels.db_path("en"))
+        ready = Path(channels.status("en")["ready"]) / "WoT"
+        ready.mkdir(parents=True, exist_ok=True)
+        stem = "replay_wr_448222_Fossa_VM_68_Fisherman_s_Bay_2026_11_15_12_52_35_battle_01_dmg_11396_assist_466"
+        (ready / f"{stem}.mp4").write_bytes(b"0")
+        (ready / f"{stem}.json").write_text(json.dumps({"status": "ready_to_post"}), encoding="utf-8")
+        en.add_item(str(ready / f"{stem}.mp4"), str(ready / f"{stem}.json"), "WoT")
+        with mock.patch.object(channels.control, "is_running", return_value=False):
             self.app.bot.handle({"update_id": 1, "message": {"message_id": 5, "text": "🇬🇧 EU-канал",
                                                               "chat": {"id": 42, "type": "private"}}})
-            args = run.call_args[0][0]
-            self.assertIn(str(channels.config_path("en")), args)       # черга — самим EN-каналом
-            self.assertEqual(args[-1], "queue")
             text = self.app.bot.tg.edits[-1][1] if self.app.bot.tg.edits else self.app.bot.tg.sent[-1][1]
-            self.assertIn("EN-канал", text)
-            self.assertIn("replay_448136 → завтра 11:00", text)
-            self.assertIn("Бот каналу: 🔴 зупинено", text)
+            self.assertIn("EN-канал</b> · 🔴 бот зупинено", text)
+            self.assertIn("📦 <b>Черга: 1</b>", text)
+            self.assertIn("1. Fossa VM 68 Fisherman's Bay · 11 396 шкоди", text)  # зрозуміла назва, не ім'я файлу
+            self.assertRegex(text, r"→ \S+ \d\d:\d\d \(\d\d:\d\d NY\)")  # київський час, у дужках — Нью-Йорк
+            self.assertIn("🔑 YouTube не підключено", text)
             # пауза і стоп публікацій — у базі EN-каналу
             for op in ("pause", "stop"):
                 self.app.bot.handle({"update_id": 2, "callback_query": {
                     "id": "c", "data": f"eu:0:{op}", "message": {"message_id": 99, "chat": {"id": 42}, "text": ""}}})
-        en = DB(channels.db_path("en"))
         self.assertEqual((en.get("paused"), en.get("stopped")), ("1", "1"))
         self.assertIsNone(self.app.db.get("stopped"))                     # основний канал не чіпали
         self.assertIn("⛔ Публікації EU-каналу зупинено", self.app.bot.tg.answers)

@@ -11,6 +11,7 @@ import html
 import logging
 import re
 import subprocess
+from pathlib import Path
 
 import channels
 import control
@@ -45,23 +46,80 @@ def _queue_text(timeout: int = 90) -> str:
     return out or "Черга порожня."
 
 
-def view(queue: bool = True) -> tuple[str, dict]:
+def _pretty(item: dict) -> str:
+    """Зрозуміла назва шортса: назва з json, без хештегів; інакше — ім'я файлу без технічних частин."""
+    from reports import _clean_title
+    t = _clean_title({}, item)
+    stem = Path(item["mp4"]).stem
+    if t and t != stem:
+        return t
+    m = re.search(r"replay_wr_\d+_(.+?)_\d{4}_\d\d_\d\d_\d\d_\d\d_\d\d_battle_\d+_dmg_(\d+)", stem)
+    if m:
+        name = m.group(1).replace("_s_", "'s ").replace("_", " ")
+        return f"{name} · {int(m.group(2)):,} шкоди".replace(",", " ")
+    return stem.replace("_", " ")
+
+
+def _when(ts: int, ch_tz, home_tz) -> str:
+    """«сьогодні 18:00 (11:00 NY)» — київський час, а в дужках — час каналу."""
+    from datetime import datetime
+    here = datetime.fromtimestamp(ts, home_tz)
+    there = datetime.fromtimestamp(ts, ch_tz)
+    today = datetime.now(home_tz).date()
+    day = {0: "сьогодні", 1: "завтра"}.get((here.date() - today).days, here.strftime("%d.%m"))
+    short = {"America/New_York": "NY"}.get(str(ch_tz), str(ch_tz).split("/")[-1])
+    return f"{day} {here:%H:%M}" + ("" if here.utcoffset() == there.utcoffset() else f" ({there:%H:%M} {short})")
+
+
+def _plan(limit: int = 10):
+    """Черга EN-каналу з часом публікації — прямо з його бази (без запуску окремого процесу)."""
+    import types
+    from config import load_config
+    from scheduler import Scheduler
+    cfg = load_config(channels.config_path(KEY))
+    db = _db()
+    sch = Scheduler(types.SimpleNamespace(cfg=cfg, db=db, app=None, platforms={}))
+    work = db.items("status IN ('notified','approved','publishing')", order="slot_at")
+    return cfg, work, sch.projection()[:limit], len(db.queue())
+
+
+def view(queue: bool = True, home_tz=None) -> tuple[str, dict]:
+    from zoneinfo import ZoneInfo
     st = channels.status(KEY)
     db = _db()
+    home_tz = home_tz or ZoneInfo("Europe/Kyiv")
     paused, stopped = db.get("paused") == "1", db.get("stopped") == "1"
-    lines = [f"🇬🇧 <b>{html.escape(st.get('name') or 'EU-канал')}</b>",
-             f"Бот каналу: {'🟢 працює' if st.get('running') else '🔴 зупинено'}"
-             + ("" if st.get("telegram_ready") else " · ⚠️ немає свого Telegram-бота"),
-             f"Розклад: {'⏸ на паузі' if paused else '▶️ активний'} · "
-             f"Публікації: {'⛔ зупинено' if stopped else '✅ дозволено'}",
-             f"Слоти: {', '.join(st.get('slots') or [])} ({html.escape(str(st.get('timezone') or ''))})",
-             f"Платформи: {', '.join(st.get('platforms') or []) or '—'}"]
+    head = f"🇬🇧 <b>{html.escape(st.get('name') or 'EU-канал')}</b> · " + ("🟢 працює" if st.get("running") else "🔴 бот зупинено")
+    lines = [head]
+    if paused:
+        lines.append("⏸ Розклад на паузі")
+    if stopped:
+        lines.append("⛔ Публікації зупинено")
+    if not st.get("telegram_ready"):
+        lines.append("⚠️ Немає свого Telegram-бота — панель EN-каналу → «✈️ Telegram»")
+    if "youtube" in (st.get("platforms") or []) and not st.get("youtube_authorized"):
+        lines.append("🔑 YouTube не підключено — панель EN-каналу → YouTube → «Авторизувати»")
     if queue:
-        q = _queue_text()
-        if len(q) > LIMIT:
-            q = q[:LIMIT] + "\n…"
-        lines += ["", f"<pre>{html.escape(q)}</pre>"]
-    lines.append("\nШортси перед публікацією надсилає бот EU-каналу (кнопка «🚀 Опублікувати»).")
+        try:
+            cfg, work, plan, total = _plan()
+            ch_tz = cfg["tz"]
+            if work:
+                lines.append("\n🎬 <b>У роботі</b>")
+                st_ua = {"notified": "⏳ чекає підтвердження", "approved": "👍 підтверджено", "publishing": "⏫ публікується"}
+                for it in work:
+                    when = _when(it["slot_at"], ch_tz, home_tz) if it["slot_at"] else "—"
+                    lines.append(f"• {html.escape(_pretty(it), quote=False)}\n   {st_ua.get(it['status'], it['status'])} · {when}")
+            lines.append(f"\n📦 <b>Черга: {total}</b>" + ("" if total else " — порожня, Різак ще нічого не передав"))
+            for n, (it, ts) in enumerate(plan, 1):
+                lines.append(f"{n}. {html.escape(_pretty(it), quote=False)}\n   → {_when(ts, ch_tz, home_tz) if ts else 'час ще не визначено'}")
+            if total > len(plan):
+                lines.append(f"… і ще {total - len(plan)}")
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"\nНе вдалося прочитати чергу: {html.escape(str(e)[:200])}")
+    lines.append("\n<i>На підтвердження шортси приходять у бот EU-каналу.</i>")
+    text = "\n".join(lines)
+    if len(text) > LIMIT:
+        text = text[:LIMIT] + "\n…"
     b = lambda text, op: {"text": text, "callback_data": f"eu:0:{op}"}  # noqa: E731
     kb = {"inline_keyboard": [
         [b("🔄 Оновити", "refresh"), b("▶️ Продовжити розклад" if paused else "⏸ Пауза розкладу",
@@ -70,7 +128,7 @@ def view(queue: bool = True) -> tuple[str, dict]:
         [b("⏹ Зупинити бота EU" if st.get("running") else "▶️ Запустити бота EU",
            "botstop" if st.get("running") else "botstart")],
     ]}
-    return "\n".join(lines), kb
+    return text, kb
 
 
 def action(op: str) -> str:

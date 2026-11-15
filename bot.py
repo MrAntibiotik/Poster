@@ -1193,7 +1193,7 @@ class Bot:
             import eu_tab
             toast = eu_tab.action(rest[0]) if rest[0] != "refresh" else "🔄 Оновлюю…"
             answer(toast[:200])
-            text, kb = eu_tab.view()
+            text, kb = eu_tab.view(home_tz=self.cfg["tz"])
             try:
                 self.tg.edit_text(chat, cq["message"]["message_id"], text, kb)
             except TelegramError as e:
@@ -2269,7 +2269,7 @@ class Bot:
 
             def work():
                 try:
-                    text, kb = eu_tab.view()
+                    text, kb = eu_tab.view(home_tz=self.cfg["tz"])
                 except Exception as e:  # noqa: BLE001
                     log.exception("EU-канал")
                     text, kb = f"❌ Не вдалося прочитати EU-канал: {esc(str(e))}", None
