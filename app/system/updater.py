@@ -424,8 +424,15 @@ def install_requirements(root: Path = ROOT) -> None:
 
 
 def spawn(args: list[str], root: Path = ROOT) -> None:
-    """Запускає окремий процес, що переживе поточний (для перезапуску після оновлення)."""
-    from app.system.control import python_exe
+    """Запускає окремий процес, що переживе поточний (для перезапуску після оновлення).
+    Той самий запуск — не частіше ніж раз на 2 хв (запобіжник від лавини процесів)."""
+    from app.system.control import python_exe, spawn_allowed
+    import hashlib
+    key = Path(args[0]).stem + "-" + hashlib.md5(" ".join(map(str, args)).encode()).hexdigest()[:10]
+    # бот після оновлення запускаємо завжди (інакше лишимось без бота); панелі — з запобіжником
+    if Path(args[0]).name == "panel.py" and not spawn_allowed("spawn-" + key, 120):
+        log.warning("Повторний запуск %s за 2 хв пропущено (запобіжник)", " ".join(args[:2]))
+        return
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW

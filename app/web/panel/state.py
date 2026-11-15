@@ -137,9 +137,9 @@ class StateMixin:
 
         running = control.is_running(cfg["lock_port"])
         owner = None
-        if running:  # пошук процесу на Windows запускає PowerShell — не частіше ніж раз на 20 с
+        if running:  # пошук процесу на Windows запускає PowerShell — не частіше ніж раз на 5 хв
             cached = getattr(self, "_owner_cache", (0, None))
-            if time.time() - cached[0] > 20:
+            if time.time() - cached[0] > 300:
                 cached = (time.time(), control.port_owner(cfg["lock_port"]))
                 self._owner_cache = cached
             owner = cached[1]

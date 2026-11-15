@@ -240,6 +240,9 @@ def _restart_on_new_code(httpd, every: int = 30) -> None:
         time.sleep(every)
         new = disk_version()
         if new and new != VERSION:
+            port = next((a for a in sys.argv[sys.argv.index("--port") + 1:][:1]), "8770") if "--port" in sys.argv else "8770"
+            if not control.spawn_allowed(f"panel-{port}", 180):
+                continue   # нову панель на цьому порту вже запускає хтось інший
             log.info("Код оновлено (%s → %s) — перезапускаю панель", VERSION, new)
             args = [control.python_exe(windowless=True), str(ROOT / "panel.py"), *sys.argv[1:]]
             if "--no-browser" not in args:
@@ -311,7 +314,7 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
                 channels.refresh_panels(panel.cfg)
             except Exception as e:  # noqa: BLE001
                 log.debug("refresh_panels: %s", e)
-            time.sleep(60)
+            time.sleep(300)
     if not panel.cfg.get("channel"):
         threading.Thread(target=_channels_watch, daemon=True, name="channel-panels-watch").start()
     if sys.stdout:

@@ -72,9 +72,8 @@ def sleep_now() -> bool:
 
 def _ps(command: str, timeout: int = 60) -> subprocess.CompletedProcess:
     cmd = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; " + command
-    return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
-                          cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    from app.system.control import powershell
+    return powershell(cmd, timeout=timeout, bypass=True)
 
 
 def wake_script(times: list[int], pythonw: str) -> str:

@@ -6,12 +6,42 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 
 from app import ROOT  # noqa: E402  папка програми
 WIN = sys.platform == "win32"
 TASK_NAME = "ShortsPoster"
+
+
+_PS_LOCK = threading.Lock()          # одночасно — не більше одного PowerShell з цього процесу
+_OWNER_CACHE: dict[int, tuple[float, dict | None]] = {}
+
+
+def spawn_allowed(name: str, every: int) -> bool:
+    """Запобіжник від «лавини» процесів: той самий запуск (панель на порту, бот) — не частіше ніж раз на every с,
+    навіть якщо його просять кілька процесів одночасно. Позначка — файл у TEMP (спільна для всіх копій)."""
+    stamp = Path(tempfile.gettempdir()) / f"poster-spawn-{re.sub(r'[^A-Za-z0-9_-]', '_', name)}"
+    try:
+        if time.time() - stamp.stat().st_mtime < every:
+            return False
+    except OSError:
+        pass
+    try:
+        stamp.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        pass
+    return True
+
+
+def powershell(ps: str, timeout: int = 30, bypass: bool = False) -> subprocess.CompletedProcess:
+    """PowerShell без вікна, по одному за раз (кожен запуск — сотні МБ пам'яті й секунди процесора)."""
+    args = ["powershell", "-NoProfile"] + (["-ExecutionPolicy", "Bypass"] if bypass else []) + ["-Command", ps]
+    with _PS_LOCK:
+        return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
 def is_running(port: int) -> bool:
@@ -40,6 +70,12 @@ def start_bot(port: int, window: bool = False, wait: int = 30, config: str | Non
     """config — шлях до config.json (для додаткового каналу); без нього — основний config.json."""
     if is_running(port):
         return True
+    if not window and not spawn_allowed(f"bot-{port}", 90):   # хтось уже запускає цього бота
+        for _ in range(wait * 2):
+            time.sleep(0.5)
+            if is_running(port):
+                return True
+        return False
     args = [python_exe(windowless=not window), str(ROOT / "poster.py")]
     if config:
         args += ["--config", str(config)]
@@ -59,6 +95,8 @@ def start_bot(port: int, window: bool = False, wait: int = 30, config: str | Non
 
 def spawn_panel(config: str, port: int) -> None:
     """Панель керування для іншого config.json (додатковий канал) — у фоні, без відкриття браузера."""
+    if not spawn_allowed(f"panel-{int(port)}", 180):
+        return   # цю панель уже запускали щойно — не плодимо копії
     args = [python_exe(windowless=True), str(ROOT / "panel.py"), "--config", str(config), "--port", str(int(port)),
             "--no-browser"]
     if WIN:
@@ -74,16 +112,24 @@ def spawn_panel(config: str, port: int) -> None:
 
 
 def port_owner(port: int) -> dict | None:
-    """Який процес тримає порт-замок бота: {'pid', 'cmd'} (щоб знайти бота, навіть запущеного з іншої папки)."""
+    """Який процес тримає порт-замок бота: {'pid', 'cmd'} (щоб знайти бота, навіть запущеного з іншої папки).
+    Результат кешується на 30 с — на Windows це запуск PowerShell."""
+    hit = _OWNER_CACHE.get(int(port))
+    if hit and time.time() - hit[0] < 30:
+        return hit[1]
+    res = _port_owner(port)
+    _OWNER_CACHE[int(port)] = (time.time(), res)
+    return res
+
+
+def _port_owner(port: int) -> dict | None:
     try:
         if WIN:
             ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
                   f"$c = Get-NetTCPConnection -LocalPort {int(port)} -State Listen -ErrorAction SilentlyContinue | "
                   "Select-Object -First 1; if ($c) { $p = Get-CimInstance Win32_Process -Filter "
                   "\"ProcessId=$($c.OwningProcess)\"; \"$($c.OwningProcess)|$($p.CommandLine)\" }")
-            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=30,
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            r = powershell(ps)
             line = (r.stdout or "").strip().splitlines()
             if not line or "|" not in line[-1]:
                 return None
@@ -256,13 +302,13 @@ def kill_other_panels(port: int | None = None) -> int:
     (основна панель — без --port або з --port 8770). Повертає, скільки процесів зупинено."""
     me = os.getpid()
     pids = []
+    if not spawn_allowed(f"killpanels-{port}", 60):   # пошук через WMI важкий — не частіше ніж раз на хвилину
+        return 0
     if WIN:
         ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
               "Where-Object { $_.CommandLine -like '*panel.py*' } | ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }")
         try:
-            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=30,
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            r = powershell(ps)
             rows = [ln.split("|", 1) for ln in r.stdout.splitlines() if "|" in ln]
         except (OSError, subprocess.SubprocessError):
             rows = []

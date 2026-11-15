@@ -310,8 +310,8 @@ def refresh_panels(main_cfg: dict | None = None) -> list[str]:
             if not st["panel_running"]:
                 continue
             ver = panel_version(st["panel_port"])
-            if ver and ver == VERSION:
-                continue
+            if not ver or ver == VERSION:
+                continue   # не відповіла (запускається / зайнята) — не чіпаємо; перезапуск лише при іншій версії
             owner = control.port_owner(st["panel_port"]) or {}
             if owner.get("pid") and "panel.py" in str(owner.get("cmd") or ""):
                 control.kill(int(owner["pid"]))

@@ -77,12 +77,14 @@ class PowerMixin:
             return
         times = self.wake_times(now)
         key = ",".join(map(str, times[:20]))
-        if key != self._wake_key:  # розклад пробуджень змінився — оновлюємо завдання Windows
+        if key != self._wake_key and time.time() >= getattr(self, "_wake_retry", 0):
+            # розклад пробуджень змінився — оновлюємо завдання Windows (після помилки — не частіше ніж раз на 30 хв)
             try:
                 pw.set_wake_times(times)
                 self._wake_key = key
                 self.db.set("power_next_wake", times[0] if times else None)
             except Exception as e:  # noqa: BLE001
+                self._wake_retry = time.time() + 1800
                 log.error("Не вдалося записати пробудження: %s", e)
                 self.db.set("power_state", f"помилка пробудження: {str(e)[:200]}")
                 return
