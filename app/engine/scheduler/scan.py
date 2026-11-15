@@ -32,6 +32,14 @@ class ScanMixin:
             cutter_link.sync(self.app)
         except Exception as e:  # noqa: BLE001
             log.warning("Зв'язок з Різаком: %s", e)
+        try:
+            from app.channels import cutter_link
+            cutter_link.follow_publish_folder(self.app)    # папка шортсів зникла/порожня — туди, куди кладе Різак
+            if time.time() - float(self.db.get("recover_ts") or 0) > 600:
+                self.db.set("recover_ts", time.time())
+                cutter_link.recover_missing(self.app)       # «зниклі» через перенесення — назад у чергу
+        except Exception as e:  # noqa: BLE001
+            log.warning("Пошук перенесених відео: %s", e)
         ready = Path(self.cfg["paths"]["ready"])
         if not ready.exists():
             ready.mkdir(parents=True, exist_ok=True)
@@ -208,9 +216,24 @@ class ScanMixin:
             if hasattr(self.app.bot, "remove_item_msgs"):
                 self.app.bot.remove_item_msgs(item["id"])
             log.info("#%s: файлу більше немає (%s) — прибрано", item["id"], item["mp4"])
+        idx = None
         for item in self.db.items("status IN ('queued','notified')"):
             mp4 = Path(item["mp4"])
             gone = not mp4.exists()
+            if gone:   # файл перенесли (Різак / вручну)? шукаємо за назвою в папках Різака, перш ніж прибирати
+                try:
+                    from app.channels import cutter_link
+                    if idx is None:
+                        idx = cutter_link.build_index(self.app)
+                    new = cutter_link.locate(mp4, idx)
+                except Exception as e:  # noqa: BLE001
+                    log.debug("пошук перенесеного: %s", e)
+                    new = None
+                if new:
+                    self.db.update_item(item["id"], mp4=str(new), json=str(new.with_suffix(".json")))
+                    self.db.event(item["id"], "found_moved", {"from": str(mp4), "to": str(new)})
+                    log.info("#%s: файл перенесено — новий шлях %s", item["id"], new)
+                    continue
             home = self._home(item, ready)
             moved = not gone and item["status"] == "queued" and home not in mp4.resolve().parents
             try:

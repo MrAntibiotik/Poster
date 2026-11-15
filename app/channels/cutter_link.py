@@ -130,3 +130,89 @@ def _sync_items(app, moved: list) -> int:
         db.event(it["id"], "moved_by_cutter", {"from": it["mp4"], "to": mp4})
         n += 1
     return n
+
+
+# ---------------------------------------------------------------- пошук «зниклих» файлів за назвою
+def search_roots(app) -> list[Path]:
+    """Де шукати відео, якщо його немає на старому місці: папки Різака (Контент, До публікації…) і папка шортсів."""
+    data = load() or {}
+    roots = [data.get("publish"), data.get("content"), *((data.get("folders") or {}).values()),
+             str(app.cfg["paths"]["ready"])]
+    out, seen = [], set()
+    for r in roots:
+        if r and Path(r).is_dir() and str(Path(r).resolve()).lower() not in seen:
+            seen.add(str(Path(r).resolve()).lower())
+            out.append(Path(r))
+    return out
+
+
+def build_index(app, limit: int = 20000) -> dict[str, list[Path]]:
+    """{назва файлу (без регістру): [шляхи]} — лише .mp4, з обмеженням, щоб не обходити весь диск."""
+    idx: dict[str, list[Path]] = {}
+    n = 0
+    for root in search_roots(app):
+        for f in root.rglob("*.mp4"):
+            idx.setdefault(f.name.lower(), []).append(f)
+            n += 1
+            if n >= limit:
+                return idx
+    return idx
+
+
+def locate(path, idx: dict[str, list[Path]]) -> Path | None:
+    """Новий шлях файлу з такою самою назвою — лише якщо знайдено рівно один (інакше не вгадуємо)."""
+    hits = [p for p in idx.get(Path(str(path)).name.lower(), []) if p.exists()]
+    uniq = {str(p.resolve()).lower(): p for p in hits}
+    return next(iter(uniq.values())) if len(uniq) == 1 else None
+
+
+def recover_missing(app, days: int = 7) -> int:
+    """Відео, що «зникли» (перенесені Різаком чи вручну), — знайти за назвою й повернути в чергу."""
+    import time as _t
+    db = app.db
+    items = [it for it in db.items("status='missing'")
+             if (it.get("added_at") or 0) > _t.time() - days * 86400 and not Path(it["mp4"]).exists()]
+    if not items:
+        return 0
+    idx = build_index(app)
+    n = 0
+    for it in items:
+        new = locate(it["mp4"], idx)
+        if not new:
+            continue
+        js = new.with_suffix(".json")
+        db.update_item(it["id"], mp4=str(new), json=str(js), status="queued", note=None, slot_at=None)
+        db.event(it["id"], "found_moved", {"from": it["mp4"], "to": str(new)})
+        log.info("#%s знайдено на новому місці — повернуто в чергу: %s", it["id"], new)
+        n += 1
+    return n
+
+
+def follow_publish_folder(app) -> bool:
+    """Основний канал: якщо папки шортсів немає (або в ній жодного відео), а Різак кладе готові шортси
+    в іншу («До публікації»), — Poster переходить на неї (і записує в config.json)."""
+    cfg = app.cfg
+    if cfg.get("channel"):
+        return False
+    pub = (load() or {}).get("publish")
+    if not pub or not Path(pub).is_dir():
+        return False
+    ready = Path(cfg["paths"]["ready"])
+    if str(ready.resolve()).lower() == str(Path(pub).resolve()).lower():
+        return False
+    empty = not ready.exists() or not any(ready.rglob("*.mp4"))
+    if not empty or not any(Path(pub).rglob("*.mp4")):
+        return False
+    path = Path(cfg.get("config_path") or "")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw.setdefault("paths", {})["ready"] = str(pub)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except (OSError, ValueError) as e:
+        log.warning("Не вдалося записати нову папку шортсів: %s", e)
+        return False
+    cfg["paths"]["ready"] = Path(pub)
+    log.info("Папку шортсів змінено на ту, куди кладе Різак: %s → %s", ready, pub)
+    return True

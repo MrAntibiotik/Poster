@@ -87,3 +87,49 @@ class CutterLinkTest(FlowBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FindMovedTest(CutterLinkTest):
+    """Перенесення, яких немає в історії Різака (напр. двічі поспіль, у «Відео\\Контент»): шукаємо за назвою."""
+
+    def publish_dir(self, d: Path):
+        f = cutter_link.discovery_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"content": str(self.tmp / "Відео" / "Контент"), "publish": str(d), "moved": []}),
+                     encoding="utf-8")
+
+    def test_unrecorded_move_is_found_by_name(self):
+        self.make_short("a")
+        self.make_short("b")
+        config.FAKE_NOW = self.ts(11, "08:00")
+        self.app.scheduler.scan()
+        self.assertEqual(len(self.app.db.queue()), 2)
+        old = Path(self.cfg["paths"]["ready"])
+        new = self.tmp / "Відео" / "Контент" / "Мій канал" / "До публікації"
+        new.parent.mkdir(parents=True)
+        shutil.move(str(old), str(new))                         # перенесли, але в «moved» нічого
+        self.publish_dir(new)
+        self.app.scheduler.scan()
+        q = self.app.db.queue()
+        self.assertEqual(len(q), 2)                             # нічого не загубилось
+        self.assertTrue(all(it["mp4"].startswith(str(new)) for it in q))
+        raw = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(raw["paths"]["ready"], str(new))       # Poster перейшов на папку Різака
+
+    def test_already_removed_items_are_recovered(self):
+        self.make_short("a")
+        config.FAKE_NOW = self.ts(11, "08:00")
+        self.app.scheduler.scan()
+        it = self.app.db.queue()[0]
+        old = Path(self.cfg["paths"]["ready"])
+        new = self.tmp / "Відео" / "Контент" / "Мій канал" / "До публікації"
+        new.parent.mkdir(parents=True)
+        shutil.move(str(old), str(new))
+        self.app.db.update_item(it["id"], status="missing", note="файл видалено")   # стара версія вже прибрала
+        self.publish_dir(new)
+        self.app.db.set("recover_ts", 0)
+        self.app.scheduler.scan()
+        back = self.app.db.get_item(it["id"])
+        self.assertEqual(back["status"], "queued")
+        self.assertTrue(back["mp4"].startswith(str(new)))
+        self.assertEqual(len(self.app.db.queue()), 1)          # без дубля
