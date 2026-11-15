@@ -231,3 +231,17 @@ class StopMidPublishTest(FlowBase):
         cap = self.app.bot.caption(item)
         self.assertIn("Публікацію зупинено", cap)
         self.assertIn("Instagram — ⏸", cap)
+
+
+class StaleProgressTest(FlowBase):
+    def test_after_restart_card_not_publishing(self):
+        self.make_short("a")
+        self.app.scheduler.scan()
+        it = self.app.db.items("status='queued'")[0]
+        db = self.app.db
+        db.update_item(it["id"], status="publishing", results={"youtube": {"status": "ok", "url": "u"}})
+        db.set(f"pubnow:{it['id']}", "instagram")          # позначка лишилась з процесу до перезапуску
+        db.set("stopped", "1")
+        cap = self.app.bot.caption(db.get_item(it["id"]))
+        self.assertIn("Публікацію зупинено", cap)
+        self.assertNotIn("публікується…", cap)

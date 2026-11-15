@@ -114,6 +114,8 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
                 log.warning("Прибирання чату %s: %s", cid, e)
     try:
         app.bot.ensure_keyboard()  # кнопки внизу (у т.ч. «⬆️ Оновити») — завжди на місці
+        if app.db.get("stopped") == "1":
+            app.bot.refresh_publishing()   # після перезапуску під «Стопом» — картки показують «зупинено», не «публікується»
     except Exception as e:  # noqa: BLE001
         log.warning("Кнопки: %s", e)
     from app.core.config import VERSION

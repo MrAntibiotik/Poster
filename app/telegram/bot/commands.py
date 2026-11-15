@@ -129,12 +129,14 @@ class CommandsMixin:
         elif cmd == "/stop":
             self.db.set("stopped", "1")
             self.db.event(None, "stopped", {"by": chat})
+            self.refresh_publishing()
             self.send("⛔ <b>Публікації зупинено.</b> Нічого не публікується — навіть підтверджене чи «⚡ зараз». "
                       "Instagram, що зараз обробляється, зупиниться за кілька секунд (YouTube/Facebook — щойно дозавантажиться файл).\n"
                       "Відновити — «✅ Відновити публікації».", html_mode=True, keyboard=True)
         elif cmd == "/go":
             self.db.set("stopped", None)
             self.db.event(None, "resumed_publishing", {"by": chat})
+            self.refresh_publishing()
             self.send("✅ Публікації відновлено. Пропущені слоти: підтверджені шортси (до 2 год тому) вийдуть одразу, "
                       "решта — повернуться на початок черги.", keyboard=True)
         elif cmd == "/pause":

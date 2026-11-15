@@ -172,7 +172,9 @@ class CardsMixin:
         from app.insights.reports import ICONS, explain_error
         lines = []
         targets = [p for p in PLATFORMS if p in self.app.platforms and p not in item["disabled"]]
-        current = self.db.get(f"pubnow:{item['id']}") if publishing else None
+        # «зараз публікується» — лише якщо публікація справді йде (після перезапуску / «Стоп» позначка застаріла)
+        current = (self.db.get(f"pubnow:{item['id']}")
+                   if publishing and self.app.publisher.is_active(item["id"]) else None)
         for p in PLATFORMS:
             r = item["results"].get(p)
             icon = ICONS.get(p, "•")
@@ -412,6 +414,14 @@ class CardsMixin:
     def _cap_digest(cap: str, kb) -> str:
         import hashlib
         return hashlib.md5((cap + json.dumps(kb, ensure_ascii=False, sort_keys=True)).encode()).hexdigest()[:16]
+
+    def refresh_publishing(self) -> None:
+        """Картки шортсів, що публікуються, — одразу оновити (після «Стоп» / «Відновити» / перезапуску)."""
+        for it in self.db.items("status='publishing'"):
+            try:
+                self.refresh(it["id"])
+            except Exception as e:  # noqa: BLE001
+                log.debug("refresh #%s: %s", it["id"], e)
 
     def heal(self, limit: int = 10) -> int:
         """Самовідновлення: підписи відео, які не вдалося оновити (світло/інтернет), доводимо до актуального стану."""

@@ -74,7 +74,9 @@ class RetryTest(FlowBase):
         db.update_item(self.item["id"], status="publishing")
         db.set(f"pubnow:{self.item['id']}", "instagram")
         db.set(f"pubtry:{self.item['id']}:instagram", "2/3")
+        self.app.publisher.active.add(self.item["id"])   # публікація справді йде
         cap = bot.caption(db.get_item(self.item["id"]))
+        self.app.publisher.active.discard(self.item["id"])
         self.assertIn("📸 Instagram — ⏳ публікується… (спроба 2/3)", cap)
         self.assertNotIn("ProcessingFailed", cap)  # стара помилка не плутає
 
