@@ -22,19 +22,23 @@ class CancelTest(FlowBase):
 
     def button(self, data, item):
         own = self.db.tg_msg(item["id"], 42)
+        mid = own["msg_id"] if own else 777          # кнопка з панелі / списку — картки в чаті вже немає
         self.app.bot.handle({"update_id": 1, "callback_query": {
-            "id": "c", "data": data, "message": {"message_id": own["msg_id"], "chat": {"id": 42}, "text": ""}}})
+            "id": "c", "data": data, "message": {"message_id": mid, "chat": {"id": 42}, "text": ""}}})
 
     def test_cancel_moves_file_and_next_takes_slot(self):
         self.sch.tick(self.ts(11, "09:00"))  # a → 10:00
         a = self.db.items("status='notified'")[0]
         self.assertIn("cx:", str(self.app.bot.keyboard(a)))
+        card = self.db.tg_msg(a["id"], 42)["msg_id"]
         self.button(f"cx:{a['id']}", a)
         a = self.db.get_item(a["id"])
         self.assertEqual(a["status"], "cancelled")
         self.assertIn(str(self.cfg["paths"]["cancelled"]), a["mp4"])
         self.assertTrue(Path(a["mp4"]).exists())
-        self.assertIn("Скасовано", self.app.bot.tg.edits[-1][1])
+        self.assertIn(card, self.app.bot.tg.deleted)             # відхилений шортс зникає з чату
+        self.assertEqual(self.db.tg_msgs(a["id"]), [])
+        self.assertIn("Скасовано", self.app.bot.tg.answers[-1])  # підтвердження — спливним вікном
         nxt = self.db.items("status='notified'")[0]  # черга зсунулась: b на той самий слот 10:00
         self.assertEqual((self.name(nxt), nxt["slot_at"]), ("b", self.ts(11, "10:00")))
         self.sch.scan()

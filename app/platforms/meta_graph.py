@@ -1,17 +1,84 @@
 """Instagram Reels і Facebook Reels через офіційний Graph API (завантаження файлу з ПК)."""
 from __future__ import annotations
 
+import json
 import logging
 import os
+import tempfile
 import time
+from pathlib import Path
 
 import requests
 
-from .base import Platform, PublishError, TokenExpired
+from .base import Platform, PublishError, RateLimited, TokenExpired
 
 log = logging.getLogger("meta")
 
 TOKEN_ERROR_CODES = {102, 190, 463, 467}
+# Ліміти запитів Meta: 4 — додатка (≈200 запитів/год на користувача), 17 — користувача, 32 — сторінки,
+# 613 — частота, 80001–80014 — ліміти Business Use Case. Вікно — ковзна година.
+RATE_LIMIT_CODES = {4, 17, 32, 613} | set(range(80001, 80015))
+LIMIT_FILE = Path(tempfile.gettempdir()) / "poster-meta-limit.json"   # спільний для всіх каналів (один додаток Meta)
+STATS_MAX_USAGE = 60      # статистику не знімаємо, якщо використано ≥ N% годинної квоти — бережемо для публікацій
+
+
+def _limit_state() -> dict:
+    try:
+        return json.loads(LIMIT_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_limit(**kw) -> None:
+    st = _limit_state()
+    st.update(kw)
+    try:
+        LIMIT_FILE.write_text(json.dumps(st), encoding="utf-8")
+    except OSError as e:
+        log.debug("meta limit file: %s", e)
+
+
+def blocked_until() -> int:
+    """До якого часу Meta не приймає запитів (0 — обмеження немає)."""
+    until = int(_limit_state().get("until") or 0)
+    return until if until > time.time() else 0
+
+
+def usage_pct() -> int:
+    """Скільки відсотків годинної квоти використано (за останньою відповіддю Meta, не старшою за годину)."""
+    st = _limit_state()
+    if time.time() - float(st.get("usage_ts") or 0) > 3600:
+        return 0
+    return int(st.get("usage") or 0)
+
+
+def _read_usage(r) -> tuple[int, int]:
+    """(відсоток використання, хвилин до відновлення) із заголовків X-App-Usage / X-Business-Use-Case-Usage."""
+    pct, regain = 0, 0
+    headers = getattr(r, "headers", None) or {}
+    for name in ("X-App-Usage", "X-Ad-Account-Usage", "X-Page-Usage"):
+        raw = headers.get(name)
+        if raw:
+            try:
+                d = json.loads(raw)
+                pct = max([pct] + [int(v) for k, v in d.items() if isinstance(v, (int, float))])
+            except (ValueError, TypeError):
+                pass
+    raw = headers.get("X-Business-Use-Case-Usage")
+    if raw:
+        try:
+            for entries in json.loads(raw).values():
+                for e in entries:
+                    pct = max(pct, int(e.get("call_count") or 0), int(e.get("total_time") or 0),
+                              int(e.get("total_cputime") or 0))
+                    regain = max(regain, int(e.get("estimated_time_to_regain_access") or 0))
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return pct, regain
+
+
+def _hm(ts: int) -> str:
+    return time.strftime("%H:%M", time.localtime(ts))
 
 
 IG_HINTS = {
@@ -67,6 +134,11 @@ class Graph:
         self.base = f"https://graph.facebook.com/{version}"
 
     def _check(self, r: requests.Response) -> dict:
+        pct, regain = _read_usage(r)
+        if pct:
+            _save_limit(usage=pct, usage_ts=time.time())
+            if pct >= 90:
+                log.warning("Meta: використано %s%% годинної квоти запитів", pct)
         try:
             j = r.json()
         except ValueError:
@@ -77,12 +149,27 @@ class Graph:
             msg = err.get("error_user_msg") or err.get("message") or str(err)
             if code in TOKEN_ERROR_CODES:
                 raise TokenExpired(f"Meta: {msg}")
+            if code in RATE_LIMIT_CODES or err.get("error_subcode") in RATE_LIMIT_CODES:
+                until = int(time.time()) + max(15, regain or 60) * 60   # ковзне вікно — година, якщо Meta не сказала
+                _save_limit(until=until, usage=100, usage_ts=time.time())
+                log.warning("Meta: ліміт запитів (%s) — пауза до %s", code, _hm(until))
+                raise RateLimited(f"Meta: вичерпано ліміт запитів ({code}) — повтор після {_hm(until)}", until)
             raise PublishError(f"Meta ({code}/{err.get('error_subcode')}): {msg}")
         if r.status_code >= 400:
             raise PublishError(f"Graph API HTTP {r.status_code}: {r.text[:200]}")
         return j
 
-    def get(self, path: str, **params) -> dict:
+    def _guard(self, low: bool = False) -> None:
+        """Не стукаємо в Meta, поки діє обмеження (інакше вікно ліміту лише подовжується)."""
+        until = blocked_until()
+        if until:
+            raise RateLimited(f"Meta: вичерпано ліміт запитів — повтор після {_hm(until)}", until)
+        if low and usage_pct() >= STATS_MAX_USAGE:
+            raise RateLimited(f"Meta: використано {usage_pct()}% квоти — статистику відкладено, щоб вистачило "
+                              "на публікації", int(time.time()) + 3600)
+
+    def get(self, path: str, low: bool = False, **params) -> dict:
+        self._guard(low)
         params["access_token"] = self.token
         try:
             r = requests.get(f"{self.base}/{path.lstrip('/')}", params=params, timeout=60)
@@ -91,6 +178,7 @@ class Graph:
         return self._check(r)
 
     def post(self, path: str, **data) -> dict:
+        self._guard()
         data["access_token"] = self.token
         try:
             r = requests.post(f"{self.base}/{path.lstrip('/')}", data=data, timeout=120)
@@ -237,7 +325,8 @@ class Instagram(_MetaBase):
                     waited = int((time.time() - start) / 60)
                     raise PublishError(f"{upload_error}{self._container_reason(g, cid)} (чекали {waited} хв)")
                 raise PublishError("Instagram: обробка відео триває понад 20 хв")
-            time.sleep(10)
+            # перевіряємо рідше, що довше обробка: кожен запит з'їдає годинну квоту Meta
+            time.sleep(15 if time.time() - start < 120 else 30)
 
         mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
         out = {"id": mid, "url": ""}
@@ -258,14 +347,22 @@ class Instagram(_MetaBase):
         reason = st.get("status") or st.get("status_code") or ""
         return f" | стан контейнера: {reason}{ig_hint(reason)}" if reason else ""
 
+    _metric: str | None = None   # яка метрика переглядів спрацювала — щоб не витрачати 3 запити щоразу
+
     def get_views(self, result: dict) -> int | None:
         g = self._g()
-        for metric in ("views", "plays", "reach"):
+        order = ("views", "plays", "reach")
+        if Instagram._metric:
+            order = (Instagram._metric,) + tuple(m for m in order if m != Instagram._metric)
+        for metric in order:
             try:
-                data = g.get(f"{result['id']}/insights", metric=metric).get("data") or []
+                data = g.get(f"{result['id']}/insights", low=True, metric=metric).get("data") or []
+            except RateLimited:
+                raise
             except PublishError:
                 continue
             if data:
+                Instagram._metric = metric
                 d = data[0]
                 vals = d.get("values") or []
                 if vals:
@@ -277,14 +374,16 @@ class Instagram(_MetaBase):
     def get_stats(self, result: dict) -> dict:
         out = {"views": self.get_views(result)}
         try:
-            r = self._g().get(result["id"], fields="like_count,comments_count")
+            r = self._g().get(result["id"], low=True, fields="like_count,comments_count")
             out.update(likes=r.get("like_count"), comments=r.get("comments_count"))
+        except RateLimited:
+            raise
         except PublishError as e:
             log.debug("IG likes: %s", e)
         return out
 
     def account_stats(self) -> dict:
-        r = self._g().get(self.ig_id, fields="followers_count,media_count")
+        r = self._g().get(self.ig_id, low=True, fields="followers_count,media_count")
         return {"followers": r.get("followers_count"), "videos": r.get("media_count")}
 
     def check(self) -> str:
@@ -327,12 +426,12 @@ class Facebook(_MetaBase):
                 raise PublishError(f"Facebook відхилив відео: {errs}")
             if pub == "complete" or st.get("video_status") == "ready":
                 return out
-            time.sleep(10)
+            time.sleep(20)  # кожен запит — з годинної квоти Meta
         out["note"] = "Facebook ще обробляє відео — з'явиться на сторінці трохи пізніше"
         return out
 
     def get_views(self, result: dict) -> int | None:
-        data = self.graph().get(f"{result['id']}/video_insights").get("data") or []
+        data = self.graph().get(f"{result['id']}/video_insights", low=True).get("data") or []
         by_name = {d.get("name"): d for d in data}
         for name in ("fb_reels_total_plays", "blue_reels_play_count", "post_video_views", "total_video_views"):
             d = by_name.get(name)
@@ -343,15 +442,18 @@ class Facebook(_MetaBase):
     def get_stats(self, result: dict) -> dict:
         out = {"views": self.get_views(result)}
         try:
-            r = self.graph().get(result["id"], fields="likes.summary(true).limit(0),comments.summary(true).limit(0)")
+            r = self.graph().get(result["id"], low=True,
+                                 fields="likes.summary(true).limit(0),comments.summary(true).limit(0)")
             out.update(likes=((r.get("likes") or {}).get("summary") or {}).get("total_count"),
                        comments=((r.get("comments") or {}).get("summary") or {}).get("total_count"))
+        except RateLimited:
+            raise
         except PublishError as e:
             log.debug("FB likes: %s", e)
         return out
 
     def account_stats(self) -> dict:
-        r = self.graph().get(self.page_id, fields="followers_count,fan_count")
+        r = self.graph().get(self.page_id, low=True, fields="followers_count,fan_count")
         return {"followers": r.get("followers_count") or r.get("fan_count")}
 
     def check(self) -> str:

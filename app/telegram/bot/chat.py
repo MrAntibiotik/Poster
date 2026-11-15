@@ -218,6 +218,16 @@ class ChatMixin:
             self._track(chat_id, row["text_msg_id"])
             self.db.x("UPDATE tg_msgs SET text_msg_id=NULL WHERE item_id=? AND chat_id=?", (item_id, chat_id))
 
+    def remove_item_msgs(self, item_id: int) -> None:
+        """Відхилений (скасований / остаточно пропущений) шортс зникає з чату повністю: відео, тексти, картки."""
+        for r in self.db.tg_msgs(item_id):
+            self._delete(r["chat_id"], [int(x) for x in (r["msg_id"], r.get("text_msg_id")) if x])
+            self.db.set(f"cap:{item_id}:{r['chat_id']}", None)
+        self.db.clear_tg_msgs(item_id)
+        self.db.update_item(item_id, tg_msg=None)
+        if hasattr(self, "drop_failed_card"):
+            self.drop_failed_card(item_id)
+
     def drop_all_texts(self, item_id: int) -> None:
         for r in self.db.tg_msgs(item_id):
             if r.get("text_msg_id"):

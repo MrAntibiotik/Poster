@@ -105,8 +105,8 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
                 app.bot.refresh(it["id"])
             except Exception as e:  # noqa: BLE001
                 log.debug("refresh #%s: %s", it["id"], e)
-    if app.db.get("chat_cleaned") != "4":  # один раз після оновлення — прибрати старе «сміття» з чату
-        app.db.set("chat_cleaned", "4")
+    if app.db.get("chat_cleaned") != "5":  # один раз після оновлення — прибрати старе «сміття» з чату
+        app.db.set("chat_cleaned", "5")
         for cid in app.bot.recipients():
             try:
                 app.bot.clean_chat(cid)

@@ -166,7 +166,7 @@ class QueueMixin:
                 self.app.scheduler.cancel(target, by=chat)
             except ValueError as e:
                 return answer(str(e)[:190], True)
-            answer("🚫 Скасовано — файл у папці «скасовані»", True)
+            answer("🚫 Скасовано й прибрано з чату. Повернути — панель → «Скасовані».", True)
             return self.cleanup(chat)
         answer()
 

@@ -12,6 +12,14 @@ class PublishError(Exception):
     """Будь-яка інша помилка публікації (буде повторена згідно з retry)."""
 
 
+class RateLimited(PublishError):
+    """Платформа тимчасово обмежила кількість запитів. retry_at — коли можна знову (unix-час)."""
+
+    def __init__(self, msg: str, retry_at: int):
+        super().__init__(msg)
+        self.retry_at = int(retry_at)
+
+
 class Platform:
     key = ""
     name = ""

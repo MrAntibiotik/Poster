@@ -90,7 +90,7 @@ class CallbacksMixin:
             try:
                 if action == "cx":
                     self.app.scheduler.cancel(target, by=chat)
-                    answer("🚫 Скасовано — файл у папці «скасовані». Наступний шортс стає на цей слот.", True)
+                    answer("🚫 Скасовано й прибрано з чату. Наступний шортс стає на цей слот. Повернути — панель → «Скасовані».", True)
                 elif action == "cr":
                     self.app.scheduler.restore(target)
                     answer("↩️ Повернуто — перший у черзі", True)

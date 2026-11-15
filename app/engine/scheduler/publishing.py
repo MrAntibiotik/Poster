@@ -104,7 +104,10 @@ class PublishingMixin:
                 pass
             self.db.update_item(item["id"], status="skipped", skips=skips, mp4=mp4, json=js)
             self.db.event(item["id"], "moved_to_skipped", {"title": title})
-            self.app.bot.refresh(item["id"])
+            if hasattr(self.app.bot, "remove_item_msgs"):
+                self.app.bot.remove_item_msgs(item["id"])   # більше не актуальний — з чату прибираємо
+            else:
+                self.app.bot.refresh(item["id"])
             self.app.bot.send(f"🗑 Шортс #{item['id']} «{title}» пропущено {skips} рази — "
                               f"файли перенесено в skipped/.")
             log.info("#%s → skipped/", item["id"])
@@ -138,7 +141,10 @@ class PublishingMixin:
         self.db.set(f"cancel_from:{item_id}", origin)
         self.db.event(item_id, "cancelled", {"by": by, "title": self._title(self.db.get_item(item_id))})
         log.info("#%s скасовано → %s", item_id, mp4)
-        self.app.bot.refresh(item_id)
+        if hasattr(self.app.bot, "remove_item_msgs"):
+            self.app.bot.remove_item_msgs(item_id)   # чат — лише актуальне; повернути можна в панелі («Скасовані»)
+        else:
+            self.app.bot.refresh(item_id)
         self.process_notifications(now, min_lead=60)  # наступний із черги — одразу в цей слот
         return self.db.get_item(item_id)
 

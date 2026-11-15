@@ -9,7 +9,7 @@ from pathlib import Path
 from app.core import media
 from app.core.config import PLATFORMS, local_dt, now_ts
 from app.core.meta import apply_always_hashtags, load_meta, move_pair, read_json, write_json
-from app.platforms import TokenExpired
+from app.platforms import RateLimited, TokenExpired
 
 log = logging.getLogger("publisher")
 
@@ -123,6 +123,9 @@ class Publisher:
             app.bot.finish_item_msgs(item_id)  # «🔁 Повторюю…» → прибрати / стати результатом
         if not failed and hasattr(app.bot, "drop_failed_card"):
             app.bot.drop_failed_card(item_id)  # усе вийшло — окреме повідомлення про невдачу більше не потрібне
+        limited = [results[k]["retry_at"] for k in failed if results.get(k, {}).get("retry_at")]
+        if limited:
+            self._retry_after_limit(item_id, max(limited) + 120)
         if failed and hasattr(app.bot, "notify_failed"):
             app.bot.notify_failed(item_id)
         log.info("#%s: успішно %s, помилки %s", item_id, ok, failed)
@@ -150,6 +153,12 @@ class Publisher:
                 if hasattr(app.bot, "resolve"):
                     app.bot.resolve(f"reauth_{key}")
                 return {"status": "ok", "attempts": i, "published_at": now_ts(), **r}
+            except RateLimited as e:
+                # повтори одразу лише подовжують блокування — публікація піде сама після паузи
+                log.warning("#%s %s: %s", item["id"], key, e)
+                app.db.set(f"pubtry:{item['id']}:{key}", None)
+                app.db.event(item["id"], "platform_error", {"platform": key, "error": str(e)})
+                return {"status": "error", "attempts": i, "error": str(e)[:500], "retry_at": e.retry_at}
             except TokenExpired as e:
                 log.error("#%s %s: потрібна авторизація: %s", item["id"], key, e)
                 app.bot.notify_reauth(key, str(e))
@@ -168,6 +177,21 @@ class Publisher:
         app.db.set(f"pubtry:{item['id']}:{key}", None)
         app.db.event(item["id"], "platform_error", {"platform": key, "error": str(last)[:2000]})
         return {"status": "error", "attempts": attempts, "error": str(last)[:2000]}
+
+    def _retry_after_limit(self, item_id: int, ts: int) -> None:
+        """Платформа обмежила запити — повтор невдалих платформ ставимо на час після паузи (сам, без кнопок)."""
+        sched = getattr(self.app, "scheduler", None)
+        if not sched or not hasattr(sched, "reserve_retry"):
+            return
+        ts = max(ts, now_ts() + 300) // 60 * 60 + 60
+        for _ in range(120):
+            try:
+                sched.reserve_retry(item_id, ts)
+                log.info("#%s: повтор після ліміту запитів — %s", item_id, local_dt(self.app.cfg, ts).strftime("%H:%M"))
+                return
+            except ValueError:
+                ts += 60
+        log.warning("#%s: не вдалося запланувати повтор після ліміту", item_id)
 
     def _write_json(self, path: str, item: dict, results: dict, status: str, now: int) -> None:
         try:

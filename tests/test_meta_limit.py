@@ -1,0 +1,148 @@
+"""Ліміт запитів Meta (код 4): пауза без зайвих запитів, статистика не з'їдає квоту, публікація повторюється сама."""
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.platforms import RateLimited  # noqa: E402
+from app.platforms import meta_graph  # noqa: E402
+from tests.test_flow import FlowBase  # noqa: E402
+
+
+class Resp:
+    def __init__(self, body, status=200, headers=None):
+        self.body, self.status_code, self.headers, self.text = body, status, headers or {}, json.dumps(body)
+
+    def json(self):
+        return self.body
+
+
+class LimitFileMixin:
+    def setUp(self):
+        super().setUp()
+        self._lf = meta_graph.LIMIT_FILE
+        meta_graph.LIMIT_FILE = Path(tempfile.mkdtemp()) / "limit.json"
+        self._get, self._post = meta_graph.requests.get, meta_graph.requests.post
+
+    def tearDown(self):
+        meta_graph.LIMIT_FILE = self._lf
+        meta_graph.requests.get, meta_graph.requests.post = self._get, self._post
+        super().tearDown()
+
+
+class GraphLimitTest(LimitFileMixin, unittest.TestCase):
+    def test_code4_blocks_without_more_requests(self):
+        calls = []
+
+        def get(url, **kw):
+            calls.append(url)
+            return Resp({"error": {"code": 4, "message": "(#4) Application request limit reached"}}, 400)
+        meta_graph.requests.get = get
+        g = meta_graph.Graph("v25.0", "T")
+        with self.assertRaises(RateLimited) as cm:
+            g.get("123", fields="id")
+        self.assertIn("вичерпано ліміт запитів", str(cm.exception))
+        self.assertGreater(cm.exception.retry_at, time.time() + 50 * 60)     # ≈ година
+        with self.assertRaises(RateLimited):
+            g.post("123/media", caption="x")                                 # під час паузи — навіть не стукаємо
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(meta_graph.blocked_until())
+
+    def test_regain_time_from_header(self):
+        hdr = {"X-Business-Use-Case-Usage": json.dumps({"1": [{"call_count": 100, "estimated_time_to_regain_access": 20}]})}
+        meta_graph.requests.get = lambda url, **kw: Resp({"error": {"code": 80002, "message": "limit"}}, 400, hdr)
+        with self.assertRaises(RateLimited) as cm:
+            meta_graph.Graph("v25.0", "T").get("1")
+        self.assertLess(cm.exception.retry_at, time.time() + 21 * 60)
+
+    def test_high_usage_spares_quota_for_publishing(self):
+        calls = []
+
+        def get(url, **kw):
+            calls.append(url)
+            return Resp({"id": "1"}, 200, {"X-App-Usage": json.dumps({"call_count": 72, "total_time": 5})})
+        meta_graph.requests.get = get
+        g = meta_graph.Graph("v25.0", "T")
+        g.get("1")
+        self.assertEqual(meta_graph.usage_pct(), 72)
+        with self.assertRaisesRegex(RateLimited, "статистику відкладено"):
+            g.get("1/insights", low=True, metric="views")                   # статистика — ні
+        g.get("1", fields="status_code")                                     # публікація — так
+        self.assertEqual(len(calls), 2)
+
+
+class Limited:
+    def __init__(self):
+        self.calls = 0
+
+    def publish(self, path, meta):
+        self.calls += 1
+        raise RateLimited("Meta: вичерпано ліміт запитів (4) — повтор після 14:00", int(time.time()) + 3600)
+
+
+class Ok:
+    def publish(self, path, meta):
+        return {"id": "y1", "url": "https://yt/y1"}
+
+
+class PublishLimitTest(FlowBase):
+    def test_no_hammering_and_auto_retry(self):
+        self.cfg["dry_run"] = False
+        ig = Limited()
+        self.app.platforms = {"youtube": Ok(), "instagram": ig}
+        self.make_short("a")
+        self.app.scheduler.tick(self.ts(11, "12:00"))
+        it = self.app.db.items("status='notified'")[0]
+        self.press(f"pub:{it['id']}", it)
+        from app.core import config
+        config.FAKE_NOW = int(time.time())
+        self.app.publisher.run(it["id"])
+        self.assertEqual(ig.calls, 1)                                        # без 3 спроб підряд
+        res = self.app.db.get_item(it["id"])["results"]
+        self.assertEqual(res["youtube"]["status"], "ok")
+        self.assertIn("ліміт запитів", res["instagram"]["error"])
+        self.assertIsNotNone(self.app.scheduler.retry_at(it["id"]))          # повтор заплановано сам
+        self.assertGreater(self.app.scheduler.retry_at(it["id"]), res["instagram"]["retry_at"])
+
+
+class StatsLimitTest(FlowBase):
+    def test_collect_reuses_fresh_and_stops_on_limit(self):
+        from app.insights.reports import collect
+        self.cfg["dry_run"] = False
+
+        class P:
+            calls = 0
+
+            def publish(self, path, meta):
+                return {"id": "p", "url": "u"}
+
+            def get_stats(self, res):
+                P.calls += 1
+                raise RateLimited("ліміт", int(time.time()) + 3600)
+
+            def account_stats(self):
+                return {"followers": 10}
+        self.app.platforms = {"instagram": P()}
+        now = self.ts(11, "12:00")
+        from app.core import config
+        config.FAKE_NOW = now
+        for n in range(3):
+            iid = self.app.db.x("INSERT INTO items(mp4, json, status, posted_at, results, added_at, qpos) VALUES (?,?,?,?,?,?,?)",
+                                (f"/x/{n}.mp4", f"/x/{n}.json", "posted", now - 3600,
+                                 json.dumps({"instagram": {"status": "ok", "id": str(n)}}), now - 7200, n))
+        out = collect(self.app)
+        self.assertEqual(P.calls, 1)                    # після першого «ліміт» решту відео не чіпаємо
+        self.assertIn("instagram", out["errors"])
+        collect(self.app)
+        self.assertEqual(self.app.db.one("SELECT COUNT(*) AS n FROM account_stats")["n"], 1)   # підписники — з бази
+        self.assertTrue(iid)
+
+
+if __name__ == "__main__":
+    unittest.main()

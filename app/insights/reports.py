@@ -7,6 +7,7 @@ from datetime import datetime, time as dtime, timedelta
 
 from app.core.config import NAMES, PLATFORMS, SHORT, fmt_slot, local_dt, now_ts
 from app.core.meta import read_json, write_json
+from app.platforms import RateLimited
 
 log = logging.getLogger("reports")
 esc = html.escape
@@ -175,6 +176,9 @@ def send_stats(app, item: dict) -> None:
             views[p] = st.get("views")
             if st.get("likes") is not None:
                 likes[p] = st["likes"]
+        except RateLimited as e:
+            log.info("Перегляди #%s відкладено: %s", item["id"], e)
+            return   # stats_sent лишається 0 — спробуємо пізніше
         except Exception as e:  # noqa: BLE001
             log.warning("Перегляди #%s %s: %s", item["id"], p, e)
             views[p] = f"помилка: {str(e)[:80]}"
@@ -217,6 +221,8 @@ def send_stats(app, item: dict) -> None:
 # Аналітика: підписники, перегляди, лайки по кожній платформі
 # ======================================================================
 DAY = 24 * 3600
+POST_FRESH = 6 * 3600      # статистика відео, знята менше ніж N тому, береться з бази (економія лімітів API)
+ACCOUNT_FRESH = 3600       # те саме для підписників акаунта
 
 
 def fmt_n(n) -> str:
@@ -246,6 +252,11 @@ def collect(app, days: int = 8) -> dict:
     for key, plat in app.platforms.items():
         if dry:
             continue
+        prev = db.one("SELECT * FROM account_stats WHERE platform=? AND ts>? ORDER BY ts DESC LIMIT 1",
+                      (key, now - ACCOUNT_FRESH))
+        if prev:   # свіжий знімок уже є — не витрачаємо запити (у Meta годинний ліміт на весь додаток)
+            out["accounts"][key] = {k: prev[k] for k in ("followers", "views", "likes") if prev[k] is not None}
+            continue
         try:
             acc = plat.account_stats() or {}
             out["accounts"][key] = acc
@@ -255,6 +266,7 @@ def collect(app, days: int = 8) -> dict:
             log.warning("Статистика акаунта %s: %s", key, e)
             out["errors"][key] = str(e)[:150]
     from app.insights.analytics import snapshot_due
+    limited: set[str] = set()
     for item in db.items("status='posted' AND posted_at>=?", (now - 400 * DAY,), order="posted_at DESC"):
         recent = item["posted_at"] >= now - days * DAY
         title = _title(item)
@@ -263,8 +275,20 @@ def collect(app, days: int = 8) -> dict:
                 continue
             if not recent and not snapshot_due(db, item, key, now):
                 continue  # старі відео: знімок щотижня / щомісяця — для аналітики за 3–12 міс.
+            fresh = db.one("SELECT views, likes, comments FROM post_stats WHERE item_id=? AND platform=? AND ts>? "
+                           "ORDER BY ts DESC LIMIT 1", (item["id"], key, now - POST_FRESH))
+            if fresh or key in limited:   # свіже вже є (або платформа обмежила запити) — беремо з бази
+                st = dict(fresh) if fresh else {}
+                if recent:
+                    out["posts"].append({"item_id": item["id"], "title": title, "platform": key,
+                                         "url": res.get("url"), "posted_at": item["posted_at"], **st})
+                continue
             try:
                 st = app.platforms[key].get_stats(res) or {}
+            except RateLimited as e:
+                limited.add(key)           # решту відео цієї платформи — наступного разу
+                out["errors"][key] = str(e)[:150]
+                st = {}
             except Exception as e:  # noqa: BLE001
                 log.warning("Статистика #%s %s: %s", item["id"], key, e)
                 st = {}
