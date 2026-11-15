@@ -1205,14 +1205,19 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
     from config import VERSION
     pid_file = Path(panel.cfg["paths"]["data"]) / "panel.pid"
     httpd = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             httpd = ThreadingHTTPServer(("127.0.0.1", panel.port), make_handler(panel))
             break
         except OSError:
             # Порт зайнятий старою копією панелі (напр. після оновлення) — закриваємо її і пробуємо ще раз
-            old = int(pid_file.read_text().strip() or 0) if pid_file.exists() else 0
-            if attempt == 0 and old and old != os.getpid():
+            # хто справді тримає порт (стара версія панелі могла не записати PID або файл застарів)
+            owner = control.port_owner(panel.port) or {}
+            if "panel.py" in str(owner.get("cmd") or "") and owner.get("pid"):
+                old = int(owner["pid"])
+            else:
+                old = int(pid_file.read_text().strip() or 0) if pid_file.exists() else 0
+            if attempt < 2 and old and old != os.getpid():
                 log.info("Закриваю попередню копію панелі (PID %s)", old)
                 control.kill(old)
                 time.sleep(1.5)
