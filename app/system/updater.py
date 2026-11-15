@@ -2,8 +2,8 @@
 
 * Оновлення: порівнює VERSION у репозиторії з локальною, завантажує архів і встановлює файли програми.
 * Історія: перед кожною зміною версії повна копія коду зберігається в data/versions/<версія>
-  (код займає ~1 МБ, тримаємо останні KEEP_VERSIONS). Кожен реліз також має тег v<версія> на GitHub.
-* Відкат (rollback/switch_to): на будь-яку збережену версію або на будь-який тег із GitHub.
+  (код займає ~1 МБ, тримаємо останні KEEP_VERSIONS). Усі релізи з комітами — у releases.json на GitHub.
+* Відкат (rollback/switch_to): на будь-яку збережену версію або на будь-яку версію з releases.json.
   Файли, яких у цільовій версії немає, прибираються (за списком встановлених файлів data/installed.json).
 
 Ваші файли (.env, config.json, client_secret.json, tokens/, data/, channels/, log.txt, .venv/) ніколи не змінюються.
@@ -246,7 +246,7 @@ def _download(cfg: dict, ref: str | None = None) -> tuple[str, dict[str, bytes]]
     except requests.RequestException as e:
         raise UpdateError(f"не вдалося завантажити оновлення: {e}") from e
     if r.status_code == 404 and ref:
-        raise UpdateError(f"версії {ref} на GitHub немає")
+        raise UpdateError(f"коміту {ref[:7]} на GitHub немає")
     if r.status_code != 200:
         raise UpdateError(_explain(r, "Authorization" in headers))
     try:
@@ -300,17 +300,26 @@ def rollback(cfg: dict, version: str, root: Path = ROOT) -> int:
     return n
 
 
-def remote_versions(cfg: dict) -> list[str]:
-    """Версії, що мають тег на GitHub (v<версія>), найновіші першими."""
-    repo, _, headers = _conf(cfg)
+def remote_releases(cfg: dict) -> dict[str, str]:
+    """releases.json з GitHub: {версія: коміт} — усі версії, на які можна перейти."""
+    repo, branch, headers = _conf(cfg)
     try:
-        r = requests.get(f"{API}/repos/{repo}/tags", params={"per_page": 100}, headers=headers, timeout=20)
+        r = requests.get(f"{API}/repos/{repo}/contents/releases.json", params={"ref": branch},
+                         headers={**headers, "Accept": "application/vnd.github.raw"}, timeout=20)
     except requests.RequestException as e:
         raise UpdateError(f"немає зв'язку з GitHub: {e}") from e
     if r.status_code != 200:
         raise UpdateError(_explain(r, "Authorization" in headers))
-    vs = [t["name"][1:] for t in r.json() if str(t.get("name", "")).startswith("v")]
-    return sorted(vs, key=version_key, reverse=True)
+    try:
+        data = json.loads(r.text)
+    except ValueError as e:
+        raise UpdateError("releases.json пошкоджено") from e
+    return {str(k): str(v) for k, v in data.items() if re.fullmatch(r"[0-9a-f]{7,40}", str(v))}
+
+
+def remote_versions(cfg: dict) -> list[str]:
+    """Версії, доступні на GitHub, найновіші першими."""
+    return sorted(remote_releases(cfg), key=version_key, reverse=True)
 
 
 def changelog(root: Path = ROOT) -> dict[str, list[str]]:
@@ -358,19 +367,32 @@ def switch_to(cfg: dict, version: str, root: Path = ROOT) -> str:
     from app.core.config import VERSION
     if version == VERSION:
         raise UpdateError(f"версія {version} уже встановлена")
+    moved = False
     if (versions_dir(cfg) / version / "version.json").is_file():
+        moved = _before_old_layout(version, root)
         rollback(cfg, version, root)
     else:
-        got = apply(cfg, root, ref=f"v{version}")
+        ref = remote_releases(cfg).get(version)
+        if not ref:
+            raise UpdateError(f"версії {version} немає ні на ПК, ні на GitHub")
+        moved = _before_old_layout(version, root)
+        got = apply(cfg, root, ref=ref)
         if got != version:
-            raise UpdateError(f"у тегу v{version} знайдено версію {got}")
-    set_auto_paused(cfg, version)
+            raise UpdateError(f"за комітом {ref[:7]} знайдено версію {got}, а не {version}")
+    # дані повернулись у корінь — пауза має бути в тому config.json, який читатиме стара версія
+    set_auto_paused(cfg, version, root / "config.json" if moved else None)
     return version
 
 
-def set_auto_paused(cfg: dict, version: str | None) -> None:
+def _before_old_layout(version: str, root: Path) -> bool:
+    """Версії до 2026.11.16-87 тримають дані основного каналу в корені — повертаємо їх туди."""
+    from app.core import layout
+    return version_key(version) < version_key(layout.SINCE) and layout.unmigrate_main(root)
+
+
+def set_auto_paused(cfg: dict, version: str | None, path: Path | None = None) -> None:
     """Пауза автооновлення після ручного відкату (у config.json — її розуміють і старі версії програми)."""
-    path = Path(cfg["config_path"])
+    path = Path(path or cfg["config_path"])
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

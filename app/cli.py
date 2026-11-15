@@ -52,12 +52,14 @@ def restart_after_update(cfg: dict, lock) -> None:
 
 
 def wait_new_boot(db, old_version: str, timeout: int = 120) -> bool:
-    """Чекаємо, поки новий процес запишеться в базу «я запустився»."""
+    """Чекаємо, поки новий процес запишеться в базу «я запустився» (db — база або кілька баз)."""
+    dbs = db if isinstance(db, (list, tuple)) else [db]
     deadline = time.time() + timeout
     while time.time() < deadline:
-        boot = db.get("boot_ok") or ""
-        if boot and not boot.startswith(old_version + "|"):
-            return True
+        for d in dbs:
+            boot = d.get("boot_ok") or ""
+            if boot and not boot.startswith(old_version + "|"):
+                return True
         time.sleep(2)
     return False
 
@@ -147,7 +149,9 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
             from app.core.config import VERSION as old_version
             app.db.set("boot_ok", f"{old_version}|{time.time()}")
             restart_after_update(cfg, lock)
-            if wait_new_boot(app.db, old_version):
+            from app.core import layout
+            dbs = [app.db] + ([DB(layout.UNMIGRATED_TO)] if layout.UNMIGRATED_TO else [])  # стара версія — база в корені
+            if wait_new_boot(dbs, old_version):
                 log.info("Нова версія запустилась — цей процес завершується")
                 return True
             # Нова версія не стартувала за 2 хв: повертаємо попередні файли і працюємо далі самі (старий код у пам'яті)

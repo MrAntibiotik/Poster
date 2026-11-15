@@ -33,11 +33,11 @@ class MigrateMainTest(unittest.TestCase):
         self.db = db
         (r / "data" / "versions" / "x").mkdir(parents=True)
         (r / "data" / "versions" / "x" / "a.py").write_text("a", encoding="utf-8")
-        layout.MIGRATED_FROM = None
+        layout.MIGRATED_FROM = layout.UNMIGRATED_TO = None
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
-        layout.MIGRATED_FROM = None
+        layout.MIGRATED_FROM = layout.UNMIGRATED_TO = None
 
     def test_migrate(self):
         r = self.root
@@ -93,6 +93,26 @@ class MigrateMainTest(unittest.TestCase):
         self.assertFalse((self.root / "channels" / "main").exists())
         self.assertFalse((self.root / "channels" / "main.tmp").exists())
         self.assertFalse((self.root / "channels" / ".migrate.lock").exists())
+
+    def test_back_to_old_version_and_forward_again(self):
+        r = self.root
+        layout.resolve_config(None, r)
+        main = r / "channels" / "main"
+        DB(main / "data" / "poster.sqlite3").set("hello", "newer")         # нова версія попрацювала
+        (main / ".env").write_text("TELEGRAM_BOT_TOKEN=new\n", encoding="utf-8")
+        self.assertTrue(layout.unmigrate_main(r))                          # відкат на версію до -87
+        self.assertEqual(json.loads((r / "config.json").read_text(encoding="utf-8"))["lock_port"], 47613)
+        self.assertEqual(DB(r / "data" / "poster.sqlite3").get("hello"), "newer")
+        self.assertEqual((r / ".env").read_text(encoding="utf-8"), "TELEGRAM_BOT_TOKEN=new\n")
+        self.assertFalse((main / "config.json").exists())                  # нова схема його не підхопить
+        self.assertEqual(layout.UNMIGRATED_TO, r / "data" / "poster.sqlite3")
+        self.assertFalse(layout.unmigrate_main(r))                         # вдруге — нічого
+        # стара версія попрацювала, потім знову оновились — дані знову переїжджають у channels/main
+        DB(r / "data" / "poster.sqlite3").set("hello", "from-old")
+        got = layout.resolve_config(None, r)
+        self.assertEqual(got, (main / "config.json").resolve())
+        self.assertEqual(DB(main / "data" / "poster.sqlite3").get("hello"), "from-old")
+        self.assertEqual(len(list((r / "channels").glob("main-before-*"))), 1)   # попередня копія — вбік
 
     def test_channels_list_skips_main(self):
         from app.channels import manager

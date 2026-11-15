@@ -31,6 +31,8 @@ CHANNEL_FILES = ("data", "tokens", "log")          # переносяться р
 MOVED_SUFFIX = ".перенесено"
 NOTE = "ПЕРЕНЕСЕНО в channels\\main.txt"
 MIGRATED_FROM: Path | None = None                   # стара база, якщо перенесення було в цьому процесі
+UNMIGRATED_TO: Path | None = None                   # база в корені після повернення на стару версію
+SINCE = "2026.11.16-87"                              # перша версія, що тримає основний канал у channels/main
 
 
 def main_dir(root: Path = ROOT) -> Path:
@@ -149,6 +151,8 @@ def migrate_main(root: Path = ROOT) -> Path | None:
         return None
     tmp = dst.with_name(MAIN_KEY + ".tmp")
     try:
+        if dst.exists():   # лишилась після повернення на стару версію (без config.json) — відкладаємо вбік
+            dst.rename(dst.with_name(f"{MAIN_KEY}-before-{time.strftime('%Y%m%d-%H%M%S')}"))
         raw = json.loads(src_cfg.read_text(encoding="utf-8"))
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True)
@@ -204,3 +208,46 @@ def migrate_main(root: Path = ROOT) -> Path | None:
             lock.unlink()
         except OSError:
             pass
+
+
+def unmigrate_main(root: Path = ROOT) -> bool:
+    """Перед поверненням на версію, старішу за SINCE: актуальні дані основного каналу — назад у корінь
+    (стара програма шукає їх там). channels/main лишається, але без config.json — його ніхто не підхопить;
+    наступне оновлення знову перенесе дані з кореня."""
+    global UNMIGRATED_TO
+    src = main_dir(root)
+    if not (src / "config.json").exists():
+        return False
+    from app.core.config import DEFAULTS
+    raw = json.loads((src / "config.json").read_text(encoding="utf-8"))
+    paths = raw.get("paths") or {}
+    for key in CHANNEL_FILES:
+        p = _rel(paths.get(key), DEFAULTS["paths"][key])
+        if _absolute(p) or key == "log":
+            continue
+        if (src / p).is_dir():
+            tmp = root / (str(p) + ".restore")
+            shutil.rmtree(tmp, ignore_errors=True)
+            for rel in _copy_tree(src / p, tmp):          # бази — спершу поруч, потім заміна цілим файлом
+                (root / p / rel).parent.mkdir(parents=True, exist_ok=True)
+                os.replace(tmp / rel, root / p / rel)
+                for side in ("-wal", "-shm"):             # старі -wal/-shm не повинні накластися на свіжу копію
+                    (root / p / rel).with_name(rel.name + side).unlink(missing_ok=True)
+            for f in tmp.rglob("*"):
+                if f.is_file():
+                    rel = f.relative_to(tmp)
+                    (root / p / rel).parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(f, root / p / rel)
+            shutil.rmtree(tmp, ignore_errors=True)
+    yt = (raw.get("platforms") or {}).get("youtube") or {}
+    sec = _rel(yt.get("client_secrets_file"), "client_secret.json")
+    if not _absolute(sec) and (src / sec).is_file():
+        shutil.copy2(src / sec, root / sec)
+    if (src / ".env").is_file():
+        shutil.copy2(src / ".env", root / ".env")
+    (root / "config.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(src / "config.json", src / ("config.json" + MOVED_SUFFIX))
+    data = _rel(paths.get("data"), "data")
+    UNMIGRATED_TO = (data if _absolute(data) else root / data) / "poster.sqlite3"
+    log.warning("Повернення на стару версію: дані основного каналу скопійовано назад у корінь програми")
+    return True

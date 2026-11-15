@@ -148,19 +148,29 @@ class HistoryTest(unittest.TestCase):
         up = json.loads((self.root / "config.json").read_text(encoding="utf-8"))["updates"]
         self.assertEqual(up, {"auto": True})
 
-    def test_switch_to_tag_from_github(self):
+    def test_switch_to_version_from_github(self):
         urls = []
+        sha = "a" * 40
 
         def get(url, **kw):
             urls.append(url)
+            if url.endswith("/contents/releases.json"):
+                return Resp(200, '{"2098.05.05-3": "%s", "bad": "not-a-sha"}' % sha)
             return Resp(200, content=zip_of("2098.05.05-3", {"app/x.py": "x"}))
         updater.requests.get = get
         updater.switch_to(self.cfg, "2098.05.05-3", root=self.root)
-        self.assertTrue(urls[0].endswith("/zipball/v2098.05.05-3"))
+        self.assertTrue(urls[-1].endswith("/zipball/" + sha))
         self.assertEqual((self.root / "app" / "x.py").read_text(), "x")
-        updater.requests.get = lambda url, **kw: Resp(200, content=zip_of("2098.05.05-4", {}))
-        with self.assertRaisesRegex(updater.UpdateError, "знайдено версію"):
+        with self.assertRaisesRegex(updater.UpdateError, "немає ні на ПК"):
             updater.switch_to(self.cfg, "2098.05.05-9", root=self.root)
+
+        def get2(url, **kw):
+            if url.endswith("/contents/releases.json"):
+                return Resp(200, '{"2098.05.05-7": "%s"}' % sha)
+            return Resp(200, content=zip_of("2098.05.05-4", {}))
+        updater.requests.get = get2
+        with self.assertRaisesRegex(updater.UpdateError, "а не 2098.05.05-7"):
+            updater.switch_to(self.cfg, "2098.05.05-7", root=self.root)
 
     def test_cleanup_legacy_root_modules(self):
         (self.root / "app").mkdir()
@@ -180,8 +190,7 @@ class HistoryTest(unittest.TestCase):
         (self.root / "CHANGELOG.md").write_text("# Історія\n\n## 2099.01.01-2\n- Нове\n- Ще\n\n## 2099.01.01-1\n- Перше\n",
                                                encoding="utf-8")
         self.assertEqual(updater.changelog(self.root)["2099.01.01-2"], ["Нове", "Ще"])
-        updater.requests.get = lambda url, **kw: Resp(200, content=b"") if False else type(
-            "R", (), {"status_code": 200, "json": lambda self: [{"name": "v2099.01.01-1"}, {"name": "junk"}]})()
+        updater.requests.get = lambda url, **kw: Resp(200, '{"2099.01.01-1": "%s"}' % ("b" * 40))
         vl = updater.version_list(self.cfg, root=self.root)
         got = {v["version"]: v for v in vl}
         self.assertTrue(got["2099.01.01-1"]["remote"])
