@@ -11,6 +11,13 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+
+
+def home() -> Path:
+    """Папка даних основного каналу: channels/main (або корінь — до перенесення)."""
+    from app.core.layout import default_config_path
+    return default_config_path(ROOT).parent
 PY = sys.executable
 WIN = sys.platform == "win32"
 
@@ -27,7 +34,7 @@ def poster(*args) -> int:
 
 def cfg_raw() -> dict:
     try:
-        return json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+        return json.loads((home() / "config.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
@@ -153,7 +160,7 @@ def install_ffmpeg() -> None:
         print("❌ ffmpeg не знайдено. Встановіть вручну (README, розділ 2) і пропишіть шлях у config.json.")
         return
     ff, fp = found
-    path = ROOT / "config.json"
+    path = home() / "config.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     data["ffmpeg"], data["ffprobe"] = ff.replace("\\", "/"), fp.replace("\\", "/")
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -161,7 +168,7 @@ def install_ffmpeg() -> None:
 
 
 def open_file(name: str) -> None:
-    p = ROOT / name
+    p = home() / name
     if not p.exists():
         print(f"Файлу {name} ще немає.")
         return

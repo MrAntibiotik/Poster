@@ -96,7 +96,7 @@ class AccessTest(FlowBase):
         self.assertIn("Черга: 1", self.sent_to(OWNER)[-1][1])
 
     def test_manual_slot_takes_waiting_short(self):
-        import config
+        from app.core import config
         self.make_short("a")
         self.app.scheduler.tick(self.ts(11, "18:03"))  # шортс узяв слот 19:00
         item = self.app.db.items("status='notified'")[0]

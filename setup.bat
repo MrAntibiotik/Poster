@@ -33,8 +33,8 @@ if not exist ".venv\Scripts\python.exe" (
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q --upgrade pip
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
 if errorlevel 1 goto :fail
-if not exist config.json copy config.example.json config.json >nul
-if not exist .env copy .env.example .env >nul
+if not exist channels\main\config.json if not exist config.json copy config.example.json config.json >nul
+if not exist channels\main\.env if not exist .env copy .env.example .env >nul
 echo.
 echo Install complete. Use menu.bat to run and manage poster.
 if /i not "%~1"=="nopause" pause

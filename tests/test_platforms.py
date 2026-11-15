@@ -18,9 +18,9 @@ sys.path.insert(0, str(ROOT))
 
 import requests  # noqa: E402
 
-from meta import PostMeta  # noqa: E402
-from platforms import PublishError, TokenExpired  # noqa: E402
-from platforms import meta_graph, tiktok  # noqa: E402
+from app.core.meta import PostMeta  # noqa: E402
+from app.platforms import PublishError, TokenExpired  # noqa: E402
+from app.platforms import meta_graph, tiktok  # noqa: E402
 
 
 class Resp:
@@ -147,7 +147,7 @@ class InstagramSpecTest(Base):
 
     def setUp(self):
         super().setUp()
-        import media
+        from app.core import media
         self.media = media
         self._orig_media = (media.ig_probe, media.ig_problems, media.instagram_copy)
         self.cfg.update(ffprobe="ffprobe", ffmpeg="ffmpeg")
@@ -434,7 +434,7 @@ class TikTokTest(Base):
 
 class YouTubeTest(Base):
     def test_error_mapping(self):
-        from platforms.youtube import YouTube
+        from app.platforms.youtube import YouTube
 
         class E(Exception):
             def __init__(self, status, text):
@@ -446,7 +446,7 @@ class YouTubeTest(Base):
         self.assertIsInstance(YouTube._http_error(E(500, "backend")), PublishError)
 
     def test_no_token(self):
-        from platforms.youtube import YouTube
+        from app.platforms.youtube import YouTube
         with self.assertRaises(TokenExpired):
             YouTube(self.cfg)._creds()
 

@@ -7,8 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import config  # noqa: E402
-from config import fmt_when, parse_when  # noqa: E402
+from app.core import config  # noqa: E402
+from app.core.config import fmt_when, parse_when  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 
@@ -73,7 +73,7 @@ class TimeTest(FlowBase):
         self.app.scheduler.tick(self.ts(11, "12:00"))
         item = self.app.db.items("status='notified'")[0]
         self.app.scheduler.tick(self.ts(11, "13:00"))  # слот минув, шортс чекає
-        import config
+        from app.core import config
         config.FAKE_NOW = self.ts(11, "13:20")
         self.press(f"pub:{item['id']}", item)
         self.say("Назва")

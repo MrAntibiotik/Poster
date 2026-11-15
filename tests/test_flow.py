@@ -16,10 +16,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import config  # noqa: E402
-from bot import Bot  # noqa: E402
-from config import load_config  # noqa: E402
-from poster import App  # noqa: E402
+from app.core import config  # noqa: E402
+from app.telegram.bot import Bot  # noqa: E402
+from app.core.config import load_config  # noqa: E402
+from app.engine.runtime import App  # noqa: E402
 
 
 class FakeTG:
@@ -159,7 +159,7 @@ class FlowTest(FlowBase):
         item = self.app.db.get_item(item["id"])
         self.assertEqual(item["status"], "approved")
         self.assertEqual(item["disabled"], ["facebook"])
-        from meta import load_meta
+        from app.core.meta import load_meta
         self.assertEqual(load_meta(item["json"]).yt_title, "Нова назва")  # для всіх платформ, не лише YouTube
         self.assertTrue(load_meta(item["json"]).instagram_text.startswith("Нова назва"))
 
@@ -238,7 +238,7 @@ class FlowTest(FlowBase):
             def publish(self, path, meta):
                 return {"id": "1", "url": "https://ok"}
 
-        from platforms import TokenExpired
+        from app.platforms import TokenExpired
 
         class Expired:
             reauth_hint = "python poster.py auth tiktok"
@@ -280,7 +280,7 @@ class FlowTest(FlowBase):
         self.assertIn("rf:", str(cap[2]))  # кнопки повтору — під самим відео
 
     def test_health_check(self):
-        from platforms import TokenExpired
+        from app.platforms import TokenExpired
 
         class Good:
             def check(self):

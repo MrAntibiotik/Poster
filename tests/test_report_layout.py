@@ -7,8 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import config  # noqa: E402
-from reports import daily_report, explain_error  # noqa: E402
+from app.core import config  # noqa: E402
+from app.insights.reports import daily_report, explain_error  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 

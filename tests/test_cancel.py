@@ -105,7 +105,7 @@ class QueueCardTest(FlowBase):
         self.cfg["telegram"]["queue_cards"] = True
         tg, db, sch = self.app.bot.tg, self.app.db, self.app.scheduler
         self.make_short("a")
-        import config
+        from app.core import config
         config.FAKE_NOW = self.ts(11, "08:00")
         sch.scan()
         item = db.items("status='queued'")[0]
@@ -127,7 +127,7 @@ class QueueCardTest(FlowBase):
         self.cfg["ask_texts_before_publish"] = True
         tg, db, sch = self.app.bot.tg, self.app.db, self.app.scheduler
         self.make_short("c")
-        import config
+        from app.core import config
         config.FAKE_NOW = self.ts(11, "08:00")
         sch.scan()
         item = db.items("status='queued'")[0]
@@ -149,7 +149,7 @@ class QueueCardTest(FlowBase):
         tg, db, sch = self.app.bot.tg, self.app.db, self.app.scheduler
         for n in "abcdefg":
             self.make_short(n, age=1000 - ord(n))
-        import config
+        from app.core import config
         config.FAKE_NOW = self.ts(11, "08:00")
         sch.scan()  # 5 слотів сьогодні (10…21), 2 — завтра
         with_card = [i for i in db.items("status='queued'") if db.tg_msg(i["id"], 42)]
@@ -167,7 +167,7 @@ class QueueCardTest(FlowBase):
         tg, db, sch, bot = self.app.bot.tg, self.app.db, self.app.scheduler, self.app.bot
         for n in "abc":
             self.make_short(n, age=1000 - ord(n))
-        import config
+        from app.core import config
         config.FAKE_NOW = self.ts(11, "08:00")
         sch.scan()
         a, b, c = db.queue()
@@ -184,7 +184,7 @@ class QueueCardTest(FlowBase):
     def test_queued_without_card_gets_one(self):
         db, sch = self.app.db, self.app.scheduler
         self.make_short("b")
-        import config
+        from app.core import config
         config.FAKE_NOW = self.ts(11, "08:00")
         sch.scan()  # чергу поставлено ще старою версією — картки не було
         self.cfg["telegram"]["queue_cards"] = True

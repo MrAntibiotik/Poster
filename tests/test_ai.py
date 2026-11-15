@@ -14,8 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import ai  # noqa: E402
-from meta import load_meta  # noqa: E402
+from app.core import ai  # noqa: E402
+from app.core.meta import load_meta  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 HAS_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None

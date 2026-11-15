@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import config  # noqa: E402
+from app.core import config  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 
@@ -42,7 +42,7 @@ class PlanTest(FlowBase):
         self.assertIn("#2 b — 📦 з черги", self.app.status_text())
 
     def test_game_of_ignores_tool_folders(self):
-        from scheduler import game_of
+        from app.engine.scheduler import game_of
         r = Path("/r")
         self.assertEqual(game_of(r / "battle_02_dmg_5004" / "x.mp4", r), "")
         self.assertEqual(game_of(r / "job_20261111_171232" / "battle_03_dmg_5051" / "x.mp4", r), "")

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import config  # noqa: E402
+from app.core import config  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 from tests import test_panel as _tp  # noqa: E402  (лише допоміжні методи)
 
@@ -137,7 +137,7 @@ class PanelControlHttpTest(unittest.TestCase):
 
     def test_bot_call_roundtrip(self):
         self.panel.cfg["lock_port"] = 47999
-        import control
+        from app.system import control
         orig = control.is_running
         control.is_running = lambda port: True
         try:

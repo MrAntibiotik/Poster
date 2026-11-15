@@ -12,8 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from bot import CAPTION_LIMIT, visible_len  # noqa: E402
-from meta import load_meta, move_pair, title_from_filename  # noqa: E402
+from app.telegram.bot import CAPTION_LIMIT, visible_len  # noqa: E402
+from app.core.meta import load_meta, move_pair, title_from_filename  # noqa: E402
 from tests.test_flow import FakeTG, FlowBase  # noqa: E402
 
 
@@ -135,7 +135,7 @@ class CaptionTest(FlowBase):
         self.assertIn("#тег0", cap)
 
     def test_video_send_fails_falls_back_to_text(self):
-        from telegram_api import TelegramError
+        from app.telegram.api import TelegramError
 
         class BrokenVideo(FakeTG):
             def send_video(self, *a, **k):

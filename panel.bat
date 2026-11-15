@@ -9,8 +9,8 @@ if not exist ".venv\Scripts\python.exe" (
         exit /b 1
     )
 )
-if not exist config.json copy config.example.json config.json >nul
-if not exist .env copy .env.example .env >nul
+if not exist channels\main\config.json if not exist config.json copy config.example.json config.json >nul
+if not exist channels\main\.env if not exist .env copy .env.example .env >nul
 if exist panel_error.txt del panel_error.txt
 rem Close an old copy of the panel (e.g. after an update). The bot keeps running.
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name like 'python%%'\" | Where-Object { $_.CommandLine -like '*panel.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1

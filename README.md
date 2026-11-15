@@ -390,7 +390,7 @@ World of Tanks… — список у панелі) або з увімкнено
 ### Автооновлення з GitHub
 Панель → «🔄 Оновлення». Програма кожні 5 хв перевіряє репозиторій і, коли нічим не зайнята
 (нічого не публікується, ви 5 хв не клацали в боті), завантажує нову версію й перезапускає бота (і панель).
-`.env`, `config.json`, `client_secret.json`, `tokens/`, `data/`, журнал не змінюються; резервна копія — `data/backup/<версія>`.
+Ваші налаштування, ключі, база й журнал (папки `channels\…`) не змінюються; попередня версія зберігається в `data/versions/<версія>` — див. «Історія версій і відкат».
 Репозиторій приватний — потрібен fine-grained токен GitHub лише з правом **Contents: Read-only** на цей репозиторій
 (поле «Токен GitHub» у тій самій вкладці, зберігається в `.env` як `GITHUB_TOKEN`).
 
@@ -470,21 +470,41 @@ TikTok API (для підписників TikTok потрібен дозвіл `
 
 ## 9. Файли проєкту
 
-| Файл | Призначення |
-|---|---|
-| `panel.bat` / `panel.py` / `panel.html` | панель керування в браузері |
-| `control.py` | запуск / зупинка служби, автозапуск |
-| `menu.bat` / `menu.py` | меню керування (запуск, тест, авторизація, режим, автозапуск) |
-| `setup.bat` | встановлення (Python через winget, .venv, залежності) |
-| `poster.py` | точка входу: служба, `check`, `auth`, `queue`, `test-slot` |
-| `bot.py` | Telegram-бот: сповіщення, кнопки, команди |
-| `scheduler.py` | черга, слоти, пропуски, звіти за розкладом |
-| `publisher.py` | публікація з повторними спробами, архівація, запис у json |
-| `platforms/youtube.py`, `tiktok.py`, `meta_graph.py` | модулі платформ (Instagram + Facebook — у `meta_graph.py`) |
-| `reports.py` | щоденний звіт і перегляди |
-| `media.py` | ffprobe/ffmpeg (прев'ю ≤ 50 МБ) |
-| `db.py` | SQLite-стан (`data/poster.sqlite3`) |
-| `log.txt` | детальний журнал (ротація 5 × 5 МБ) |
+Код — один на всі канали; дані кожного каналу — у своїй папці. Щоб змінити одну річ, правиться один модуль.
+
+```
+poster.py, panel.py, menu.py, *.bat    запуск (тонкі «входи», уся логіка — в app/)
+config.py                              VERSION — номер версії (єдине джерело)
+CHANGELOG.md                           що змінилось у кожній версії
+app/
+  cli.py                               команди poster.py: служба, check, auth, queue, test-slot…
+  core/      config, db, layout (де лежать дані каналів), meta (назви/хештеги), media (ffmpeg), ai, dupes
+  engine/    runtime (стан служби), publisher (публікація з повторами),
+             scheduler/ — base (такт), scan (пошук шортсів), slots, publishing, periodic (звіти),
+                          updates (автооновлення), power (сон ПК)
+  telegram/  api (Telegram Bot API), bot/ — base, chat (чистий чат), cards (картки шортсів), queue,
+                          dialog (назва/хештеги/привʼю), failed, info, callbacks, commands, panel, versions
+  web/       panel/ — base, settings, auth (підключення платформ), actions, state, server;
+             static/ — index.html, panel.css, panel.js
+  platforms/ youtube, tiktok, meta_graph (Instagram + Facebook)
+  insights/  reports (звіти), analytics (аналітика за періоди)
+  channels/  manager (EN/EU-канал), eu_tab (розділ EU в головному боті)
+  system/    updater (оновлення та історія версій), control (запуск/зупинка), power (сон Windows)
+channels/
+  main/      основний канал: config.json, .env, client_secret.json, tokens/, data/ (база, історія версій), log.txt
+  en/        EU/EN-канал: те саме, окремо
+tests/       автотести (python -m unittest discover -s tests)
+```
+
+До версії 2026.11.16-87 дані основного каналу лежали в корені програми — перше ж оновлення переносить їх
+у `channels\main` (копіює, перевіряє базу, і лише тоді перемикається). Старі копії лишаються в корені
+(див. файл «ПЕРЕНЕСЕНО в channels\main.txt»); через кілька днів їх можна видалити.
+
+### Історія версій і відкат
+Перед кожним оновленням поточна версія програми повністю зберігається в `channels\main\data\versions\<версія>`
+(останні 15), а кожен реліз має тег `v<версія>` на GitHub. Повернутись: бот → «⬆️ Оновити» → «🕘 Версії / відкат»
+(або /versions), панель → «🔄 Оновлення» → «Історія версій». Після відкату автооновлення на паузі,
+доки не натиснете «⬆️ Оновити». Що змінилось у кожній версії — `CHANGELOG.md`.
 
 ---
 

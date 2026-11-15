@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import config  # noqa: E402
+from app.core import config  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 
@@ -110,7 +110,7 @@ class CleanChatTest(FlowBase):
         orig = tg.send_video
 
         def fail(*a, **kw):
-            from telegram_api import TelegramError
+            from app.telegram.api import TelegramError
             raise TelegramError("немає інтернету")
         tg.send_video = fail
         self.app.scheduler.tick(self.ts(11, "09:00"))  # відео не пішло — картка текстом

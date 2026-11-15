@@ -11,11 +11,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import ai  # noqa: E402
-import channels  # noqa: E402
-import control  # noqa: E402
-from config import load_config  # noqa: E402
-from meta import PostMeta, apply_always_hashtags, auto_meta_json, title_from_filename  # noqa: E402
+from app.core import ai  # noqa: E402
+from app.channels import manager as channels  # noqa: E402
+from app.system import control  # noqa: E402
+from app.core.config import load_config  # noqa: E402
+from app.core.meta import PostMeta, apply_always_hashtags, auto_meta_json, title_from_filename  # noqa: E402
 
 
 class ChannelsTest(unittest.TestCase):
@@ -82,22 +82,22 @@ class ChannelsTest(unittest.TestCase):
 
     def test_channel_panel_runs_program_from_code_folder(self):
         """Панель EN-каналу: poster.py — з папки програми, а не з channels/en (там лише налаштування)."""
-        import panel
+        from app.web import panel
         d = channels.create(self.main_cfg, "en")
         pnl = panel.Panel(str(d / "config.json"))
         self.assertEqual(pnl.root, d.resolve())
-        with mock.patch.object(panel.subprocess, "run") as run:
+        with mock.patch("subprocess.run") as run:
             run.return_value = mock.Mock(returncode=0, stdout="ok", stderr="")
             pnl.run_poster("check")
         args, kw = run.call_args
         self.assertEqual(args[0][1], str(ROOT / "poster.py"))
         self.assertTrue((ROOT / "poster.py").exists())
-        self.assertEqual(kw["cwd"], panel.ROOT)
+        self.assertEqual(kw["cwd"], ROOT)
         self.assertIn(str(d / "config.json"), args[0])
 
     def test_channel_client_secret_never_overwrites_main(self):
         import json as J
-        import panel
+        from app.web import panel
         main_secret = Path(self.main_cfg["platforms"]["youtube"]["client_secrets_file"])
         main_secret.write_text(J.dumps({"installed": {"client_id": "MAIN"}}), encoding="utf-8")
         d = channels.create(self.main_cfg, "en")
@@ -109,7 +109,7 @@ class ChannelsTest(unittest.TestCase):
         self.assertEqual(J.loads(main_secret.read_text())["installed"]["client_id"], "MAIN")   # основний цілий
         self.assertEqual(J.loads((d / "client_secret.json").read_text())["installed"]["client_id"], "POSTER-EU")
         self.assertFalse((d / "tokens" / "youtube_token.json").exists())                     # старий токен прибрано
-        from config import load_config
+        from app.core.config import load_config
         self.assertEqual(Path(load_config(d / "config.json")["platforms"]["youtube"]["client_secrets_file"]),
                          (d / "client_secret.json").resolve())
 
@@ -170,7 +170,7 @@ class DiscoveryTest(unittest.TestCase):
         import os as _os
         import tempfile as _tf
 
-        import channels as ch
+        from app.channels import manager as ch
         tmp = Path(_tf.mkdtemp())
         old_env, old_dir = _os.environ.get("LOCALAPPDATA"), ch.CHANNELS_DIR
         _os.environ["LOCALAPPDATA"] = str(tmp)
@@ -194,7 +194,7 @@ class DiscoveryTest(unittest.TestCase):
 
 class RestartPanelsTest(unittest.TestCase):
     def test_update_restarts_channel_panel_too(self):
-        import channels as ch
+        from app.channels import manager as ch
         st = {"running": False, "panel_running": True, "panel_port": 8771}
         with mock.patch.object(ch, "keys", return_value=["en"]), \
                 mock.patch.object(ch, "status", return_value=st), \
@@ -206,7 +206,7 @@ class RestartPanelsTest(unittest.TestCase):
 
 class RefreshPanelsTest(unittest.TestCase):
     def test_old_panel_is_replaced(self):
-        import channels as ch
+        from app.channels import manager as ch
         st = {"panel_running": True, "panel_port": 8771}
         with mock.patch.object(ch, "keys", return_value=["en"]), \
                 mock.patch.object(ch, "status", return_value=st), \
@@ -219,8 +219,8 @@ class RefreshPanelsTest(unittest.TestCase):
         sp.assert_called_once()
 
     def test_current_panel_untouched(self):
-        import channels as ch
-        from config import VERSION
+        from app.channels import manager as ch
+        from app.core.config import VERSION
         with mock.patch.object(ch, "keys", return_value=["en"]), \
                 mock.patch.object(ch, "status", return_value={"panel_running": True, "panel_port": 8771}), \
                 mock.patch.object(ch, "panel_version", return_value=VERSION), \

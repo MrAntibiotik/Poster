@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import panel as panel_mod  # noqa: E402
+from app.web import panel as panel_mod  # noqa: E402
 
 BOT_TOKEN = "123456789:AA" + "x" * 33
 
@@ -70,6 +70,20 @@ class PanelTest(unittest.TestCase):
     def login(self):
         st, _ = self.req("POST", "/api/setup", {"password": "secret1"})
         self.assertEqual(st, 200)
+
+    def test_page_assets(self):
+        """Сторінка панелі розділена на розмітку, стилі й скрипт — усе віддається."""
+        st, html = self.req("GET", "/")
+        self.assertEqual(st, 200)
+        self.assertIn(b'/static/panel.css', html)
+        self.assertIn(b'/static/panel.js', html)
+        st, css = self.req("GET", "/static/panel.css")
+        self.assertEqual(st, 200)
+        self.assertIn(b"{", css)
+        st, js = self.req("GET", "/static/panel.js")
+        self.assertEqual(st, 200)
+        self.assertIn(b"/api/state", js)
+        self.assertEqual(self.req("GET", "/static/../config.json")[0], 404)
 
     def test_auth_and_protection(self):
         sess = self.req("GET", "/api/session")[1]
@@ -203,7 +217,7 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(st["settings"]["auto_meta.hashtags"], "WoT: #wot #танки\nDota: #dota2\n*: #shorts")
         self.assertEqual(st["ready_info"]["ready"], 1)  # без json не рахуються, коли вимкнено
         # на не-Windows рідного вікна немає — панель показує власний перегляд папок
-        if not panel_mod.control.WIN:
+        if not __import__("app.system.control", fromlist=["x"]).WIN:
             self.assertEqual(self.req("POST", "/api/pick_folder", {})[1], {"path": None, "native": False})
 
     def test_failed_block_and_actions(self):

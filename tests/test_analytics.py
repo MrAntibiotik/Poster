@@ -7,8 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import config  # noqa: E402
-from reports import analytics_text, collect, weekly_top  # noqa: E402
+from app.core import config  # noqa: E402
+from app.insights.reports import analytics_text, collect, weekly_top  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 
@@ -85,7 +85,7 @@ class AnalyticsTest(FlowBase):
         self.assertIn("Усього за тиждень: 2 шортсів", wt)
 
     def test_periods_top_and_best_days(self):
-        import analytics
+        from app.insights import analytics
         a = self.publish("a", 11, "10:00")
         b = self.publish("b", 11, "13:00")
         c = self.publish("c", 12, "19:00")

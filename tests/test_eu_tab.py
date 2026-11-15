@@ -8,9 +8,9 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import channels  # noqa: E402
-import eu_tab  # noqa: E402
-from db import DB  # noqa: E402
+from app.channels import manager as channels  # noqa: E402
+from app.channels import eu_tab  # noqa: E402
+from app.core.db import DB  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 

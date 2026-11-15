@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>poster — панель керування</title>
+<link rel="stylesheet" href="/static/panel.css">
+</head>
+<body>
+
+<div id="auth" class="center hidden">
+  <div class="card login">
+    <div class="big">🔐 poster</div>
+    <p id="authText" class="muted small"></p>
+    <form id="authForm">
+      <label class="f" for="pw1">Пароль</label>
+      <input id="pw1" type="password" autocomplete="current-password" required>
+      <div id="pw2wrap" class="hidden"><label class="f" for="pw2">Повторіть пароль</label>
+        <input id="pw2" type="password" autocomplete="new-password"></div>
+      <div class="row" style="margin-top:14px"><button class="btn primary" id="authBtn">Увійти</button></div>
+      <p id="authErr" class="small" style="color:var(--bad)"></p>
+    </form>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+<header>
+  <div class="bar">
+    <div class="logo">🎬 poster <span id="chanName" class="pill hidden"></span> <span id="ver" class="muted small" style="font-weight:400"></span></div>
+    <span id="hBot" class="pill"></span><span id="hMode" class="pill"></span><span id="hPause" class="pill hidden"></span><span id="hStop" class="pill hidden"></span>
+  </div>
+  <nav id="tabs">
+    <button data-tab="home" class="on">🏠 Головна</button>
+    <button data-tab="tg">✈️ Telegram і доступ</button>
+    <button data-tab="yt">▶️ YouTube</button>
+    <button data-tab="meta">📸 Instagram + Facebook</button>
+    <button data-tab="tt">🎵 TikTok</button>
+    <button data-tab="ai">🤖 ШІ</button>
+    <button data-tab="sched">🗓 Розклад і папки</button>
+    <button data-tab="chan" id="tabChan">🇬🇧 EN-канал</button>
+    <button data-tab="log">📄 Журнал</button>
+    <button data-tab="upd">🔄 Оновлення</button>
+    <button data-tab="sec">🔐 Безпека</button>
+  </nav>
+</header>
+<main>
+  <div id="tgBanner" class="banner hidden">⚠️ Бот ще не налаштований: впишіть токен бота і свій chat_id.
+    <button class="btn" id="goTg">✈️ Налаштувати Telegram</button></div>
+  <div id="foreignBanner" class="banner hidden"><span>⚠️ Працює <b>інша копія бота</b> — з іншої папки:
+    <code id="foreignCmd" class="small"></code>. Вона заважає цій (налаштування, YouTube, кнопки панелі на неї не діють).</span>
+    <button class="btn" data-act="restart">🔁 Зупинити її і запустити цю</button></div>
+  <div id="pathBanner" class="banner hidden"><span id="pathText"></span>
+    <button class="btn" id="goSched">📂 Виправити папки</button></div>
+  <div id="restartBanner" class="banner hidden">⚠️ Налаштування змінено — перезапустіть бота, щоб вони набули чинності.
+    <button class="btn" data-act="restart">🔁 Перезапустити</button></div>
+
+  <!-- ================= ГОЛОВНА ================= -->
+  <section data-page="home">
+    <div class="grid">
+      <div class="card"><h2>Бот</h2><div id="botState" class="big"></div>
+        <div class="row"><button class="btn primary" data-act="start" id="bStart">▶️ Запустити</button>
+          <button class="btn" data-act="stop" id="bStop">⏹ Зупинити</button>
+          <button class="btn" data-act="restart" id="bRestart">🔁 Перезапустити</button>
+          <button class="btn" data-act="update_now" id="bUpdHome">⬆️ Оновити</button>
+          <button class="btn" data-act="shortcut" title="Ярлик панелі на робочому столі й у меню «Пуск»">🖥 Ярлик</button></div>
+        <p class="small" id="updHome"></p></div>
+      <div class="card"><h2>Розклад</h2><div id="pauseState" class="big"></div>
+        <div class="row"><button class="btn" id="bPause"></button><button class="btn" id="bStopPub"></button></div>
+        <p class="muted small">На паузі нові шортси не надсилаються, а слоти минають порожніми.</p>
+        <p class="small" id="powerInfo"></p>
+        <div class="row"><button class="btn" data-act="stream" data-hours="4">🎮 Стрім 4 год</button>
+          <button class="btn hidden" data-act="stream" data-hours="0" id="bStreamOff">⏹ Вимкнути стрім</button></div></div>
+      <div class="card"><h2>Режим</h2><div id="modeState" class="big"></div>
+        <div class="row"><button class="btn" id="bMode"></button></div>
+        <p class="muted small">У тестовому режимі все працює, але публікації лише імітуються.</p></div>
+      <div class="card"><h2>Автозапуск з Windows</h2><div id="autoState" class="big"></div>
+        <div class="row"><button class="btn" data-act="autostart_on">Увімкнути</button>
+          <button class="btn" data-act="autostart_off">Вимкнути</button></div>
+        <p class="muted small" id="autoJob"></p></div>
+    </div>
+
+    <div class="card" id="reqCard"><h2>👥 Запити на доступ до бота</h2><table><tbody id="reqRows"></tbody></table></div>
+
+    <div class="card"><h2>🎬 Шортси в роботі <span id="workCount" class="pill"></span></h2>
+      <p class="muted small">Те саме, що картки в Telegram: перегляд відео, назва й хештеги, час, платформи, публікація. Дії виконує бот — він має бути запущений.</p>
+      <div class="row hidden" id="pubAllRow" style="margin-bottom:10px">
+        <button class="btn primary" id="bPubAll" data-act="publish_all"></button>
+        <span class="muted small">Опублікує по черзі всі шортси, що чекають на підтвердження, з поточними назвами.</span></div>
+      <div class="shorts" id="work"></div>
+      <div id="cancelBox" class="hidden"><h3>🚫 Скасовані</h3><div id="cancelRows"></div>
+        <div class="row" style="margin-top:6px"><button class="btn" data-open="cancelled">📂 Папка скасованих</button></div></div></div>
+
+    <div class="card"><h2>📊 Звіти й аналітика</h2>
+      <div class="row"><button class="btn" data-report="report">📊 Звіт за день</button>
+        <button class="btn" data-report="stats">📈 Аналітика</button>
+        <button class="btn" data-report="top">🏆 Топ тижня</button>
+        <label class="small"><input type="checkbox" id="repSend"> також надіслати в Telegram</label></div>
+      <div class="row" style="margin-top:8px"><span class="small muted">Період (з накопиченої статистики, миттєво):</span>
+        <button class="btn" data-period="1">Доба</button><button class="btn" data-period="7">Тиждень</button>
+        <button class="btn" data-period="30">Місяць</button><button class="btn" data-period="90">3 міс</button>
+        <button class="btn" data-period="180">6 міс</button><button class="btn" data-period="365">Рік</button></div>
+      <div class="out hidden" id="repOut"></div></div>
+
+    <div class="card"><h2>🧪 Тест</h2>
+      <div class="row">Позаплановий слот через <input id="testMin" type="number" min="7" max="180" value="10" style="width:80px"> хв
+        <button class="btn primary" data-act="testslot">Створити тестовий слот</button>
+        <button class="btn" data-act="tg_test">Перевірити зв'язок із Telegram</button></div>
+      <p class="muted small">Перший шортс із черги прийде в Telegram протягом хвилини. Бот має бути запущений.</p>
+      <pre id="tgJob" class="hidden"></pre>
+    </div>
+
+    <div class="card"><h2>Платформи</h2>
+      <table><tbody id="platTable"></tbody></table>
+      <div class="row" style="margin-top:10px"><button class="btn" data-act="check">🔍 Перевірити всі підключення</button>
+        <span class="muted small" id="healthTime"></span></div>
+      <pre id="checkJob" class="hidden"></pre>
+    </div>
+
+    <div class="grid">
+      <div class="card"><h2>🕐 Найближчі слоти</h2><ul id="upcoming" class="list"></ul>
+        <p class="muted small">Стан розкладу — те саме, що «🕐 Статус» у боті.</p></div>
+      <div class="card"><h2>Черга <span id="qCount" class="pill"></span></h2>
+        <div class="folder"><div style="flex:1;min-width:0"><div class="small muted">📁 Папка з готовими шортсами</div>
+          <div class="fspath" id="readyPath"></div><div class="small" id="readyInfo"></div></div>
+          <button class="btn primary" data-pick="paths.ready">📂 Обрати папку…</button></div>
+        <div id="queue"></div>
+        <div class="row"><button class="btn" data-open="ready">📂 Папка ready</button>
+          <button class="btn" data-open="posted">📂 Папка posted</button></div></div>
+    </div>
+    <div class="card" id="failedCard"><h2>⚠️ Невдалі публікації <span id="failedCount" class="pill"></span></h2>
+      <p class="muted small">Повтор публікує лише туди, де не вийшло. Бот виконає його протягом 1–2 хвилин.</p>
+      <table><tbody id="failedRows"></tbody></table></div>
+    <div class="card"><h2>Останні публікації</h2><table><tbody id="posted"></tbody></table></div>
+  </section>
+
+  <!-- ================= TELEGRAM ================= -->
+  <section data-page="tg" class="hidden">
+    <div class="card"><h2>Бот Telegram</h2>
+      <ol class="steps small muted"><li>Створіть бота в <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> → /newbot → скопіюйте токен.</li>
+        <li>Свій chat_id дізнайтесь у <a href="https://t.me/userinfobot" target="_blank" rel="noopener">@userinfobot</a> (напишіть йому зі свого акаунта).</li>
+        <li>Відкрийте свого бота і натисніть Start.</li></ol>
+      <div class="two">
+        <div><label class="f">Токен бота</label><div class="pw"><input type="password" data-secret="TELEGRAM_BOT_TOKEN" autocomplete="off"><button class="btn" data-toggle-pw>👁</button></div></div>
+        <div><label class="f">Головні адміністратори (chat_id, можна кілька через кому)</label><input type="text" data-secret="TELEGRAM_CHAT_ID"></div>
+      </div>
+      <p class="muted small">Порожнє поле — значення не змінюється. Збережені секрети показуються скорочено.</p>
+      <div class="row"><button class="btn primary" data-save-secrets="tg">Зберегти</button><button class="btn" data-act="tg_test">Перевірити зв'язок</button></div>
+      <pre id="tgJob2" class="hidden"></pre>
+    </div>
+    <div class="card"><h2>👥 Хто отримує сповіщення</h2>
+      <p class="muted small">Щоб додати людину: хай знайде вашого бота в Telegram і надішле <b>/start</b>. Запит з'явиться тут і в Telegram у вас — оберіть роль.<br>
+        <b>Глядач</b> — отримує шортси перед публікацією, посилання й звіти, без кнопок керування. <b>Адмін</b> — повне керування.</p>
+      <table><thead><tr><th>Хто</th><th>chat_id</th><th>Роль</th><th></th></tr></thead><tbody id="users"></tbody></table>
+      <h3>Додати вручну за chat_id</h3>
+      <div class="row"><input id="newUser" type="text" placeholder="chat_id" style="max-width:180px">
+        <button class="btn" data-adduser="viewer">+ Глядач</button><button class="btn" data-adduser="admin">+ Адмін</button></div>
+    </div>
+  </section>
+
+  <!-- ================= YOUTUBE ================= -->
+  <section data-page="yt" class="hidden">
+    <div class="card"><h2>▶️ YouTube <span id="ytStatus" class="pill"></span></h2>
+      <ol class="steps small"><li><a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> → новий проєкт → APIs & Services → Library → <b>YouTube Data API v3</b> → Enable.</li>
+        <li>OAuth consent screen: External, додайте себе в Test users, потім <b>Publish app → In production</b> (інакше вхід злітає кожні 7 днів).</li>
+        <li>Credentials → Create credentials → OAuth client ID → <b>Desktop app</b> → Download JSON.</li>
+        <li>Завантажте цей файл нижче й натисніть «Авторизувати» — відкриється вхід Google. Оберіть акаунт <b>каналу</b> (якщо канал — бренд-акаунт, оберіть саме його в списку).</li></ol>
+      <details class="small" style="margin:8px 0"><summary>Google показує попередження або помилку?</summary>
+        <ul class="steps">
+          <li><b>«Google не перевірив цей застосунок»</b> — це ваш власний застосунок, так і має бути: «Додатково» → «Перейти до … (небезпечно)» → дозволити.</li>
+          <li><b>«Доступ заблоковано: застосунок не пройшов перевірку»</b> — у OAuth consent screen додайте свою пошту в Test users або натисніть Publish app.</li>
+          <li><b>redirect_uri_mismatch</b> — створено клієнт типу «Web application». Потрібен <b>Desktop app</b>.</li>
+          <li><b>Вхід доводиться повторювати щотижня</b> — застосунок у режимі Testing; натисніть Publish app → In production.</li>
+          <li><b>Відео виходять приватними</b> — обмеження Google для API-проєктів без аудиту; подайте форму «YouTube API Services — Audit and Quota Extension».</li>
+        </ul></details>
+      <label class="f">client_secret.json <span id="ytSecret" class="pill"></span></label>
+      <div class="row"><input id="ytFile" type="file" accept=".json,application/json"><button class="btn" id="ytUpload">Завантажити</button></div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="ytAuth">🔑 Авторизувати YouTube</button><span id="ytJob" class="small"></span></div>
+      <h3>Публікація</h3>
+      <label class="check"><input type="checkbox" data-set="platforms.youtube.enabled"> Публікувати на YouTube</label>
+      <div class="two"><div><label class="f">Доступ до відео</label><select data-set="platforms.youtube.privacy">
+        <option value="public">Публічне</option><option value="unlisted">За посиланням</option><option value="private">Приватне</option></select></div>
+        <div><label class="f">Мова відео</label><select data-set="platforms.youtube.language">
+        <option value="uk">Українська</option><option value="en">English</option></select></div></div>
+      <label class="check"><input type="checkbox" data-set="platforms.youtube.add_shorts_hashtag"> Додавати #Shorts в опис</label>
+      <label class="check"><input type="checkbox" data-set="platforms.youtube.notify_subscribers"> Сповіщати підписників</label>
+      <div class="row"><button class="btn primary" data-save-settings>Зберегти</button></div>
+      <p class="muted small">Поки API-проєкт не пройшов аудит YouTube, завантажені через API відео стають приватними — це обмеження Google.</p>
+    </div>
+  </section>
+
+  <!-- ================= META ================= -->
+  <section data-page="meta" class="hidden">
+    <div class="card"><h2>📸 Instagram + Facebook <span id="metaStatus" class="pill"></span></h2>
+      <ol class="steps small"><li>Instagram — професійний акаунт (Автор), прив'язаний до сторінки Facebook.</li>
+        <li><a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener">developers.facebook.com</a> → Create App (Business) → скопіюйте App ID і App Secret сюди.</li>
+        <li><a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener">Graph API Explorer</a> → ваш застосунок → User Token з дозволами:
+          <code class="small">pages_show_list, pages_read_engagement, pages_manage_posts, read_insights, business_management, instagram_basic, instagram_content_publish, instagram_manage_insights</code> → Generate Access Token.</li>
+        <li>Вставте токен нижче → «Отримати сторінки» → оберіть сторінку. Панель збереже безстроковий токен сторінки.</li></ol>
+      <div class="two">
+        <div><label class="f">App ID</label><input type="text" data-secret="META_APP_ID"></div>
+        <div><label class="f">App Secret</label><div class="pw"><input type="password" data-secret="META_APP_SECRET" autocomplete="off"><button class="btn" data-toggle-pw>👁</button></div></div>
+      </div>
+      <div class="row" style="margin-top:10px"><button class="btn" data-save-secrets="meta">Зберегти ключі</button></div>
+      <label class="f">Короткий User Access Token з Graph API Explorer</label>
+      <div class="row"><input id="metaToken" type="password" autocomplete="off" style="flex:1"><button class="btn primary" id="metaGet">Отримати сторінки</button></div>
+      <div id="metaPages" class="hidden"><h3>Оберіть сторінку</h3><div id="metaList"></div>
+        <button class="btn primary" id="metaSelect">Підключити</button></div>
+      <p class="small">Сторінка: <b id="fbPage">—</b> · Instagram: <b id="igUser">—</b></p>
+      <h3>Публікація</h3>
+      <label class="check"><input type="checkbox" data-set="platforms.instagram.enabled"> Публікувати Instagram Reels</label>
+      <label class="check"><input type="checkbox" data-set="platforms.instagram.share_to_feed"> Показувати рілс також у стрічці профілю</label>
+      <label class="f">Файли, важчі за (МБ), відправляти в Instagram полегшеною копією 60 к/с ≤10 Мбіт/с</label>
+      <input type="number" min="10" max="1000" data-set="platforms.instagram.max_upload_mb" style="max-width:160px">
+      <p class="muted small">Instagram однаково стискає Reels до ~3–5 Мбіт/с, тож різниці не видно, а великі файли він часто відхиляє. YouTube і Facebook завжди отримують оригінал.</p>
+      <label class="check"><input type="checkbox" data-set="platforms.facebook.enabled"> Публікувати Facebook Reels на сторінку</label>
+      <div class="row"><button class="btn primary" data-save-settings>Зберегти</button></div>
+    </div>
+  </section>
+
+  <!-- ================= TIKTOK ================= -->
+  <section data-page="tt" class="hidden">
+    <div class="card"><h2>🎵 TikTok <span id="ttStatus" class="pill"></span></h2>
+      <ol class="steps small"><li><a href="https://developers.tiktok.com/apps/" target="_blank" rel="noopener">developers.tiktok.com</a> → Manage apps → Connect an app.</li>
+        <li>Products: <b>Login Kit</b> і <b>Content Posting API</b> (увімкніть Direct Post). Scopes: user.info.basic, video.publish, video.list.</li>
+        <li>Login Kit → платформа Desktop → Redirect URI як нижче. У Sandbox додайте свій акаунт як target user.</li>
+        <li>Скопіюйте Client key / Client secret сюди, збережіть і натисніть «Авторизувати».</li></ol>
+      <div class="two">
+        <div><label class="f">Client key</label><input type="text" data-secret="TIKTOK_CLIENT_KEY"></div>
+        <div><label class="f">Client secret</label><div class="pw"><input type="password" data-secret="TIKTOK_CLIENT_SECRET" autocomplete="off"><button class="btn" data-toggle-pw>👁</button></div></div>
+      </div>
+      <label class="f">Redirect URI (має збігатися з порталом TikTok)</label><input type="text" data-set="platforms.tiktok.redirect_uri">
+      <div class="row" style="margin-top:10px"><button class="btn" id="ttSave">Зберегти</button>
+        <button class="btn primary" id="ttAuth">🔑 Авторизувати TikTok</button><span id="ttJob" class="small"></span></div>
+      <div id="ttManual" class="hidden"><label class="f">Після входу вставте сюди повну адресу, на яку вас перенаправило</label>
+        <div class="row"><input id="ttUrl" type="text" style="flex:1"><button class="btn primary" id="ttFinish">Готово</button></div></div>
+      <h3>Публікація</h3>
+      <label class="check"><input type="checkbox" data-set="platforms.tiktok.enabled"> Публікувати в TikTok</label>
+      <label class="check"><input type="checkbox" data-set="platforms.tiktok.public"> Публічно (лише після аудиту застосунку TikTok; до того — приватно, відкриваєте вручну)</label>
+      <div class="row"><button class="btn primary" data-save-settings>Зберегти</button></div>
+    </div>
+  </section>
+
+  <!-- ================= ШІ ================= -->
+  <section data-page="ai" class="hidden">
+    <div class="card"><h2>🤖 Назви й хештеги від безкоштовного ШІ <span id="aiStatus" class="pill"></span></h2>
+      <p class="small">Для відео без json програма бере кілька кадрів із шортса і просить <b>Google Gemini</b> (безкоштовний тариф)
+        придумати назву, опис, хештеги та підписи для TikTok / Instagram. Поки ШІ не підключено або воно недоступне — назва береться з імені файлу.
+        У Telegram кнопка «🔄 Перегенерувати тексти» просить у ШІ новий варіант.</p>
+      <ol class="steps small"><li>Відкрийте <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio → Get API key</a>, увійдіть у Google-акаунт.</li>
+        <li>Натисніть <b>Create API key</b> і скопіюйте ключ сюди. Картка не потрібна.</li></ol>
+      <label class="f">Ключ Gemini API</label>
+      <div class="pw"><input type="password" data-secret="GEMINI_API_KEY" autocomplete="off"><button class="btn" data-toggle-pw>👁</button></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-secrets="ai">Зберегти ключ</button>
+        <button class="btn" data-act="ai_test">🧪 Спробувати на першому відео</button></div>
+      <pre id="aiJob" class="hidden"></pre>
+      <h3>Налаштування</h3>
+      <label class="check"><input type="checkbox" data-set="ai.enabled"> Використовувати ШІ для відео без json</label>
+      <div class="two"><div><label class="f">Кількість хештегів</label><input type="number" min="1" max="15" data-set="ai.hashtags_count"></div>
+        <div><label class="f">Модель Gemini</label><input type="text" data-set="ai.model"></div></div>
+      <div class="two"><div><label class="f">Мова текстів</label><select data-set="ai.language">
+        <option value="uk">Українська</option><option value="en">English (англомовний канал)</option></select></div></div>
+      <label class="f">Опис каналу (ШІ підлаштує стиль)</label><input type="text" data-set="ai.channel_description">
+      <label class="f">Додаткові побажання (необов'язково)</label>
+      <textarea data-set="ai.extra_prompt" rows="2" placeholder="Напр.: жартівливий тон, згадувати назву танка, якщо видно"></textarea>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
+      <p class="muted small">Безкоштовний тариф Google має ліміти запитів (кілька шортсів на день вкладаються з запасом).
+        Google може використовувати дані безкоштовного тарифу для покращення своїх сервісів — надсилаються лише кадри гри й назва файлу.</p>
+    </div>
+  </section>
+
+  <!-- ================= РОЗКЛАД ================= -->
+  <section data-page="sched" class="hidden">
+    <div class="card"><h2>🗓 Розклад</h2>
+      <label class="f">Слоти публікацій (до 6; порожні — не використовуються)</label>
+      <div class="slots" id="slotInputs"></div>
+      <div class="two">
+        <div><label class="f">Надсилати шортс у Telegram за, хв</label><input type="number" min="5" data-set="notify_before_minutes"></div>
+        <div><label class="f">Після скількох пропусків переносити в skipped/</label><input type="number" min="1" data-set="max_skips"></div>
+        <div><label class="f">Щоденний звіт о</label><input type="time" data-set="reports.daily_time"></div>
+        <div><label class="f">Перевірка токенів о</label><input type="time" data-set="reports.health_check_time"></div>
+        <div><label class="f">Перегляди через, год</label><input type="number" min="1" data-set="reports.stats_after_hours"></div>
+        <div><label class="f">Лідери тижня — у день</label><select data-set="reports.weekly_day">
+          <option value="0">понеділок</option><option value="1">вівторок</option><option value="2">середа</option>
+          <option value="3">четвер</option><option value="4">п'ятниця</option><option value="5">субота</option>
+          <option value="6">неділя</option></select></div>
+        <div><label class="f">Публікувати пізніше після вимкненого ПК, хв</label><input type="number" min="0" data-set="catchup_minutes"></div>
+        <div><label class="f">Спроб публікації</label><input type="number" min="1" max="10" data-set="retry.attempts"></div>
+        <div><label class="f">Пауза між спробами, с</label><input type="number" min="0" data-set="retry.pause_seconds"></div>
+        <div><label class="f">Часовий пояс</label><input type="text" data-set="timezone"></div>
+      </div>
+      <label class="check"><input type="checkbox" data-set="ask_texts_before_publish"> Після «🚀 Опублікувати» бот питає <b>назву й хештеги</b> — публікація лише після відповіді</label>
+      <label class="check"><input type="checkbox" data-set="telegram.queue_cards"> Щойно шортс став у чергу — показати його в Telegram карткою з відео (час публікації, «обрати час», «першим», «скасувати»)</label>
+      <label class="check"><input type="checkbox" data-set="publish_on_approve"> Публікувати одразу після підтвердження (а не в час слоту)</label>
+    </div>
+    <div class="card"><h2>💤 Сон між слотами (щоб ПК не працював цілодобово)</h2>
+      <p class="small">ПК <b>спить</b> і сам прокидається за кілька хвилин до кожної публікації (і до щоденного звіту).
+        Поки шортс чекає на «🚀 Опублікувати» або публікується — ПК <b>не засне</b>. Коли все зроблено, а ПК розбудила програма
+        і ніхто ним не користувався, — програма сама приспить його. Якщо ж ви за комп'ютером, він засне за звичайними
+        налаштуваннями сну Windows (раджу «Переводити в сон через 30 хв»).</p>
+      <label class="check"><input type="checkbox" data-set="power.sleep_between_slots"> Увімкнути сон між слотами</label>
+      <div class="two">
+        <div><label class="f">Прокидатися за, хв до публікації</label><input type="number" min="3" max="60" data-set="power.wake_before_minutes"></div>
+        <div><label class="f">Засинати не раніше ніж через, хв після публікації / вашої дії в боті</label><input type="number" min="1" max="120" data-set="power.quiet_minutes"></div>
+      </div>
+      <h3>🎮 Стрім і гра</h3>
+      <p class="small">Поки запущена будь-яка з цих програм — ПК <b>не засне</b> (ні сам, ні через програму). Також у боті є кнопка «🎮 Стрім» — не спати N годин.</p>
+      <label class="f">Програми (через кому)</label><textarea data-set="power.no_sleep_apps" rows="2"></textarea>
+      <label class="check"><input type="checkbox" data-set="power.hold_during_stream"> Під час стріму <b>не публікувати</b> — відкласти до його завершення (щоб завантаження не забирало інтернет у стріму)</label>
+      <label class="f">Якщо я не підтвердив шортс до часу слоту</label>
+      <select data-set="on_missed_approval">
+        <option value="wait">⏳ Чекати — опублікувати одразу після «🚀» (ПК не засне, поки не опублікує)</option>
+        <option value="auto">🚀 Опублікувати автоматично з поточною назвою й хештегами</option>
+        <option value="skip">⏭ Пропустити — шортс у кінець черги</option></select>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button>
+        <button class="btn" data-act="power_allow">⏰ Дозволити таймери пробудження у Windows</button></div>
+      <p class="muted small">Важливо: ПК має бути у <b>сні</b>, а не вимкнений. Кнопку «Дозволити таймери пробудження» натисніть один раз
+        (або вручну: Електроживлення → Змінити параметри схеми → Додаткові → Сон → Дозволити таймери пробудження → Увімкнути).
+        Ноутбук із закритою кришкою прокинеться лише якщо в налаштуваннях кришки обрано «Сон».</p>
+    </div>
+    <div class="card"><h2>#️⃣ Обов'язкові хештеги</h2>
+      <p class="muted small">Завжди додаються в кінець назви — незалежно від того, що введено в Telegram. Дублі прибираються;
+        якщо назва YouTube виходить довшою за 100 символів, скорочується текст, а не хештеги.</p>
+      <label class="f">Хештеги (через пробіл)</label>
+      <input type="text" data-set="always_hashtags.tags" placeholder="#wot #wotua #mrantibiotik #танки">
+      <label class="check"><input type="checkbox" data-set="always_hashtags.in_title"> У назві YouTube</label>
+      <label class="check"><input type="checkbox" data-set="always_hashtags.in_captions"> У підписах TikTok / Instagram / Facebook</label>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
+    </div>
+    <div class="card"><h2>✍️ Підпис каналу</h2>
+      <p class="muted small">Постійний рядок під кожним відео: в опис YouTube і в підписи TikTok / Instagram / Facebook (перед хештегами).
+        Наприклад: «🇺🇦 Ukrainian veteran on the road to 1000 subscribers — subscribe to support 🛡️♥️». Порожньо — без підпису.</p>
+      <label class="f">Текст підпису</label><input type="text" data-set="footer.text">
+      <label class="check"><input type="checkbox" data-set="footer.in_description"> В описі YouTube</label>
+      <label class="check"><input type="checkbox" data-set="footer.in_captions"> У підписах TikTok / Instagram / Facebook</label>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
+    </div>
+    <div class="card"><h2>🏷 Тексти для відео без json</h2>
+      <p class="muted small">Якщо поруч із відео немає json, програма створить його сама: <b>назва — з імені файлу</b>
+        (наприклад «бій_на_прохорівці.mp4» → «Бій на прохорівці»; безликі назви на кшталт «2026-11-10 21-33.mp4» → «WoT — епічний момент 🔥»),
+        хештеги — за папкою гри. Перед публікацією назву можна змінити кнопкою «✏️ Ввести назву вручну» в Telegram.</p>
+      <label class="check"><input type="checkbox" data-set="auto_meta.enabled"> Публікувати відео без json (створювати тексти автоматично)</label>
+      <label class="f">Хештеги за грою — один рядок на гру: «Назва папки гри: #тег #тег». Рядок «*» — для всіх інших.</label>
+      <textarea data-set="auto_meta.hashtags" rows="4" placeholder="WoT: #wot #worldoftanks #танки #shorts&#10;*: #shorts #gaming"></textarea>
+      <label class="f">Назва для безликих файлів ({game} — гра; порожньо — «WoT — епічний момент 🔥»)</label>
+      <input type="text" data-set="auto_meta.default_title" placeholder="{game} — insane moment 🔥">
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button></div>
+    </div>
+    <div class="card"><h2>📂 Папки й інструменти</h2>
+      <label class="f">Готові шортси (усередині — папки ігор: &lt;Гра&gt;/відео.mp4; json — необов'язково)</label>
+      <div class="pw"><input type="text" data-set="paths.ready"><button class="btn" data-pick="paths.ready">📂 Обрати…</button></div>
+      <div class="two"><div><label class="f">Опубліковані</label><div class="pw"><input type="text" data-set="paths.posted"><button class="btn" data-pick="paths.posted" title="Обрати папку">📂</button></div></div>
+        <div><label class="f">Пропущені</label><div class="pw"><input type="text" data-set="paths.skipped"><button class="btn" data-pick="paths.skipped" title="Обрати папку">📂</button></div></div>
+        <div><label class="f">Скасовані</label><div class="pw"><input type="text" data-set="paths.cancelled"><button class="btn" data-pick="paths.cancelled" title="Обрати папку">📂</button></div></div></div>
+      <label class="f">Статус у json, що означає «готово»</label><input type="text" data-set="ready_status">
+      <label class="f">Команда «Перегенерувати тексти» (підстановки {mp4}, {json}, {game})</label>
+      <input type="text" data-set="regenerate_command" placeholder='python D:/Shorts/generate_meta.py --force {mp4}'>
+      <label class="f">Робоча папка цієї команди</label>
+      <div class="pw"><input type="text" data-set="regenerate_cwd"><button class="btn" data-pick="regenerate_cwd" title="Обрати папку">📂</button></div>
+      <div class="two"><div><label class="f">ffmpeg</label><input type="text" data-set="ffmpeg"></div>
+        <div><label class="f">ffprobe</label><input type="text" data-set="ffprobe"></div></div>
+      <label class="f">Версія Graph API (Meta)</label><input type="text" data-set="graph_api_version" style="max-width:160px">
+      <h2 style="margin-top:18px">🎞 Хайлайти (довгі відео від shorts-autocut)</h2>
+      <p class="muted">Окрема черга: свій час публікації, лише YouTube як звичайне відео (не Shorts), шортси не зсуваються.
+        Підтвердження — у боті, як для шортсів (підпис «🎞 ХАЙЛАЙТ»).</p>
+      <label class="check"><input type="checkbox" data-set="highlights.enabled"> Публікувати хайлайти</label>
+      <label class="f">Папка хайлайтів (порожньо — Робочий стіл\Хайлайти, туди їх кладе shorts-autocut)</label>
+      <div class="pw"><input type="text" data-set="highlights.folder" placeholder="Робочий стіл\Хайлайти"><button class="btn" data-pick="highlights.folder" title="Обрати папку">📂</button></div>
+      <div class="two"><div><label class="f">Час публікації (1–3 через кому)</label><input type="text" data-set="highlights.slots" placeholder="18:00"></div>
+        <div><label class="f">Видимість на YouTube</label><select data-set="highlights.privacy">
+          <option value="">як у шортсів</option><option value="public">публічне</option>
+          <option value="unlisted">за посиланням</option><option value="private">приватне</option></select></div></div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" data-save-settings>Зберегти розклад і папки</button></div>
+    </div>
+  </section>
+
+  <!-- ================= ЖУРНАЛ ================= -->
+
+  <!-- ================= EN-КАНАЛ ================= -->
+  <section data-page="chan" class="hidden">
+    <div class="card"><h2>🇬🇧 Англомовний канал <span id="chStatus" class="pill"></span></h2>
+      <p class="small">Окремий канал зі <b>своєю чергою, розкладом і акаунтами</b> (YouTube, TikTok, Instagram, Facebook) —
+        напр. для англомовних шортсів з реплеїв. Код спільний з цим каналом, а налаштування, токени й база лежать окремо
+        в папці <code id="chDir">channels\en</code>. Шортси з цієї папки сюди не потрапляють, і навпаки.</p>
+      <div id="chCreate" class="hidden">
+        <label class="f">Папка готових англомовних шортсів (можна змінити пізніше; порожньо — channels\en\ready)</label>
+        <input type="text" id="chReady" placeholder="C:\ShortsTool\output_en">
+        <p class="muted small">Стартові налаштування: розклад за часом Нью-Йорка (11:00, 14:00, 17:00, 19:30, 21:30), тексти ШІ англійською,
+          хештеги #worldoftanks #wot #shorts, підпис «🇺🇦 Ukrainian veteran on the road to 1000 subscribers — subscribe to support 🛡️♥️».
+          Публікація спершу лише на YouTube — інші платформи вмикаються в панелі каналу.</p>
+        <div class="row" style="margin-top:10px"><button class="btn primary" data-ch="create">➕ Створити EN-канал</button></div>
+      </div>
+      <div id="chMain" class="hidden">
+        <table class="small" style="margin:8px 0">
+          <tr><td>Бот каналу</td><td id="chBot"></td></tr>
+          <tr><td>Telegram</td><td id="chTg"></td></tr>
+          <tr><td>YouTube</td><td id="chYt"></td></tr>
+          <tr><td>Платформи</td><td id="chPlat"></td></tr>
+          <tr><td>Розклад</td><td id="chSlots"></td></tr>
+          <tr><td>Папка шортсів</td><td><code id="chReadyNow"></code></td></tr>
+          <tr><td>Підпис</td><td id="chFooter"></td></tr>
+        </table>
+        <div class="row">
+          <button class="btn primary" data-ch="panel">⚙️ Відкрити панель каналу</button>
+          <button class="btn" data-ch="start" id="chStart">▶️ Запустити бота каналу</button>
+          <button class="btn" data-ch="stop" id="chStop">⏹ Зупинити</button>
+        </div>
+        <label class="check"><input type="checkbox" id="chAuto"> Запускати разом з основним ботом (і перезапускати після оновлень)</label>
+        <h3>Перше налаштування — у панелі каналу</h3>
+        <ol class="steps small">
+          <li>«⚙️ Відкрити панель каналу» → створіть пароль (окремий від цієї панелі).</li>
+          <li>«✈️ Telegram і доступ»: <b>новий бот</b> у @BotFather (два канали не можуть ділити одного бота). Ваш chat_id уже підставлено.</li>
+          <li>«▶️ YouTube» → «Авторизувати» → у вікні Google <b>виберіть англомовний канал</b> (бренд-акаунт). client_secret.json — той самий, що тут.</li>
+          <li>За бажанням: «📸 Instagram + Facebook» і «🎵 TikTok» — окремі англомовні акаунти, потім увімкніть їх на «🏠 Головна».</li>
+          <li>«🗓 Розклад і папки»: папка з англомовними шортсами (туди складає їх автонарізка реплеїв), слоти, підпис каналу.</li>
+          <li>Поверніться сюди і натисніть «▶️ Запустити бота каналу».</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section data-page="log" class="hidden">
+    <div class="card"><h2>📄 Журнал (останні рядки)</h2>
+      <div class="row"><label class="check" style="margin:0"><input type="checkbox" id="logFollow" checked> Оновлювати автоматично</label>
+        <label class="check" style="margin:0"><input type="checkbox" id="logErr"> Лише помилки й попередження</label>
+        <input type="text" id="logFind" placeholder="Пошук, напр. Instagram" style="max-width:220px">
+        <button class="btn" data-open="log">Відкрити log.txt</button><button class="btn" data-open="folder">📂 Папка програми</button></div>
+      <pre id="logBox" style="max-height:70vh"></pre></div>
+  </section>
+
+  <!-- ================= БЕЗПЕКА ================= -->
+  <section data-page="upd" class="hidden">
+    <div class="card"><h2>🔄 Оновлення програми <span id="updStatus" class="pill"></span></h2>
+      <p class="small">Програма кожні кілька хвилин перевіряє GitHub і, коли нічим не зайнята (нічого не публікується, ви 5 хв не клацали в боті),
+        завантажує нову версію й перезапускається. Ваші налаштування, токени, база й журнал <b>не змінюються</b>;
+        перед оновленням поточна версія зберігається повністю (папка <code>data\versions</code>).</p>
+      <div class="row"><span>У вас: <b id="updLocal"></b></span><span>На GitHub: <b id="updRemote">—</b></span></div>
+      <label class="check"><input type="checkbox" data-set="updates.auto"> Оновлюватися автоматично</label>
+      <div class="two"><div><label class="f">Перевіряти кожні, хв</label><input type="number" min="60" max="1440" data-set="updates.check_minutes"></div></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-settings>Зберегти</button>
+        <button class="btn" data-act="update_check">🔍 Перевірити зараз</button>
+        <button class="btn" data-act="update_now" id="bUpdNow">⬆️ Оновити зараз</button></div>
+      <pre id="updJob" class="hidden"></pre>
+      <h3>🕘 Історія версій</h3>
+      <p class="small">Перед кожним оновленням поточна версія зберігається повністю (папка <code>data\versions</code>),
+        тож можна повернутись на будь-яку. Після відкату автооновлення стає на паузу — «⬆️ Оновити зараз» поверне останню версію.</p>
+      <div class="row"><button class="btn" id="bVersions">Показати версії</button></div>
+      <div id="verList"></div>
+      <h3>Доступ до приватного репозиторію</h3>
+      <p class="small">Репозиторій приватний, тож потрібен токен GitHub лише на читання:</p>
+      <ol class="steps small">
+        <li>Відкрийте <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → Fine-grained token</a>.</li>
+        <li>Назва — <b>poster-update</b>, термін — до року. <b>Repository access</b> → Only select repositories → <b>poster</b>.</li>
+        <li><b>Permissions</b> → Repository permissions → <b>Contents: Read-only</b> (більше нічого). Generate token, скопіюйте сюди.</li></ol>
+      <label class="f">Токен GitHub</label>
+      <div class="pw"><input type="password" data-secret="GITHUB_TOKEN" autocomplete="off"><button class="btn" data-toggle-pw>👁</button></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-save-secrets="upd">Зберегти токен</button></div>
+    </div>
+  </section>
+
+  <section data-page="sec" class="hidden">
+    <div class="card"><h2>🔐 Пароль панелі</h2>
+      <div class="two"><div><label class="f">Поточний пароль</label><input id="oldPw" type="password" autocomplete="current-password"></div>
+        <div><label class="f">Новий пароль</label><input id="newPw" type="password" autocomplete="new-password"></div></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" id="chPw">Змінити пароль</button></div>
+      <p class="muted small">Забули пароль? Закрийте панель і виконайте <code>python poster.py panel-reset</code> у папці програми.</p></div>
+    <div class="card"><h2>Сеанс</h2>
+      <p class="muted small">Панель доступна лише з цього комп'ютера (127.0.0.1). Токени зберігаються у файлі .env поруч із програмою — не завантажуйте його на GitHub.</p>
+      <div class="row"><button class="btn" id="logout">Вийти</button><button class="btn danger" id="shutdown">Закрити панель</button></div></div>
+  </section>
+</main>
+</div>
+<div class="modal hidden" id="fsModal" role="dialog" aria-modal="true" aria-labelledby="fsTitle">
+  <div class="card">
+    <h2 id="fsTitle">📂 Оберіть папку</h2>
+    <div class="row small"><span class="muted">Диски:</span><span id="fsDrives" class="row"></span><button class="btn" id="fsHome">🏠 Домашня</button></div>
+    <div class="fspath" id="fsPath" style="margin-top:8px"></div>
+    <div class="fslist" id="fsList"></div>
+    <div class="small" id="fsInfo"></div>
+    <div class="row" style="margin-top:8px"><input id="fsNew" type="text" placeholder="Нова папка" style="max-width:200px"><button class="btn" id="fsMk">+ Створити</button></div>
+    <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn" id="fsCancel">Скасувати</button><button class="btn primary" id="fsOk">Обрати цю папку</button></div>
+  </div>
+</div>
+<div class="modal hidden" id="itemModal" role="dialog" aria-modal="true" aria-labelledby="imTitle">
+  <div class="card">
+    <h2 id="imTitle">🎬 Шортс</h2>
+    <video id="imVideo" controls preload="metadata" playsinline></video>
+    <label class="f" for="imName">Назва (до 100 символів)</label>
+    <input type="text" id="imName" maxlength="100">
+    <div class="small muted" id="imAlways"></div>
+    <label class="f" for="imTags">Хештеги через пробіл (можна без #; «-» — без хештегів)</label>
+    <input type="text" id="imTags">
+    <label class="f" for="imWhen">Коли публікувати</label>
+    <select id="imWhen"></select>
+    <input type="datetime-local" id="imCustom" class="hidden" style="margin-top:6px">
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button class="btn" id="imCancel">Скасувати</button>
+      <button class="btn" id="imSave">💾 Зберегти</button>
+      <button class="btn primary" id="imPub">🚀 Підтвердити публікацію</button></div>
+    <p class="muted small" id="imNote"></p>
+  </div>
+</div>
+<div class="modal hidden" id="detModal" role="dialog" aria-modal="true">
+  <div class="card"><div class="out" id="detBody" style="max-height:70vh"></div>
+    <div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn" id="detClose">Закрити</button></div></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="/static/panel.js"></script>
+</body>
+</html>

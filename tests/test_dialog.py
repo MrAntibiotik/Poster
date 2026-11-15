@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from meta import load_meta, parse_hashtags  # noqa: E402
+from app.core.meta import load_meta, parse_hashtags  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 

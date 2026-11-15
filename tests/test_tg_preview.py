@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import media
+from app.core import media
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "потрібен ffmpeg")

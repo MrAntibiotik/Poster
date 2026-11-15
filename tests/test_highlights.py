@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import config  # noqa: E402
-from config import load_config  # noqa: E402
+from app.core import config  # noqa: E402
+from app.core.config import load_config  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 
@@ -114,7 +114,7 @@ class HighlightTest(FlowBase):
         self.assertIn("Крок 3/3", self.app.bot.tg.sent[-1][1])  # далі — час публікації
 
     def test_extra_channel_never_takes_highlights(self):
-        import config as C
+        from app.core import config as C
         raw = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
         self.make_highlight("h1")
         self.app.scheduler.scan()
@@ -155,8 +155,8 @@ class HighlightTest(FlowBase):
 
 class YouTubeHighlightBody(unittest.TestCase):
     def test_regular_video_no_shorts(self):
-        from meta import PostMeta
-        from platforms.youtube import YouTube
+        from app.core.meta import PostMeta
+        from app.platforms.youtube import YouTube
         cfg = {"platforms": {"youtube": {"privacy": "private", "add_shorts_hashtag": True, "category_id": "20"}},
                "paths": {"tokens": "/tmp"}, "secrets": {},
                "highlights": {"privacy": "unlisted", "category_id": "20"}}

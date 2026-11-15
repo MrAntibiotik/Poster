@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import power  # noqa: E402
+from app.system import power  # noqa: E402
 
 _orig_procs = power.running_processes
 from tests.test_flow import FlowBase  # noqa: E402

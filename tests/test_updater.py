@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import updater  # noqa: E402
+from app.system import updater  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 
@@ -74,14 +74,125 @@ class UpdaterTest(unittest.TestCase):
         self.assertTrue((self.root / "platforms" / "new.py").exists())
         self.assertEqual((self.root / ".env").read_text(encoding="utf-8"), "TELEGRAM_BOT_TOKEN=mine\n")
         self.assertFalse((self.root.parent / "escape.py").exists())
-        backups = list((self.root / "data" / "backup").rglob("poster.py"))
-        self.assertEqual(backups[0].read_text(), "# old\n")
+        from app.core.config import VERSION
+        self.assertEqual((self.root / "data" / "versions" / VERSION / "poster.py").read_text(), "# old\n")
+
+
+def zip_of(version: str, files: dict) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("o-poster-1/poster.py", "# poster\n")
+        z.writestr("o-poster-1/config.py", f'VERSION = "{version}"\n')
+        for k, v in files.items():
+            z.writestr("o-poster-1/" + k, v)
+    return buf.getvalue()
+
+
+class HistoryTest(unittest.TestCase):
+    """Історія версій: повні копії, прибирання зайвих файлів, відкат на будь-яку версію, пауза автооновлення."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "poster.py").write_text("# old\n", encoding="utf-8")
+        (self.root / "bot.py").write_text("# old root module\n", encoding="utf-8")
+        (self.root / ".env").write_text("X=1\n", encoding="utf-8")
+        (self.root / "channels" / "en").mkdir(parents=True)
+        (self.root / "channels" / "en" / "notes.py").write_text("# user\n", encoding="utf-8")
+        (self.root / "data").mkdir()
+        (self.root / "config.json").write_text('{"updates": {"auto": true}}', encoding="utf-8")
+        self.cfg = {"paths": {"data": str(self.root / "data")}, "secrets": {}, "updates": {"auto": True},
+                    "config_path": str(self.root / "config.json")}
+        self._get = updater.requests.get
+        from app.core import config
+        self._ver = config.VERSION
+
+    def tearDown(self):
+        updater.requests.get = self._get
+        from app.core import config
+        config.VERSION = self._ver
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def install(self, version, files):
+        from app.core import config
+        updater.requests.get = lambda url, **kw: Resp(200, content=zip_of(version, files))
+        got = updater.apply(self.cfg, root=self.root)
+        config.VERSION = got          # «перезапуск» на нову версію
+        return got
+
+    def test_full_history_and_switch(self):
+        from app.core import config
+        first = config.VERSION
+        self.install("2099.01.01-1", {"app/a.py": "a1", "app/b.py": "b1"})
+        self.assertTrue((self.root / "data" / "versions" / first / "bot.py").exists())   # повна копія старої
+        self.assertFalse((self.root / "data" / "versions" / first / "channels").exists())  # дані каналів — не код
+        self.install("2099.01.01-2", {"app/a.py": "a2"})
+        self.assertFalse((self.root / "app" / "b.py").exists())      # файл, якого в новій версії немає, прибрано
+        self.assertEqual((self.root / "app" / "a.py").read_text(), "a2")
+        self.assertEqual(updater.local_versions(self.cfg), ["2099.01.01-1", first])
+        # відкат на -1 з локальної копії
+        updater.switch_to(self.cfg, "2099.01.01-1", root=self.root)
+        config.VERSION = "2099.01.01-1"
+        self.assertEqual((self.root / "app" / "b.py").read_text(), "b1")
+        self.assertEqual((self.root / "app" / "a.py").read_text(), "a1")
+        self.assertTrue((self.root / ".env").exists())
+        self.assertTrue((self.root / "channels" / "en" / "notes.py").exists())
+        import json
+        up = json.loads((self.root / "config.json").read_text(encoding="utf-8"))["updates"]
+        self.assertEqual((up["auto"], up["pinned"]), (False, "2099.01.01-1"))   # автооновлення на паузі
+        # тепер -2 є в історії — можна повернутись вперед
+        self.assertIn("2099.01.01-2", updater.local_versions(self.cfg))
+        updater.switch_to(self.cfg, "2099.01.01-2", root=self.root)
+        self.assertEqual((self.root / "app" / "a.py").read_text(), "a2")
+        self.assertFalse((self.root / "app" / "b.py").exists())
+        updater.set_auto_paused(self.cfg, None)                        # «Оновити» — пауза знімається
+        up = json.loads((self.root / "config.json").read_text(encoding="utf-8"))["updates"]
+        self.assertEqual(up, {"auto": True})
+
+    def test_switch_to_tag_from_github(self):
+        urls = []
+
+        def get(url, **kw):
+            urls.append(url)
+            return Resp(200, content=zip_of("2098.05.05-3", {"app/x.py": "x"}))
+        updater.requests.get = get
+        updater.switch_to(self.cfg, "2098.05.05-3", root=self.root)
+        self.assertTrue(urls[0].endswith("/zipball/v2098.05.05-3"))
+        self.assertEqual((self.root / "app" / "x.py").read_text(), "x")
+        updater.requests.get = lambda url, **kw: Resp(200, content=zip_of("2098.05.05-4", {}))
+        with self.assertRaisesRegex(updater.UpdateError, "знайдено версію"):
+            updater.switch_to(self.cfg, "2098.05.05-9", root=self.root)
+
+    def test_cleanup_legacy_root_modules(self):
+        (self.root / "app").mkdir()
+        (self.root / "app" / "__init__.py").write_text("", encoding="utf-8")
+        (self.root / "platforms").mkdir()
+        (self.root / "platforms" / "youtube.py").write_text("# old\n", encoding="utf-8")
+        self.assertEqual(updater.cleanup_legacy(self.cfg, root=self.root), 2)
+        self.assertFalse((self.root / "bot.py").exists())
+        self.assertFalse((self.root / "platforms").exists())
+        legacy = self.root / "data" / "versions" / "legacy-root"
+        self.assertTrue((legacy / "platforms" / "youtube.py").exists())
+        self.assertTrue((self.root / "poster.py").exists())
+        self.assertEqual(updater.cleanup_legacy(self.cfg, root=self.root), 0)    # вдруге — нічого
+        self.assertIn("poster.py", updater.installed_files(self.cfg, self.root))
+
+    def test_changelog_and_version_list(self):
+        (self.root / "CHANGELOG.md").write_text("# Історія\n\n## 2099.01.01-2\n- Нове\n- Ще\n\n## 2099.01.01-1\n- Перше\n",
+                                               encoding="utf-8")
+        self.assertEqual(updater.changelog(self.root)["2099.01.01-2"], ["Нове", "Ще"])
+        updater.requests.get = lambda url, **kw: Resp(200, content=b"") if False else type(
+            "R", (), {"status_code": 200, "json": lambda self: [{"name": "v2099.01.01-1"}, {"name": "junk"}]})()
+        vl = updater.version_list(self.cfg, root=self.root)
+        got = {v["version"]: v for v in vl}
+        self.assertTrue(got["2099.01.01-1"]["remote"])
+        self.assertEqual(got["2099.01.01-1"]["notes"], ["Перше"])
+        self.assertTrue(any(v.get("current") for v in vl))
 
 
 class RollbackTest(UpdaterTest):
     def test_rollback_restores_backup(self):
         updater.requests.get = lambda url, **kw: Resp(200, content=make_zip("2099.01.01-1"))
-        from config import VERSION
+        from app.core.config import VERSION
         updater.apply(self.cfg, root=self.root)
         self.assertEqual((self.root / "poster.py").read_text(), "# new poster\n")
         n = updater.rollback(self.cfg, VERSION, root=self.root)
@@ -92,7 +203,7 @@ class RollbackTest(UpdaterTest):
             updater.rollback(self.cfg, "1999.01.01-1", root=self.root)
 
     def test_wait_new_boot(self):
-        import poster
+        from app import cli as poster
 
         class DB(dict):
             def get(self, k, d=None):
@@ -170,3 +281,11 @@ class AutoUpdateFlowTest(FlowBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleaseTest(unittest.TestCase):
+    def test_changelog_has_current_version(self):
+        """Кожен реліз — із записом у CHANGELOG.md (його показує список версій у боті й панелі)."""
+        from app.core.config import VERSION
+        notes = updater.changelog(Path(__file__).resolve().parents[1])
+        self.assertTrue(notes.get(VERSION), f"додайте розділ «## {VERSION}» у CHANGELOG.md")

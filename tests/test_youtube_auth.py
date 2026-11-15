@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 import google_auth_oauthlib.flow as gflow  # noqa: E402
 
-from platforms.youtube import YouTube  # noqa: E402
+from app.platforms.youtube import YouTube  # noqa: E402
 
 URL = "https://accounts.google.com/o/oauth2/auth?x=1"
 
