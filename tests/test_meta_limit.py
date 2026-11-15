@@ -173,3 +173,30 @@ class StaggerAndMissingTest(FlowBase):
         self.app.scheduler.scan()
         self.assertEqual(self.app.db.get_item(it["id"])["status"], "missing")
         self.assertIn(555, self.app.bot.tg.deleted)
+
+
+class GoneStatsTest(FlowBase):
+    def test_deleted_video_not_asked_again(self):
+        from app.insights.reports import collect
+        from app.core import config
+        self.cfg["dry_run"] = False
+
+        class P:
+            calls = 0
+
+            def get_stats(self, res):
+                P.calls += 1
+                raise RuntimeError("Meta (100/33): Unsupported get request. Object with ID '9' does not exist")
+
+            def account_stats(self):
+                return {}
+        self.app.platforms = {"facebook": P()}
+        now = self.ts(11, "12:00")
+        config.FAKE_NOW = now
+        self.app.db.x("INSERT INTO items(mp4, json, status, posted_at, results, added_at, qpos) VALUES (?,?,?,?,?,?,?)",
+                      ("/x/a.mp4", "/x/a.json", "posted", now - 3600,
+                       json.dumps({"facebook": {"status": "ok", "id": "9"}}), now - 7200, 1))
+        collect(self.app)
+        config.FAKE_NOW = now + 8 * 3600
+        collect(self.app)
+        self.assertEqual(P.calls, 1)

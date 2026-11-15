@@ -160,6 +160,12 @@ def daily_report(app, now: int | None = None, stats: dict | None = None) -> str:
     return "\n".join(lines)
 
 
+def is_gone(e: Exception) -> bool:
+    """Відео видалено / недоступне на платформі (Meta 100/33, YouTube videoNotFound)."""
+    s = str(e)
+    return "(100/33)" in s or "does not exist" in s or "videoNotFound" in s or "HTTP 404" in s
+
+
 def send_stats(app, item: dict) -> None:
     """Перегляди через 24 год: повідомлення в Telegram + запис у json."""
     from app.core.meta import load_meta
@@ -275,6 +281,8 @@ def collect(app, days: int = 8) -> dict:
                 continue
             if not recent and not snapshot_due(db, item, key, now):
                 continue  # старі відео: знімок щотижня / щомісяця — для аналітики за 3–12 міс.
+            if db.get(f"statsgone:{item['id']}:{key}"):
+                continue   # відео на платформі вже немає (видалене) — не питаємо щоразу
             fresh = db.one("SELECT views, likes, comments FROM post_stats WHERE item_id=? AND platform=? AND ts>? "
                            "ORDER BY ts DESC LIMIT 1", (item["id"], key, now - POST_FRESH))
             if fresh or key in limited:   # свіже вже є (або платформа обмежила запити) — беремо з бази
@@ -290,7 +298,11 @@ def collect(app, days: int = 8) -> dict:
                 out["errors"][key] = str(e)[:150]
                 st = {}
             except Exception as e:  # noqa: BLE001
-                log.warning("Статистика #%s %s: %s", item["id"], key, e)
+                if is_gone(e):
+                    db.set(f"statsgone:{item['id']}:{key}", 1)
+                    log.info("Статистика #%s %s: відео на платформі більше немає — далі не перевіряю", item["id"], key)
+                else:
+                    log.warning("Статистика #%s %s: %s", item["id"], key, e)
                 st = {}
             if st:
                 db.x("INSERT INTO post_stats(item_id, platform, ts, views, likes, comments) VALUES (?,?,?,?,?,?)",

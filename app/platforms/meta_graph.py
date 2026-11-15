@@ -302,7 +302,8 @@ class Instagram(_MetaBase):
             # 400 від rupload буває хибною: файл дійшов і обробляється. Повторно в той самий контейнер НЕ шлемо —
             # друга відправка ламає обробку («Video Transcoding Error: both HD and SD progressive failed»).
             upload_error = e
-            log.warning("Instagram rupload: %s — перевіряю, чи відео все одно обробляється", e)
+            # часто хибна відповідь: файл дійшов і обробляється. Справжня помилка буде в підсумку публікації
+            log.info("Instagram rupload: %s — перевіряю, чи відео все одно обробляється", short_error(e))
 
         start = time.time()
         deadline = start + (3 * 60 if upload_error else 20 * 60)
