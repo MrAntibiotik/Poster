@@ -210,7 +210,7 @@ class InstagramSpecTest(Base):
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
         self.media.ig_problems = lambda p: []
         routes = self.routes(self.fail())
-        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 30
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 12
                      + [Resp({"status_code": "FINISHED"})])
         f = self.http(meta_graph, routes)
         clock = [1000.0]
@@ -221,7 +221,7 @@ class InstagramSpecTest(Base):
             r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         finally:
             meta_graph.time = orig
-        self.assertEqual(r["id"], "M1")  # 30 × 10 с = 5 хв обробки — дочекались
+        self.assertEqual(r["id"], "M1")  # 12 перевірок (20 с, потім щохвилини) ≈ 10 хв обробки — дочекались
         self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)  # той самий файл удруге не шлемо
 
     def test_processing_failed_retries_with_copy(self):

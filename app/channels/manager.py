@@ -233,6 +233,11 @@ def autostart_all(main_cfg: dict) -> None:
             st = status(key)
             if st["autostart"] and st["telegram_ready"] and not st["running"]:
                 ok = start(key, wait=20)
+                for _ in range(40):   # бот каналу інколи стартує довше (щойно перезапущений після оновлення)
+                    if ok:
+                        break
+                    time.sleep(1)
+                    ok = control.is_running(st["lock_port"])
                 log.info("Канал %s: %s", key, "запущено" if ok else "не запустився (див. його log.txt)")
         except Exception as e:  # noqa: BLE001
             log.warning("Канал %s не запущено: %s", key, e)

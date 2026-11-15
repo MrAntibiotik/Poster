@@ -138,8 +138,11 @@ class Graph:
         pct, regain = _read_usage(r)
         if pct:
             _save_limit(usage=pct, usage_ts=time.time())
-            if pct >= 90:
-                log.warning("Meta: використано %s%% годинної квоти запитів", pct)
+            st = _limit_state()
+            if pct >= 90 and (pct >= int(st.get("warned_pct") or 0) + 5 or time.time() - float(st.get("warned_ts") or 0) > 1800):
+                _save_limit(warned_pct=pct, warned_ts=time.time())   # без спаму: раз на +5% або раз на 30 хв
+                log.warning("Meta: використано %s%% годинної квоти запитів — публікації сповільнюються, "
+                            "статистика відкладена", pct)
         try:
             j = r.json()
         except ValueError:
@@ -349,7 +352,12 @@ class Instagram(_MetaBase):
                     raise PublishError(f"{upload_error}{self._container_reason(g, cid)} (чекали {waited} хв)")
                 raise PublishError("Instagram: обробка відео триває понад 20 хв")
             # перевіряємо рідше, що довше обробка: кожен запит з'їдає годинну квоту Meta; «Стоп» — щосекунди
-            for _ in range(15 if time.time() - start < 120 else 30):
+            # квота Meta ≈200 запитів/год на весь додаток: опитування раз на 20 с, потім раз на хвилину,
+            # а при квоті ≥80% — раз на 2 хв
+            pause = 20 if time.time() - start < 120 else 60
+            if usage_pct() >= 80:
+                pause = 120
+            for _ in range(pause):
                 self._check_stop()
                 time.sleep(1)
 
@@ -452,7 +460,7 @@ class Facebook(_MetaBase):
                 raise PublishError(f"Facebook відхилив відео: {errs}")
             if pub == "complete" or st.get("video_status") == "ready":
                 return out
-            time.sleep(20)  # кожен запит — з годинної квоти Meta
+            time.sleep(30 if usage_pct() < 80 else 120)  # кожен запит — з годинної квоти Meta
         out["note"] = "Facebook ще обробляє відео — з'явиться на сторінці трохи пізніше"
         return out
 
