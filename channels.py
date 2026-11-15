@@ -242,10 +242,14 @@ def restart_running(main_cfg: dict) -> None:
         return
     for key in keys():
         try:
-            if status(key)["running"]:
+            st = status(key)
+            if st["running"]:
                 stop(key)
                 start(key, wait=20)
                 log.info("Канал %s перезапущено після оновлення", key)
+            if st["panel_running"]:  # і його панель — інакше вона лишається на старому коді
+                control.spawn_panel(str(config_path(key)), st["panel_port"])
+                log.info("Панель каналу %s перезапущено після оновлення", key)
         except Exception as e:  # noqa: BLE001
             log.warning("Канал %s після оновлення: %s", key, e)
 

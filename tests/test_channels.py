@@ -190,3 +190,15 @@ class DiscoveryTest(unittest.TestCase):
                 _os.environ.pop("LOCALAPPDATA", None)
             else:
                 _os.environ["LOCALAPPDATA"] = old_env
+
+
+class RestartPanelsTest(unittest.TestCase):
+    def test_update_restarts_channel_panel_too(self):
+        import channels as ch
+        st = {"running": False, "panel_running": True, "panel_port": 8771}
+        with mock.patch.object(ch, "keys", return_value=["en"]), \
+                mock.patch.object(ch, "status", return_value=st), \
+                mock.patch.object(ch.control, "spawn_panel") as sp:
+            ch.restart_running({"paths": {}})
+        sp.assert_called_once()
+        self.assertEqual(sp.call_args[0][1], 8771)
