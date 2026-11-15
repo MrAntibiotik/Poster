@@ -16,4 +16,4 @@ __pycache__/
 panel_error.txt
 
 # додаткові канали (EN): свої налаштування, токени, база
-channels/
+/channels/
