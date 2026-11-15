@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -227,6 +228,12 @@ class Instagram(_MetaBase):
         файл — оригінал (якщо відповідає вимогам Reels), потім копія під вимоги Instagram;
         токен — токен сторінки, потім токен користувача (у прикладах Meta саме він).
         Помилка 400 від rupload не означає провал: спершу перевіряємо стан контейнера."""
+        with Instagram._upload_lock:   # по одному відео за раз: паралельні великі завантаження Instagram відхиляє
+            return self._publish_locked(video_path, meta)
+
+    _upload_lock = threading.Lock()
+
+    def _publish_locked(self, video_path: str, meta) -> dict:
         from app.core import media
         try:
             problems = media.ig_problems(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))

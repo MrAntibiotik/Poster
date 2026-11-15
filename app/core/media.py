@@ -157,6 +157,9 @@ def ig_problems(p: dict) -> list[str]:
     return out
 
 
+IG_TARGET_MB = 90
+
+
 def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> str:
     """mode: '' — копія під вимоги; 'safe60' — сувора копія з тією ж частотою кадрів (≤10 Мбіт/с);
     'safe30' (= lite) — сувора копія 30 к/с, 6 Мбіт/с — крайній варіант."""
@@ -167,7 +170,7 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     та сама частота кадрів, до 20 Мбіт/с, AAC 128 кбіт/с 48 кГц, faststart. Оригінал не змінюється."""
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}".encode()).hexdigest()[:10]
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{IG_TARGET_MB}".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl'}.get(mode, 'ig') }.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
@@ -179,9 +182,12 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     g = int(round(min(max(fps, 23), 60) * 2))
     vf = "scale='if(gt(iw,ih),min(iw,1920),min(iw,1080))':-2:flags=lanczos,setsar=1,format=yuv420p"
     level = ["-level:v", "4.1"] if lite else ["-level:v", "4.2"]
-    rate = (["-crf", "21", "-maxrate", "6M", "-bufsize", "12M"] if lite else
-            ["-crf", "19", "-maxrate", "10M", "-bufsize", "20M"] if strict else
-            ["-crf", "17", "-maxrate", "20M", "-bufsize", "40M"])
+    cap = 6000 if lite else 10000 if strict else 20000            # кбіт/с
+    dur = float(p.get("duration") or 0)
+    if dur > 0:   # файл має вийти ≤ IG_TARGET_MB: великі завантаження Instagram часто відхиляє (rupload 400)
+        cap = min(cap, max(2500, int(IG_TARGET_MB * 8 * 1024 / dur) - 160))
+    crf = "21" if lite else "19" if strict else "17"
+    rate = ["-crf", crf, "-maxrate", f"{cap}k", "-bufsize", f"{cap * 2}k"]
     args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
             "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-vf", vf, *fps_args, *level,
             "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", *rate, "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
