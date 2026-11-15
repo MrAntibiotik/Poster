@@ -122,5 +122,18 @@ class QueueCardTest(FlowBase):
         self.assertEqual(db.get_item(item["id"])["status"], "notified")
 
 
+    def test_queued_without_card_gets_one(self):
+        tg, db, sch = self.app.bot.tg, self.app.db, self.app.scheduler
+        self.make_short("b")
+        import config
+        config.FAKE_NOW = self.ts(11, "08:00")
+        sch.scan()  # чергу поставлено ще старою версією — картки не було
+        self.cfg["telegram"]["queue_cards"] = True
+        item = db.items("status='queued'")[0]
+        self.assertIsNone(db.tg_msg(item["id"], 42))
+        self.app.bot.heal()
+        self.assertIsNotNone(db.tg_msg(item["id"], 42))
+
+
 if __name__ == "__main__":
     unittest.main()

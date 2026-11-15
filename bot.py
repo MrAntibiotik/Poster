@@ -1009,6 +1009,10 @@ class Bot:
                 if fixed >= limit:
                     break
         fixed += self.upgrade_text_cards()
+        if (self.cfg.get("telegram") or {}).get("queue_cards", True):  # у черзі, але картки в чаті ще немає
+            missing = [i["id"] for i in self.db.items("status='queued' AND id NOT IN (SELECT item_id FROM tg_msgs)")]
+            if missing:
+                fixed += self.queue_cards(missing, limit=3)
         return fixed
 
     def upgrade_text_cards(self, limit: int = 2) -> int:

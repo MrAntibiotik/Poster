@@ -143,12 +143,14 @@ class Scheduler:
             js = mp4.with_suffix(".json")
             game = game_of(mp4, ready)
             if self.foreign_channel(mp4, ready):
+                self._why(mp4, f"належить іншому каналу ({self.foreign_channel(mp4, ready)})")
                 continue  # шортс іншого каналу (напр. реплеї для EN) — не наш контент
             try:
                 if time.time() - mp4.stat().st_mtime < 30:
                     continue  # файл ще записується / копіюється
                 if not js.exists():
                     if not auto:
+                        self._why(mp4, "немає json, а автоназви вимкнено")
                         continue
                     write_json(js, auto_meta_json(mp4, game, self.cfg))
                     log.info("Створено json для %s (назва з імені файлу)", mp4.name)
@@ -162,8 +164,10 @@ class Scheduler:
                 log.debug("Пропускаю %s: %s", mp4, e)
                 continue
             if json_status(data) != self.cfg["ready_status"]:
+                self._why(mp4, f"статус у json «{json_status(data)}», а потрібен «{self.cfg['ready_status']}»")
                 continue
             if self.foreign_channel(mp4, ready, data):
+                self._why(mp4, f"у json вказано інший канал ({self.foreign_channel(mp4, ready, data)})")
                 continue
             found.append((order, path, str(js.resolve()), game, "short"))
         found += self._scan_highlights(known)
@@ -251,6 +255,13 @@ class Scheduler:
     def channel_key(self) -> str:
         """Ключ цього каналу: "" — основний, "en" — EN/EU-канал тощо."""
         return str((self.cfg.get("channel") or {}).get("key") or "")
+
+    def _why(self, mp4: Path, reason: str) -> None:
+        """Чому відео з папки не стало в чергу — у журнал один раз на файл (видно в «📄 Журнал»)."""
+        seen = self.__dict__.setdefault("_why_seen", {})
+        if seen.get(str(mp4)) != reason:
+            seen[str(mp4)] = reason
+            log.warning("Не беру в чергу %s: %s", Path(mp4).name, reason)
 
     def foreign_channel(self, mp4: Path, ready: Path, data: dict | None = None) -> str:
         """Ключ іншого каналу, якому належить відео, або "" (наше). Різний контент не змішується:
