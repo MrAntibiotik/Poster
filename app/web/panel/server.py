@@ -13,6 +13,7 @@ from pathlib import Path
 from app import ROOT  # noqa: E402  папка програми
 from app.system import control  # noqa: E402
 from app.core.config import ConfigError
+from app.platforms.base import PublishError
 from .common import log, SESSION_HOURS
 from . import Panel
 
@@ -216,6 +217,9 @@ def make_handler(panel: Panel):
                 return self.json({"error": "Not found"}, 404)
             except (ValueError, KeyError, TypeError) as e:
                 log.warning("Панель: %s %s — помилка: %s", path, data.get("name") or "", e)
+                return self.json({"error": str(e)}, 400)
+            except PublishError as e:   # зрозуміла помилка платформи (напр. Meta не обміняла токен) — без трасування
+                log.warning("Панель: %s — %s", path, e)
                 return self.json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
                 log.exception("panel %s", path)

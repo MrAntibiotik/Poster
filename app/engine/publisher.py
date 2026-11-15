@@ -181,7 +181,9 @@ class Publisher:
             app.bot.finish_item_msgs(item_id)  # «🔁 Повторюю…» → прибрати / стати результатом
         if not failed and hasattr(app.bot, "drop_failed_card"):
             app.bot.drop_failed_card(item_id)  # усе вийшло — окреме повідомлення про невдачу більше не потрібне
-        limited = [results[k]["retry_at"] for k in failed if results.get(k, {}).get("retry_at")]
+        single_ig = (app.cfg["platforms"].get("instagram") or {}).get("single_attempt", True)
+        limited = [results[k]["retry_at"] for k in failed if results.get(k, {}).get("retry_at")
+                   and not (k == "instagram" and single_ig)]   # діагностичний режим: Instagram без автоповторів
         if limited:
             self._retry_after_limit(item_id, max(limited) + 120)
         if failed and hasattr(app.bot, "notify_failed"):
@@ -192,6 +194,8 @@ class Publisher:
         app = self.app
         plat = app.platforms[key]
         attempts = max(1, int(app.cfg["retry"]["attempts"]))
+        if key == "instagram" and (app.cfg["platforms"].get("instagram") or {}).get("single_attempt", True):
+            attempts = 1   # діагностичний режим Instagram: без повторних завантажень
         pause = int(app.cfg["retry"]["pause_seconds"])
         last = None
         try:

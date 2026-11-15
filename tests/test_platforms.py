@@ -47,6 +47,8 @@ class FakeHTTP:
         if "data" in kw and hasattr(kw["data"], "read"):
             kw["data"] = kw["data"].read()
         self.calls.append((method, url, kw))
+        if method == "GET" and "rupload" in url:   # діагностика «скільки байтів дійшло» — окремо від маршрутів
+            return Resp({"offset": 0})
         for m, sub, h in self.routes:
             if m == method and sub in url:
                 if isinstance(h, list):
@@ -74,7 +76,7 @@ def make_cfg(tmp: Path) -> dict:
     return {
         "graph_api_version": "v25.0",
         "paths": {"tokens": tmp / "tokens"},
-        "platforms": {"instagram": {"enabled": True, "share_to_feed": True}, "facebook": {"enabled": True},
+        "platforms": {"instagram": {"enabled": True, "share_to_feed": True, "single_attempt": False}, "facebook": {"enabled": True},
                       "tiktok": {"enabled": True, "public": False, "redirect_uri": "http://localhost:8765/callback/"},
                       "youtube": {"enabled": True}},
         "secrets": {"META_PAGE_TOKEN": "PAGE", "META_IG_TOKEN": "", "IG_USER_ID": "IG1", "FB_PAGE_ID": "P1",
@@ -179,7 +181,7 @@ class InstagramSpecTest(Base):
         f = self.http(meta_graph, self.routes(Resp({"success": True})))
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertIn("перекодовано", r["note"])
-        up = [c for c in f.calls if "rupload" in c[1]][0]
+        up = [c for c in f.calls if "rupload" in c[1] and c[0] == "POST"][0]
         self.assertEqual(up[2]["data"], b"c" * 100)  # завантажено копію, а не оригінал
 
     FAIL = None
@@ -198,7 +200,7 @@ class InstagramSpecTest(Base):
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertEqual(modes, [""])  # важкий оригінал пропущено, першою йде копія під вимоги Reels
         self.assertIn("копія під вимоги Reels", r["note"])
-        self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)
+        self.assertEqual(len([c for c in f.calls if "rupload" in c[1] and c[0] == "POST"]), 1)
 
     def test_spurious_400_but_container_finished(self):
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
@@ -206,7 +208,7 @@ class InstagramSpecTest(Base):
         f = self.http(meta_graph, self.routes(self.fail()))
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertEqual(r["id"], "M1")  # 400 від rupload, але контейнер FINISHED — опубліковано
-        self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)
+        self.assertEqual(len([c for c in f.calls if "rupload" in c[1] and c[0] == "POST"]), 1)
         self.assertNotIn("note", r)
 
     def test_spurious_400_long_processing_waits(self):
@@ -214,7 +216,7 @@ class InstagramSpecTest(Base):
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
         self.media.ig_problems = lambda p: []
         routes = self.routes(self.fail())
-        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 12
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 7
                      + [Resp({"status_code": "FINISHED"})])
         f = self.http(meta_graph, routes)
         clock = [1000.0]
@@ -225,8 +227,8 @@ class InstagramSpecTest(Base):
             r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         finally:
             meta_graph.time = orig
-        self.assertEqual(r["id"], "M1")  # 12 перевірок (20 с, потім щохвилини) ≈ 10 хв обробки — дочекались
-        self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)  # той самий файл удруге не шлемо
+        self.assertEqual(r["id"], "M1")  # 7 перевірок (10, 20, 40, 80… с) ≈ 6 хв обробки — дочекались
+        self.assertEqual(len([c for c in f.calls if "rupload" in c[1] and c[0] == "POST"]), 1)  # той самий файл удруге не шлемо
 
     def test_processing_failed_retries_with_copy(self):
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
@@ -239,7 +241,7 @@ class InstagramSpecTest(Base):
         self.assertEqual(r["id"], "M1")
         self.assertIn("не прийняв оригінал", r["note"])
         self.assertIn("2207026", r["tried"][0])  # чому не пройшов оригінал — збережено для «🧾 Деталі»
-        ups = [c for c in f.calls if "rupload" in c[1]]
+        ups = [c for c in f.calls if "rupload" in c[1] and c[0] == "POST"]
         self.assertEqual([u[2]["data"][:1] for u in ups], [b"x", b"c"])  # оригінал, потім копія (без повторів)
         self.assertEqual(len([c for c in f.calls if c[1].endswith("/IG1/media")]), 2)  # новий контейнер
 
@@ -262,7 +264,7 @@ class InstagramSpecTest(Base):
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertEqual(r["id"], "M1")
         self.assertIn("токеном користувача", r["note"])
-        auths = [c[2]["headers"]["Authorization"] for c in f.calls if "rupload" in c[1]]
+        auths = [c[2]["headers"]["Authorization"] for c in f.calls if "rupload" in c[1] and c[0] == "POST"]
         self.assertEqual(auths, ["OAuth PAGE"] * 4 + ["OAuth USER"])  # 4 варіанти файлу, потім токен користувача
 
     def test_all_attempts_fail_message(self):
@@ -305,7 +307,7 @@ class InstagramViaFacebookTest(InstagramSpecTest):
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertEqual(r["id"], "M1")
         self.assertIn("через тимчасове відео Facebook", r["note"])
-        self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)          # одна відмова — і одразу сюди
+        self.assertEqual(len([c for c in f.calls if "rupload" in c[1] and c[0] == "POST"]), 1)          # одна відмова — і одразу сюди
         fb_up = [c for c in f.calls if "graph-video" in c[1]][0]
         self.assertEqual(fb_up[2]["data"]["published"], "false")                    # на сторінці ніхто не бачить
         ig = [c for c in f.calls if c[0] == "POST" and c[1].endswith("/IG1/media")]
@@ -508,3 +510,78 @@ class YouTubeTest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstagramDiagnosticTest(Base):
+    """Діагностичний режим: одна спроба, без повторних завантажень, звіт по етапах, затримки 10/20/40/80 с."""
+    routes = InstagramSpecTest.routes
+    fail = InstagramSpecTest.fail
+
+    def setUp(self):
+        Base.setUp(self)
+        from app.core import media
+        self.media = media
+        self._orig_media = (media.ig_probe, media.ig_problems, media.instagram_copy)
+        self.cfg.update(ffprobe="ffprobe", ffmpeg="ffmpeg")
+        self.cfg["paths"]["data"] = self.tmp / "data"
+        self.copy = self.tmp / "copy_ig.mp4"
+        self.copy.write_bytes(b"c" * 100)
+        media.instagram_copy = lambda path, cfg, **kw: str(self.copy)
+        self.cfg["platforms"]["instagram"]["single_attempt"] = True
+        media.ig_probe = lambda path, ffprobe="ffprobe": {}
+        media.ig_problems = lambda p: []
+
+    def tearDown(self):
+        self.media.ig_probe, self.media.ig_problems, self.media.instagram_copy = self._orig_media
+        Base.tearDown(self)
+        self.cfg["platforms"]["instagram"]["single_attempt"] = True
+        self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
+        self.media.ig_problems = lambda p: []
+
+    def fake_time(self):
+        clock, sleeps = [1000.0], []
+        orig = meta_graph.time
+        meta_graph.time = type("T", (), {"time": staticmethod(lambda: clock[0]),
+                                         "sleep": staticmethod(lambda s: (sleeps.append(s),
+                                                                          clock.__setitem__(0, clock[0] + s)))})
+        self.addCleanup(lambda: setattr(meta_graph, "time", orig))
+        return sleeps
+
+    def test_one_container_one_upload_and_stage_report(self):
+        import json as J
+        routes = self.routes(self.fail())
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 50)
+        f = self.http(meta_graph, routes)
+        self.fake_time()
+        with self.assertRaises(meta_graph.PublishError) as cm:
+            meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        msg = str(cm.exception)
+        self.assertIn("одна спроба, без повторів", msg)
+        self.assertIn("контейнер ✅", msg)
+        self.assertIn("rupload ❌", msg)
+        self.assertIn("обробка ❌", msg)
+        self.assertEqual(len([c for c in f.calls if c[0] == "POST" and c[1].endswith("/IG1/media")]), 1)   # один контейнер
+        self.assertEqual(len([c for c in f.calls if c[0] == "POST" and "rupload" in c[1]]), 1)            # одне завантаження
+        self.assertEqual(len([c for c in f.calls if c[0] == "GET" and "rupload" in c[1]]), 1)             # «скільки дійшло»
+        files = list((self.tmp / "data" / "ig_diag").glob("*.json"))
+        self.assertEqual(len(files), 1)
+        d = J.loads(files[0].read_text(encoding="utf-8"))
+        self.assertEqual([s["stage"] for s in d["stages"]], ["контейнер", "rupload", "обробка"])
+        self.assertEqual(d["rupload"]["http"], 400)
+        self.assertTrue(d["polls"])
+
+    def test_backoff_delays(self):
+        routes = self.routes(Resp({"success": True}))
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS"})] * 6 + [Resp({"status_code": "FINISHED"})])
+        self.http(meta_graph, routes)
+        sleeps = self.fake_time()
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")
+        # «Стоп» перевіряється щосекунди, тому паузи — це суми по 1 с: 10, 20, 40, 80, 80, 80
+        total, marks = 0, []
+        for s in sleeps:
+            total += s
+            marks.append(total)
+        self.assertEqual(int(sum(sleeps)), 10 + 20 + 40 + 80 + 80 + 80)
+        files = list((self.tmp / "data" / "ig_diag").glob("*.json"))
+        self.assertIn("публікація", files[0].read_text(encoding="utf-8"))

@@ -7,6 +7,7 @@ import os
 import tempfile
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -20,6 +21,7 @@ TOKEN_ERROR_CODES = {102, 190, 463, 467}
 # 613 — частота, 80001–80014 — ліміти Business Use Case. Вікно — ковзна година.
 RATE_LIMIT_CODES = {4, 17, 32, 613} | set(range(80001, 80015))
 LIMIT_FILE = Path(tempfile.gettempdir()) / "poster-meta-limit.json"   # спільний для всіх каналів (один додаток Meta)
+POLL_DELAYS = (10, 20, 40, 80)   # перевірки стану контейнера: затримка наростає, далі — раз на 80 с
 AFTER_400_WAIT = 8 * 60   # після «rupload 400» довго чекати марно — далі наступний варіант файлу
 STATS_MAX_USAGE = 60      # статистику не знімаємо, якщо використано ≥ N% годинної квоти — бережемо для публікацій
 
@@ -214,12 +216,32 @@ class Graph:
     def upload_binary(self, url: str, path: str) -> dict:
         size = os.path.getsize(path)
         headers = {"Authorization": f"OAuth {self.token}", "offset": "0", "file_size": str(size)}
+        t0 = time.time()
+        self.last_upload = {"bytes": size, "url_host": url.split("/")[2] if "//" in url else url}
         try:
             with open(path, "rb") as f:
                 r = requests.post(url, headers=headers, data=f, timeout=1800)
         except requests.RequestException as e:
+            self.last_upload.update(seconds=round(time.time() - t0, 1), error=str(e)[:300])
             raise PublishError(f"завантаження файлу: {e}") from e
+        sec = max(0.1, time.time() - t0)
+        hdr = getattr(r, "headers", None) or {}
+        self.last_upload.update(
+            seconds=round(sec, 1), http=getattr(r, "status_code", None), mbps=round(size * 8 / sec / 1e6, 1),
+            body=(getattr(r, "text", "") or "")[:400],
+            trace={k: hdr.get(k) for k in ("x-fb-trace-id", "x-fb-rev", "x-fb-debug") if hdr.get(k)})
         return self._check(r)
+
+    def upload_status(self, url: str) -> dict:
+        """Скільки байтів rupload реально отримав (GET того ж URI). Для діагностики; помилки — не критичні."""
+        try:
+            r = requests.get(url, headers={"Authorization": f"OAuth {self.token}"}, timeout=30)
+            try:
+                return {"http": r.status_code, **(r.json() if isinstance(r.json(), dict) else {"body": r.text[:200]})}
+            except ValueError:
+                return {"http": r.status_code, "body": (r.text or "")[:200]}
+        except Exception as e:  # noqa: BLE001 — лише діагностика
+            return {"error": str(e)[:200]}
 
 
 class _MetaBase(Platform):
@@ -290,8 +312,19 @@ class Instagram(_MetaBase):
             [("сувора копія (та ж частота кадрів, 10 Мбіт/с)",
               lambda: media.instagram_copy(video_path, self.cfg, mode="safe60")),
              ("крайній варіант (30 к/с, 6 Мбіт/с)", lambda: media.instagram_copy(video_path, self.cfg, mode="safe30"))]
+        normal_first = files[0][0]
+        best = self._best_variant()
+        if best and best != normal_first and any(f[0] == best for f in files):
+            # останні рази Instagram приймав лише цей варіант — починаємо з нього (60 к/с перевіряємо раз на добу)
+            files = [f for f in files if f[0] == best] + [f for f in files if f[0] != best]
+            log.info("Instagram: починаю з варіанта, що спрацював минулого разу: %s", best)
+        single = bool(self.pcfg.get("single_attempt", True))
+        if single:
+            # Діагностичний режим (тимчасово): одна спроба — один контейнер, одне завантаження, без перебору
+            # варіантів і без запасного шляху через Facebook. Повтор — вручну («🔁»), після аналізу етапів.
+            files = files[:1]
         errors = []
-        via_fb = bool(self.pcfg.get("facebook_fallback", True) and self.secrets.get("FB_PAGE_ID"))
+        via_fb = bool(self.pcfg.get("facebook_fallback", True) and self.secrets.get("FB_PAGE_ID")) and not single
         for tname, token in tokens:
             for fname, get_file in files:
                 self._check_stop()
@@ -302,6 +335,7 @@ class Instagram(_MetaBase):
                 except PublishError as e:
                     if not self._upload_rejected(e):
                         raise  # інша помилка (токен, ліміт, формат) — без перебору
+                    self._save_diag("відмова")
                     log.warning("Instagram: %s + токен %s — відмова: %s", fname, tname, e)
                     errors.append(f"{fname}" + (f" (токен {tname})" if len(tokens) > 1 else "") + f" — {short_error(e)}")
                     if not via_fb:
@@ -335,16 +369,75 @@ class Instagram(_MetaBase):
                     out["note"] = "Instagram: " + "; ".join(notes)
                 if errors:  # що не пройшло перед успіхом — для «🧾 Деталі»
                     out["tried"] = errors[:6]
+                self._remember_variant(None if fname == normal_first else fname)
                 return out
         try:
             about = media.ig_summary(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
         except Exception:  # noqa: BLE001
             about = ""
+        stages = (getattr(self, "diag", None) or {}).get("summary")
+        if single:
+            raise PublishError("Instagram не прийняв відео (діагностичний режим: одна спроба, без повторів). "
+                               + (f"Етапи: {stages}. " if stages else "") + "; ".join(errors)
+                               + " — Повторити вручну: «🔁 Повторити зараз».")
         raise PublishError(f"Instagram не прийняв відео ({len(errors)} спроб): " + "; ".join(errors)
                            + (f". Файл: {about}" if about else "")
                            + ("" if len(tokens) > 1 else
                               " — Порада: у панелі (Instagram + Facebook) ще раз «Отримати сторінки» → «Підключити»,"
                               " щоб зберегти токен користувача для резервної спроби."))
+
+    def _stage(self, name: str, ok: bool, seconds: float, info: str = "") -> None:
+        d = getattr(self, "diag", None)
+        if d is not None:
+            d["stages"].append({"stage": name, "ok": ok, "seconds": round(seconds, 1), "info": info})
+
+    def _save_diag(self, result: str) -> None:
+        """Звіт по етапах (контейнер → rupload → обробка → публікація): журнал + data/ig_diag/*.json."""
+        d = getattr(self, "diag", None)
+        if not d or d.get("saved"):
+            return
+        d["saved"] = True
+        d["result"] = result
+        line = " → ".join(f"{s['stage']} {'✅' if s['ok'] else '❌'} {s['seconds']:g} с"
+                          + (f" ({s['info']})" if s["info"] and not s["ok"] else "") for s in d["stages"])
+        d["summary"] = line
+        log.info("Instagram діагностика [%s, %s МБ]: %s", d.get("file"), d.get("size_mb"), line)
+        try:
+            folder = Path(self.cfg["paths"]["data"]) / "ig_diag"
+            folder.mkdir(parents=True, exist_ok=True)
+            name = datetime.now().strftime("%Y%m%d-%H%M%S") + f"_{d.get('container') or 'x'}.json"
+            (folder / name).write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+            for old in sorted(folder.glob("*.json"))[:-50]:
+                old.unlink(missing_ok=True)
+        except (OSError, KeyError) as e:
+            log.debug("ig_diag: %s", e)
+
+    def _variant_file(self) -> Path:
+        data = (self.cfg.get("paths") or {}).get("data")
+        return Path(data) / "ig_variant.json" if data else None
+
+    def _best_variant(self) -> str | None:
+        """Варіант файлу, який Instagram прийняв минулого разу, коли звичайний не пройшов.
+        Раз на добу пробуємо знову звичайний порядок (60 к/с) — раптом Instagram знову приймає."""
+        try:
+            st = json.loads(self._variant_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError, AttributeError):
+            return None
+        if time.time() - float(st.get("ts") or 0) > 24 * 3600:
+            return None
+        return st.get("best")
+
+    def _remember_variant(self, best: str | None) -> None:
+        f = self._variant_file()
+        if f is None:
+            return
+        try:
+            if best:
+                f.write_text(json.dumps({"best": best, "ts": time.time()}, ensure_ascii=False), encoding="utf-8")
+            else:
+                f.unlink(missing_ok=True)
+        except OSError as e:
+            log.debug("ig_variant: %s", e)
 
     @staticmethod
     def _upload_rejected(e: Exception) -> bool:
@@ -353,10 +446,27 @@ class Instagram(_MetaBase):
 
     def _publish_file(self, video_path: str, meta, token: str | None = None) -> dict:
         g = self.graph(token) if token else self._g()
-        c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable",
-                   caption=meta.instagram_text[:2200],
-                   share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
+        size = os.path.getsize(video_path)
+        self.diag = diag = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "file": Path(video_path).name,
+                            "size_mb": round(size / 1048576, 1), "token": "користувача" if token else "сторінки",
+                            "stages": []}
+        try:
+            from app.core import media
+            diag["probe"] = media.ig_summary(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
+        except Exception:  # noqa: BLE001
+            pass
+        t0 = time.time()
+        try:
+            c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable",
+                       caption=meta.instagram_text[:2200],
+                       share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
+        except PublishError as e:
+            self._stage("контейнер", False, time.time() - t0, str(e)[:300])
+            self._save_diag("помилка створення контейнера")
+            raise
         cid = c["id"]
+        diag["container"] = cid
+        self._stage("контейнер", True, time.time() - t0, cid)
         uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
         log.info("Instagram: контейнер %s, завантажую %s (%.1f МБ)", cid, video_path,
                  os.path.getsize(video_path) / 1024 / 1024)
@@ -364,7 +474,15 @@ class Instagram(_MetaBase):
         upload_error = None
         try:
             g.upload_binary(uri, video_path)
+            up = getattr(g, "last_upload", {})
+            self._stage("rupload", True, up.get("seconds", 0), f"HTTP {up.get('http')}, {up.get('mbps')} Мбіт/с")
         except PublishError as e:
+            up = getattr(g, "last_upload", {})
+            got = g.upload_status(uri)
+            diag["rupload"] = {**up, "after": got}
+            self._stage("rupload", False, up.get("seconds", 0),
+                        f"HTTP {up.get('http')} за {up.get('seconds')} с ({up.get('mbps')} Мбіт/с); "
+                        f"сервер каже: {json.dumps(got, ensure_ascii=False)[:160]}")
             # 400 від rupload буває хибною: файл дійшов і обробляється. Повторно в той самий контейнер НЕ шлемо —
             # друга відправка ламає обробку («Video Transcoding Error: both HD and SD progressive failed»).
             upload_error = e
@@ -378,9 +496,13 @@ class Instagram(_MetaBase):
         start = time.time()
         deadline = start + (3 * 60 if upload_error else 20 * 60)
         self.report("Instagram обробляє відео")
+        delays = iter(POLL_DELAYS)
+        diag = getattr(self, "diag", None) or {"stages": []}
+        polls = diag.setdefault("polls", [])
         while True:
             st = g.get(cid, fields="status_code,status")
             code = st.get("status_code")
+            polls.append([int(time.time() - start), code, (st.get("status") or "")[:120]])
             self.report("Instagram обробляє відео")   # «живий»: остання перевірка щойно
             if code == "IN_PROGRESS" and upload_error and deadline < start + AFTER_400_WAIT:
                 log.info("Instagram: попри помилку завантаження відео обробляється — чекаю до %s хв",
@@ -389,12 +511,18 @@ class Instagram(_MetaBase):
             if code == "FINISHED":
                 if upload_error:
                     log.info("Instagram: попри помилку завантаження контейнер готовий — публікую")
+                self._stage("обробка", True, time.time() - start, f"FINISHED, перевірок {len(polls)}")
                 break
             if code in ("ERROR", "EXPIRED"):
+                self._stage("обробка", False, time.time() - start, f"{code}: {st.get('status')}")
+                self._save_diag(f"контейнер {code}")
                 reason = f"{st.get('status')}{ig_hint(st.get('status'))}"
                 raise PublishError(f"{upload_error} | стан контейнера: {reason}" if upload_error
                                    else f"Instagram відхилив відео: {reason}")
             if time.time() > deadline:
+                self._stage("обробка", False, time.time() - start,
+                            f"{code} після {len(polls)} перевірок: {(st.get('status') or '')[:100]}")
+                self._save_diag("обробка не завершилась")
                 if upload_error:
                     waited = int((time.time() - start) / 60)
                     raise PublishError(f"{upload_error}{self._container_reason(g, cid)} (чекали {waited} хв)")
@@ -402,16 +530,24 @@ class Instagram(_MetaBase):
             # перевіряємо рідше, що довше обробка: кожен запит з'їдає годинну квоту Meta; «Стоп» — щосекунди
             # квота Meta ≈200 запитів/год на весь додаток: опитування раз на 20 с, потім раз на хвилину,
             # а при квоті ≥80% — раз на 2 хв
-            pause = 20 if time.time() - start < 120 else 60
+            pause = next(delays, POLL_DELAYS[-1])     # 10 → 20 → 40 → 80 → 80… с: один контейнер, рідкі перевірки
             if usage_pct() >= 80:
-                pause = 120
+                pause = max(pause, 120)
             for _ in range(pause):
                 self._check_stop()
                 time.sleep(1)
 
         self._check_stop()   # відео готове, але натиснули «Стоп» — не публікуємо
         self.report("публікую готове відео")
-        mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
+        t1 = time.time()
+        try:
+            mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
+        except PublishError as e:
+            self._stage("публікація", False, time.time() - t1, str(e)[:300])
+            self._save_diag("помилка media_publish")
+            raise
+        self._stage("публікація", True, time.time() - t1, mid)
+        self._save_diag("опубліковано")
         out = {"id": mid, "url": ""}
         try:  # після публікації — помилки не критичні (щоб не опублікувати двічі)
             out["url"] = g.get(mid, fields="permalink").get("permalink", "")
