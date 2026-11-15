@@ -190,6 +190,19 @@ class ScanMixin:
         for item in self.db.items("status='duplicate'"):  # файл-повтор прибрали вручну — питання вже не актуальне
             if not Path(item["mp4"]).exists():
                 self.db.update_item(item["id"], status="cancelled", note="файл видалено")
+        for item in self.db.items("status IN ('approved','failed')"):
+            # підтверджені / невдалі, файли яких видалили (напр. папку job_… Різака) — опублікувати вже нічого
+            if Path(item["mp4"]).exists() or self.app.publisher.is_active(item["id"]):
+                continue
+            self.db.update_item(item["id"], status="missing", note="файл видалено")
+            self.db.event(item["id"], "missing", {"file": Path(item["mp4"]).name, "reason": "файл видалено"})
+            self.db.x("DELETE FROM slots WHERE state='retry' AND item_id=?", (item["id"],))
+            if item["slot_at"]:
+                self.db.x("UPDATE slots SET state='pending', item_id=NULL WHERE slot_at=? AND item_id=?",
+                          (item["slot_at"], item["id"]))
+            if hasattr(self.app.bot, "remove_item_msgs"):
+                self.app.bot.remove_item_msgs(item["id"])
+            log.info("#%s: файлу більше немає (%s) — прибрано", item["id"], item["mp4"])
         for item in self.db.items("status IN ('queued','notified')"):
             mp4 = Path(item["mp4"])
             gone = not mp4.exists()
@@ -209,6 +222,9 @@ class ScanMixin:
             if item["slot_at"]:  # звільняємо слот для наступного відео
                 self.db.x("UPDATE slots SET state='pending', item_id=NULL WHERE slot_at=? AND item_id=?",
                           (item["slot_at"], item["id"]))
+            if hasattr(self.app.bot, "remove_item_msgs"):
+                self.app.bot.remove_item_msgs(item["id"])   # картка більше не актуальна — з чату геть
+            else:
                 self.app.bot.refresh(item["id"])
             removed.append({**item, "reason": reason})
             log.info("#%s прибрано з черги (%s): %s", item["id"], reason, mp4)

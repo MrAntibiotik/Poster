@@ -185,7 +185,13 @@ class Publisher:
         sched = getattr(self.app, "scheduler", None)
         if not sched or not hasattr(sched, "reserve_retry"):
             return
-        ts = max(ts, now_ts() + 300) // 60 * 60 + 60
+        ts = max(ts, now_ts() + 300)
+        # кілька повторів після ліміту — з інтервалом 15 хв, щоб разом знову не вичерпати квоту
+        last = self.app.db.one("SELECT MAX(slot_at) AS t FROM slots WHERE state='retry' AND item_id<>? AND slot_at>?",
+                               (item_id, now_ts()))
+        if last and last["t"] and last["t"] + 900 > ts:
+            ts = last["t"] + 900
+        ts = ts // 60 * 60 + 60
         for _ in range(120):
             try:
                 sched.reserve_retry(item_id, ts)

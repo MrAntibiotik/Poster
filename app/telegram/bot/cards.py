@@ -80,7 +80,9 @@ class CardsMixin:
         try:
             return apply_always_hashtags(load_meta(item["json"], item["title_override"]), self.cfg)
         except Exception as e:  # noqa: BLE001
-            log.warning("Метадані #%s недоступні: %s", item["id"], e)
+            if not self.db.get(f"metawarn:{item['id']}"):   # один раз, а не щохвилини
+                self.db.set(f"metawarn:{item['id']}", 1)
+                log.warning("Метадані #%s недоступні: %s", item["id"], e)
             return PostMeta(yt_title=item["title_override"] or Path(item["mp4"]).stem)
 
     def _raw_meta(self, item: dict) -> PostMeta:

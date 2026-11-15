@@ -146,3 +146,30 @@ class StatsLimitTest(FlowBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaggerAndMissingTest(FlowBase):
+    def test_retries_after_limit_are_spread(self):
+        from app.core import config
+        now = int(time.time())
+        config.FAKE_NOW = now
+        ids = []
+        for n in ("a", "b"):
+            self.make_short(n)
+        self.app.scheduler.scan()
+        ids = [i["id"] for i in self.app.db.items("status='queued'")][:2]
+        for i in ids:
+            self.app.publisher._retry_after_limit(i, now + 3600)
+        a, b = (self.app.scheduler.retry_at(i) for i in ids)
+        self.assertGreaterEqual(b - a, 900)
+
+    def test_failed_item_with_deleted_file_leaves_chat(self):
+        self.make_short("a")
+        self.app.scheduler.scan()
+        it = self.app.db.items("status='queued'")[0]
+        self.app.db.update_item(it["id"], status="failed")
+        self.app.db.set_tg_msg(it["id"], 42, 555, None, 0)
+        Path(it["mp4"]).unlink()
+        self.app.scheduler.scan()
+        self.assertEqual(self.app.db.get_item(it["id"])["status"], "missing")
+        self.assertIn(555, self.app.bot.tg.deleted)
