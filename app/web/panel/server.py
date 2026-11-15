@@ -277,6 +277,12 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
             httpd = ThreadingHTTPServer(("127.0.0.1", panel.port), make_handler(panel))
             break
         except OSError:
+            from app.channels.manager import panel_version
+            if panel_version(panel.port) == VERSION:   # там уже така сама панель — нічого не вбиваємо
+                log.info("Панель %s уже працює на порту %s", VERSION, panel.port)
+                if open_browser:
+                    webbrowser.open(url)
+                return 0
             # Порт зайнятий старою копією панелі (напр. після оновлення) — закриваємо її і пробуємо ще раз
             # хто справді тримає порт (стара версія панелі могла не записати PID або файл застарів)
             owner = control.port_owner(panel.port) or {}
@@ -307,16 +313,6 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
     threading.Thread(target=control.ensure_shortcut_once, args=(panel.db,), daemon=True).start()
     threading.Thread(target=_restart_on_new_code, args=(httpd,), daemon=True, name="panel-code-watch").start()
 
-    def _channels_watch():  # основна панель стежить, щоб панелі каналів (EN) не лишались на старому коді
-        from app.channels import manager as channels
-        while True:
-            try:
-                channels.refresh_panels(panel.cfg)
-            except Exception as e:  # noqa: BLE001
-                log.debug("refresh_panels: %s", e)
-            time.sleep(300)
-    if not panel.cfg.get("channel"):
-        threading.Thread(target=_channels_watch, daemon=True, name="channel-panels-watch").start()
     if sys.stdout:
         print(f"Панель керування: {url}  (Ctrl+C — закрити)")
     if open_browser:

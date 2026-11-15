@@ -15,6 +15,7 @@ import copy
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 from app.system import control
@@ -304,6 +305,8 @@ def refresh_panels(main_cfg: dict | None = None) -> list[str]:
     done = []
     if main_cfg and main_cfg.get("channel"):
         return done
+    if not control.spawn_allowed("refresh-panels", 240):   # одна перевірка на всі копії програми раз на 4 хв
+        return done
     for key in keys():
         try:
             st = status(key)
@@ -315,6 +318,16 @@ def refresh_panels(main_cfg: dict | None = None) -> list[str]:
             owner = control.port_owner(st["panel_port"]) or {}
             if owner.get("pid") and "panel.py" in str(owner.get("cmd") or ""):
                 control.kill(int(owner["pid"]))
+            for _ in range(10):
+                if not control.is_running(st["panel_port"]):
+                    break
+                time.sleep(0.5)
+            else:
+                control.kill_other_panels(st["panel_port"])   # не знайшли власника порту — за командним рядком
+                time.sleep(1.5)
+            if control.is_running(st["panel_port"]):
+                log.warning("Панель каналу %s (стара версія %s) не закривається — лишаю як є", key, ver)
+                continue
             control.spawn_panel(str(config_path(key)), st["panel_port"])
             log.info("Панель каналу %s була на версії %s — перезапущено на %s", key, ver or "?", VERSION)
             done.append(key)

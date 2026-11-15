@@ -213,10 +213,44 @@ class RefreshPanelsTest(unittest.TestCase):
                 mock.patch.object(ch, "panel_version", return_value="2026.11.14-65"), \
                 mock.patch.object(ch.control, "port_owner", return_value={"pid": 4242, "cmd": "pythonw panel.py --port 8771"}), \
                 mock.patch.object(ch.control, "kill") as kill, \
+                mock.patch.object(ch.control, "spawn_allowed", return_value=True), \
+                mock.patch.object(ch.control, "is_running", return_value=False), \
                 mock.patch.object(ch.control, "spawn_panel") as sp:
             self.assertEqual(ch.refresh_panels({"paths": {}}), ["en"])
         kill.assert_called_once_with(4242)
         sp.assert_called_once()
+
+    def test_many_copies_refresh_only_once(self):
+        """Кілька копій програми одночасно — панель EU перезапускає лише одна (раніше — лавина процесів)."""
+        import uuid
+        from app.channels import manager as ch
+        calls = []
+        with mock.patch.object(ch, "keys", return_value=["en"]), \
+                mock.patch.object(ch, "status", return_value={"panel_running": True, "panel_port": 8771}), \
+                mock.patch.object(ch, "panel_version", return_value="2026.11.14-65"), \
+                mock.patch.object(ch.control, "port_owner", return_value={}), \
+                mock.patch.object(ch.control, "is_running", return_value=False), \
+                mock.patch.object(ch.control, "spawn_panel", side_effect=lambda *a: calls.append(a)), \
+                mock.patch("tempfile.gettempdir", return_value=str(Path(__import__("tempfile").mkdtemp()))):
+            name = uuid.uuid4().hex
+            for _ in range(20):
+                ch.refresh_panels({"paths": {}})
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(name)
+
+    def test_stuck_old_panel_not_multiplied(self):
+        from app.channels import manager as ch
+        with mock.patch.object(ch, "keys", return_value=["en"]), \
+                mock.patch.object(ch, "status", return_value={"panel_running": True, "panel_port": 8771}), \
+                mock.patch.object(ch, "panel_version", return_value="2026.11.14-65"), \
+                mock.patch.object(ch.control, "port_owner", return_value={}), \
+                mock.patch.object(ch.control, "spawn_allowed", return_value=True), \
+                mock.patch.object(ch.control, "is_running", return_value=True), \
+                mock.patch.object(ch.control, "kill_other_panels", return_value=0), \
+                mock.patch.object(ch.time, "sleep"), \
+                mock.patch.object(ch.control, "spawn_panel") as sp:
+            self.assertEqual(ch.refresh_panels({"paths": {}}), [])
+        sp.assert_not_called()   # стара не закрилась — нову не запускаємо (вона б лише билась за порт)
 
     def test_current_panel_untouched(self):
         from app.channels import manager as ch
