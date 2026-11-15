@@ -191,6 +191,26 @@ class Graph:
             raise PublishError(f"мережа: {e}") from e
         return self._check(r)
 
+    def upload_video_unpublished(self, page_id: str, path: str, description: str = "") -> dict:
+        """Відео на сторінку Facebook БЕЗ публікації (його ніхто не бачить) — щоб мати посилання на файл."""
+        self._guard()
+        try:
+            with open(path, "rb") as f:
+                r = requests.post(f"https://graph-video.facebook.com/{self.version}/{page_id}/videos",
+                                  data={"published": "false", "no_story": "true", "description": description,
+                                        "access_token": self.token},
+                                  files={"source": (os.path.basename(path), f, "video/mp4")}, timeout=1800)
+        except requests.RequestException as e:
+            raise PublishError(f"завантаження на Facebook: {e}") from e
+        return self._check(r)
+
+    def delete(self, path: str) -> dict:
+        try:
+            r = requests.delete(f"{self.base}/{path.lstrip('/')}", params={"access_token": self.token}, timeout=60)
+        except requests.RequestException as e:
+            raise PublishError(f"мережа: {e}") from e
+        return self._check(r)
+
     def upload_binary(self, url: str, path: str) -> dict:
         size = os.path.getsize(path)
         headers = {"Authorization": f"OAuth {self.token}", "offset": "0", "file_size": str(size)}
@@ -271,6 +291,7 @@ class Instagram(_MetaBase):
               lambda: media.instagram_copy(video_path, self.cfg, mode="safe60")),
              ("крайній варіант (30 к/с, 6 Мбіт/с)", lambda: media.instagram_copy(video_path, self.cfg, mode="safe30"))]
         errors = []
+        via_fb = bool(self.pcfg.get("facebook_fallback", True) and self.secrets.get("FB_PAGE_ID"))
         for tname, token in tokens:
             for fname, get_file in files:
                 self._check_stop()
@@ -283,7 +304,23 @@ class Instagram(_MetaBase):
                         raise  # інша помилка (токен, ліміт, формат) — без перебору
                     log.warning("Instagram: %s + токен %s — відмова: %s", fname, tname, e)
                     errors.append(f"{fname}" + (f" (токен {tname})" if len(tokens) > 1 else "") + f" — {short_error(e)}")
-                    continue
+                    if not via_fb:
+                        continue
+                    via_fb = False                       # запасний шлях — один раз, одразу після першої відмови
+                    try:
+                        self._check_stop()
+                        self.report("готую копію для Instagram")
+                        out = self._publish_via_facebook(media.instagram_copy(video_path, self.cfg), meta)
+                    except Stopped:
+                        raise
+                    except PublishError as e2:
+                        log.warning("Instagram через Facebook — відмова: %s", e2)
+                        errors.append(f"через тимчасове відео Facebook — {short_error(e2)}")
+                        continue
+                    out["note"] = ("Instagram: пряме завантаження відхилено — опубліковано через тимчасове "
+                                   "відео Facebook (його видалено)")
+                    out["tried"] = errors[:6]
+                    return out
                 notes = []
                 if big:
                     notes.append(f"файл {size_mb:.0f} МБ — завантажено {fname} "
@@ -334,6 +371,10 @@ class Instagram(_MetaBase):
             # часто хибна відповідь: файл дійшов і обробляється. Справжня помилка буде в підсумку публікації
             log.info("Instagram rupload: %s — перевіряю, чи відео все одно обробляється", short_error(e))
 
+        return self._wait_and_publish(g, cid, upload_error)
+
+    def _wait_and_publish(self, g, cid: str, upload_error=None) -> dict:
+        """Чекає, поки Instagram обробить контейнер, і публікує його."""
         start = time.time()
         deadline = start + (3 * 60 if upload_error else 20 * 60)
         self.report("Instagram обробляє відео")
@@ -377,6 +418,48 @@ class Instagram(_MetaBase):
         except Exception as e:  # noqa: BLE001
             log.warning("Instagram permalink: %s", e)
         return out
+
+    FB_LINK_WAIT = 10 * 60
+
+    def _publish_via_facebook(self, video_path: str, meta) -> dict:
+        """Запасний шлях, коли Instagram відхиляє пряме завантаження (rupload ProcessingFailedError):
+        відео — на сторінку Facebook НЕОПУБЛІКОВАНИМ (ніхто не бачить) → Instagram бере його за посиланням
+        (video_url) → тимчасове відео з Facebook видаляється за будь-якого результату."""
+        page = self.secrets.get("FB_PAGE_ID")
+        if not page:
+            raise PublishError("немає FB_PAGE_ID — запасний шлях через Facebook недоступний")
+        fb = self.graph()                                   # токен сторінки: відео — на сторінку
+        self.report("запасний шлях: вантажу відео на Facebook (неопубліковане)")
+        vid = fb.upload_video_unpublished(page, video_path, "тимчасово — для публікації в Instagram")["id"]
+        log.info("Instagram через Facebook: тимчасове відео %s", vid)
+        try:
+            src, start = "", time.time()
+            while time.time() - start < self.FB_LINK_WAIT:
+                st = fb.get(vid, fields="status,source")
+                vs = (st.get("status") or {}).get("video_status")
+                if vs == "error":
+                    raise PublishError(f"Facebook не обробив тимчасове відео: {st.get('status')}")
+                if st.get("source") and vs in (None, "ready"):
+                    src = st["source"]
+                    break
+                self.report("запасний шлях: Facebook обробляє відео")
+                for _ in range(20 if usage_pct() < 80 else 60):
+                    self._check_stop()
+                    time.sleep(1)
+            if not src:
+                raise PublishError("Facebook не дав посилання на тимчасове відео за 10 хв")
+            g = self._g()
+            c = g.post(f"{self.ig_id}/media", media_type="REELS", video_url=src,
+                       caption=meta.instagram_text[:2200],
+                       share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
+            out = self._wait_and_publish(g, c["id"])
+            out["via"] = "facebook"
+            return out
+        finally:
+            try:
+                fb.delete(vid)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Тимчасове відео Facebook %s не видалено: %s — видаліть вручну (неопубліковане)", vid, e)
 
     @staticmethod
     def _container_reason(g, cid: str) -> str:

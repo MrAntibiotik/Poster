@@ -63,6 +63,9 @@ class FakeHTTP:
     def put(self, url, **kw):
         return self._do("PUT", url, **kw)
 
+    def delete(self, url, **kw):
+        return self._do("DELETE", url, **kw)
+
 
 FAST_TIME = types.SimpleNamespace(time=time.time, sleep=lambda s: None)
 
@@ -155,6 +158,7 @@ class InstagramSpecTest(Base):
         self.copy = self.tmp / "copy_ig.mp4"
         self.copy.write_bytes(b"c" * 100)
         media.instagram_copy = lambda path, cfg, **kw: str(self.copy)
+        self.cfg["platforms"]["instagram"]["facebook_fallback"] = False   # запасний шлях — в окремих тестах
 
     def tearDown(self):
         self.media.ig_probe, self.media.ig_problems, self.media.instagram_copy = self._orig_media
@@ -269,6 +273,57 @@ class InstagramSpecTest(Base):
         self.http(meta_graph, routes)
         with self.assertRaisesRegex(PublishError, "4 спроб.*обмежений або неактивний.*токен користувача"):
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+
+
+class InstagramViaFacebookTest(InstagramSpecTest):
+    """Пряме завантаження відхилено (rupload ProcessingFailedError) → тимчасове неопубліковане відео Facebook →
+    Instagram бере його за посиланням → тимчасове відео видаляється."""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg["platforms"]["instagram"]["facebook_fallback"] = True
+        self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
+        self.media.ig_problems = lambda p: []
+
+    def fb_routes(self, fb_status, container):
+        return [
+            ("POST", "graph-video.facebook.com/v25.0/P1/videos", Resp({"id": "FBV1"})),
+            ("GET", "/FBV1", fb_status),
+            ("DELETE", "/FBV1", Resp({"success": True})),
+            ("POST", "/IG1/media_publish", Resp({"id": "M1"})),
+            ("POST", "/IG1/media", Resp({"id": "C1", "uri": "https://rupload.facebook.com/ig-api-upload/v25.0/C1"})),
+            ("POST", "rupload.facebook.com", self.fail()),
+            ("GET", "/C1", container),
+            ("GET", "/M1", Resp({"permalink": "https://www.instagram.com/reel/x/"})),
+        ]
+
+    def test_rejected_upload_goes_via_facebook_link(self):
+        src = "https://video.xx.fbcdn.net/v/t42/temp.mp4?sig=1"
+        f = self.http(meta_graph, self.fb_routes(
+            [Resp({"status": {"video_status": "processing"}}), Resp({"status": {"video_status": "ready"}, "source": src})],
+            [Resp({"status_code": "ERROR", "status": "Error"}), Resp({"status_code": "FINISHED"})]))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")
+        self.assertIn("через тимчасове відео Facebook", r["note"])
+        self.assertEqual(len([c for c in f.calls if "rupload" in c[1]]), 1)          # одна відмова — і одразу сюди
+        fb_up = [c for c in f.calls if "graph-video" in c[1]][0]
+        self.assertEqual(fb_up[2]["data"]["published"], "false")                    # на сторінці ніхто не бачить
+        ig = [c for c in f.calls if c[0] == "POST" and c[1].endswith("/IG1/media")]
+        self.assertEqual(ig[-1][2]["data"]["video_url"], src)                       # Instagram — за посиланням
+        self.assertTrue(any(c[0] == "DELETE" and "/FBV1" in c[1] for c in f.calls))  # тимчасове — видалено
+
+    def test_fallback_failure_continues_and_cleans_up(self):
+        f = self.http(meta_graph, self.fb_routes(
+            Resp({"status": {"video_status": "error", "processing_phase": {"status": "error"}}}),
+            Resp({"status_code": "ERROR", "status": "Error: code 2207026"})))
+        with self.assertRaisesRegex(PublishError, "через тимчасове відео Facebook"):
+            meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertTrue(any(c[0] == "DELETE" and "/FBV1" in c[1] for c in f.calls))  # прибрано й після невдачі
+        self.assertEqual(len([c for c in f.calls if "graph-video" in c[1]]), 1)      # запасний шлях — лише раз
+
+
+for _name in [n for n in vars(InstagramSpecTest) if n.startswith("test_")]:
+    setattr(InstagramViaFacebookTest, _name, None)   # у цьому класі — лише тести запасного шляху
 
 
 class StatsTest(Base):
