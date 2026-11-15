@@ -162,6 +162,25 @@ class QueueCardTest(FlowBase):
         later = [i for i in db.items("status='queued'") if db.tg_msg(i["id"], 42)]
         self.assertEqual(len(later), 2)
 
+    def test_clean_keeps_only_posted_and_in_progress(self):
+        self.cfg["telegram"]["queue_cards"] = True
+        tg, db, sch, bot = self.app.bot.tg, self.app.db, self.app.scheduler, self.app.bot
+        for n in "abc":
+            self.make_short(n, age=1000 - ord(n))
+        import config
+        config.FAKE_NOW = self.ts(11, "08:00")
+        sch.scan()
+        a, b, c = db.queue()
+        db.update_item(a["id"], status="posted")
+        db.update_item(c["id"], status="cancelled")
+        msgs = {i["id"]: db.tg_msg(i["id"], 42)["msg_id"] for i in (a, b, c)}
+        bot.clean_chat(42)
+        self.assertNotIn(msgs[a["id"]], tg.deleted)   # опубліковане лишається
+        self.assertIn(msgs[b["id"]], tg.deleted)      # картка черги — геть
+        self.assertIn(msgs[c["id"]], tg.deleted)      # скасоване — геть
+        bot.heal()
+        self.assertIsNone(db.tg_msg(b["id"], 42))     # і не повертається саме
+
     def test_queued_without_card_gets_one(self):
         db, sch = self.app.db, self.app.scheduler
         self.make_short("b")

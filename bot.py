@@ -55,12 +55,12 @@ BTN = {
     "📋 Черга": "/queue", "🕐 Статус": "/status", "📊 Звіт": "/report",
     "🧪 Тест-слот": "/testslot", "⏸ Пауза": "/pause", "▶️ Продовжити": "/resume",
     "⛔ Стоп публікацій": "/stop", "✅ Відновити публікації": "/go", "🇬🇧 EU-канал": "/eu",
-    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed", "🎮 Стрім": "/stream", "⬆️ Оновити": "/update", "📄 Журнал": "/log",
+    "👥 Доступ": "/users", "❓ Довідка": "/help", "📈 Аналітика": "/stats", "🏆 Топ тижня": "/top", "🔌 Платформи": "/platforms", "⚠️ Невдалі": "/failed", "🎮 Стрім": "/stream", "⬆️ Оновити": "/update", "📄 Журнал": "/log", "🧹 Очистити чат": "/clean",
 }
 VIEWER_CMDS = {"/start", "/help", "/menu", "/queue", "/status", "/report", "/stats", "/top"}
 
 # Кнопка «Меню» біля поля введення (setMyCommands)
-KBD_VERSION = "5"  # збільшується, коли змінюється набір кнопок — бот надішле нові
+KBD_VERSION = "6"  # збільшується, коли змінюється набір кнопок — бот надішле нові
 
 COMMANDS = [
     ("menu", "Показати кнопки керування"),
@@ -154,7 +154,7 @@ class Bot:
             stop = "✅ Відновити публікації" if self.stopped() else "⛔ Стоп публікацій"
             rows = [["📋 Черга", "🕐 Статус", "📊 Звіт"], ["📈 Аналітика", "🏆 Топ тижня", "🧪 Тест-слот"],
                     ["🔌 Платформи", pause, "👥 Доступ"], ["⚠️ Невдалі", "🎮 Стрім", "⬆️ Оновити"],
-                    [stop, "📄 Журнал", "❓ Довідка"]]
+                    [stop, "📄 Журнал", "🧹 Очистити чат"], ["❓ Довідка"]]
             import eu_tab
             if eu_tab.available(self.cfg):
                 rows.append(["🇬🇧 EU-канал"])
@@ -441,8 +441,18 @@ class Bot:
         self.db.set(key, json.dumps((ids + [int(mid)])[-500:]))
 
     def clean_chat(self, chat_id: int, latest: int | None = None, depth: int = 1500) -> int:
-        """Прибирає з чату все, крім відео шортсів, звітів і аналітики (Telegram дозволяє лише за 48 год)."""
-        keep = {int(r["msg_id"]) for r in self.db.q("SELECT msg_id FROM tg_msgs WHERE chat_id=?", (int(chat_id),))}
+        """Лишає в чаті лише відео опублікованих шортсів і тих, що зараз у роботі (чекають підтвердження,
+        підтверджені, публікуються, не вийшли — з кнопкою повтору) + кнопки внизу. Решта (картки черги,
+        скасовані, пропущені, відповіді) — геть. Telegram дозволяє видаляти лише повідомлення до 48 год."""
+        keep = set()
+        for r in self.db.q("SELECT t.msg_id, t.item_id, i.status FROM tg_msgs t JOIN items i ON i.id=t.item_id "
+                           "WHERE t.chat_id=?", (int(chat_id),)):
+            if r["status"] in ("posted", "publishing", "notified", "approved", "failed"):
+                keep.add(int(r["msg_id"]))
+            else:  # картка черги / скасованого / пропущеного — прибираємо і забуваємо
+                self.db.x("DELETE FROM tg_msgs WHERE chat_id=? AND msg_id=?", (int(chat_id), r["msg_id"]))
+                if r["status"] == "queued":
+                    self.db.set(f"noqcard:{r['item_id']}", 1)  # не надсилати знову — прийде на підтвердження
         service = ("kbd", "reauth_", "failed", "acc")  # лише невирішені службові; аналітика/звіти — ні
         for r in self.db.q("SELECT key, value FROM kv WHERE key LIKE ?", (f"keep:{chat_id}:%",)):
             kind = r["key"].split(":", 2)[2]
@@ -1022,7 +1032,7 @@ class Bot:
                     for r in self.db.tg_msgs(it["id"]):
                         self._delete(r["chat_id"], [r["msg_id"]])
                     self.db.clear_tg_msgs(it["id"])
-            missing = [i for i in today if not self.db.tg_msgs(i)]
+            missing = [i for i in today if not self.db.tg_msgs(i) and not self.db.get(f"noqcard:{i}")]
             if missing:
                 fixed += self.queue_cards(missing, limit=3)
         return fixed
