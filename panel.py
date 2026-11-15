@@ -1157,6 +1157,39 @@ def make_handler(panel: Panel):
     return H
 
 
+def disk_version() -> str:
+    """VERSION у файлі config.py на диску (після оновлення він новіший, ніж код у пам'яті цієї панелі)."""
+    try:
+        m = re.search(r'^VERSION\s*=\s*"([^"]+)"', (Path(__file__).resolve().parent / "config.py")
+                      .read_text(encoding="utf-8"), re.M)
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
+def _restart_on_new_code(httpd, every: int = 30) -> None:
+    """Код оновився (панель відкрита давно, напр. панель EN-каналу) — запускаємо нову панель на тому ж порту,
+    вона сама закриє цю. Так панель ніколи не лишається на старій версії."""
+    from config import VERSION
+    import subprocess
+    while True:
+        time.sleep(every)
+        new = disk_version()
+        if new and new != VERSION:
+            log.info("Код оновлено (%s → %s) — перезапускаю панель", VERSION, new)
+            args = [control.python_exe(windowless=True), str(Path(__file__).resolve()), *sys.argv[1:]]
+            if "--no-browser" not in args:
+                args.append("--no-browser")
+            try:
+                flags = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW) if control.WIN else 0
+                subprocess.Popen(args, cwd=str(Path(__file__).resolve().parent), creationflags=flags, close_fds=True,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=not control.WIN)
+            except OSError as e:
+                log.warning("Перезапуск панелі: %s", e)
+            return
+
+
 def serve(config_path: str | None = None, open_browser: bool = True, port: int | None = None) -> int:
     from config import setup_logging
 
@@ -1194,6 +1227,7 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
         pass
     log.info("Панель керування %s: %s", VERSION, url)
     threading.Thread(target=control.ensure_shortcut_once, args=(panel.db,), daemon=True).start()
+    threading.Thread(target=_restart_on_new_code, args=(httpd,), daemon=True, name="panel-code-watch").start()
     if sys.stdout:
         print(f"Панель керування: {url}  (Ctrl+C — закрити)")
     if open_browser:
