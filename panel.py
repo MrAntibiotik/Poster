@@ -1233,6 +1233,17 @@ def serve(config_path: str | None = None, open_browser: bool = True, port: int |
     log.info("Панель керування %s: %s", VERSION, url)
     threading.Thread(target=control.ensure_shortcut_once, args=(panel.db,), daemon=True).start()
     threading.Thread(target=_restart_on_new_code, args=(httpd,), daemon=True, name="panel-code-watch").start()
+
+    def _channels_watch():  # основна панель стежить, щоб панелі каналів (EN) не лишались на старому коді
+        import channels
+        while True:
+            try:
+                channels.refresh_panels(panel.cfg)
+            except Exception as e:  # noqa: BLE001
+                log.debug("refresh_panels: %s", e)
+            time.sleep(60)
+    if not panel.cfg.get("channel"):
+        threading.Thread(target=_channels_watch, daemon=True, name="channel-panels-watch").start()
     if sys.stdout:
         print(f"Панель керування: {url}  (Ctrl+C — закрити)")
     if open_browser:

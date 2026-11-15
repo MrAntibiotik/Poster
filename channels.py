@@ -283,3 +283,40 @@ def publish_paths(main_cfg: dict) -> Path | None:
     except OSError as e:
         log.warning("Не вдалося записати %s: %s", path, e)
         return None
+
+
+def panel_version(port: int) -> str:
+    """Версія коду, на якій зараз працює панель каналу (її /api/session)."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{int(port)}/api/session",
+                                     headers={"Host": f"127.0.0.1:{int(port)}"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return str(json.loads(r.read().decode("utf-8") or "{}").get("version") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def refresh_panels(main_cfg: dict | None = None) -> list[str]:
+    """Панелі каналів, що працюють на старому коді (напр. EN після оновлення), — закрити й запустити знову."""
+    from config import VERSION
+    done = []
+    if main_cfg and main_cfg.get("channel"):
+        return done
+    for key in keys():
+        try:
+            st = status(key)
+            if not st["panel_running"]:
+                continue
+            ver = panel_version(st["panel_port"])
+            if ver and ver == VERSION:
+                continue
+            owner = control.port_owner(st["panel_port"]) or {}
+            if owner.get("pid") and "panel.py" in str(owner.get("cmd") or ""):
+                control.kill(int(owner["pid"]))
+            control.spawn_panel(str(config_path(key)), st["panel_port"])
+            log.info("Панель каналу %s була на версії %s — перезапущено на %s", key, ver or "?", VERSION)
+            done.append(key)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Панель каналу %s: %s", key, e)
+    return done

@@ -202,3 +202,28 @@ class RestartPanelsTest(unittest.TestCase):
             ch.restart_running({"paths": {}})
         sp.assert_called_once()
         self.assertEqual(sp.call_args[0][1], 8771)
+
+
+class RefreshPanelsTest(unittest.TestCase):
+    def test_old_panel_is_replaced(self):
+        import channels as ch
+        st = {"panel_running": True, "panel_port": 8771}
+        with mock.patch.object(ch, "keys", return_value=["en"]), \
+                mock.patch.object(ch, "status", return_value=st), \
+                mock.patch.object(ch, "panel_version", return_value="2026.11.14-65"), \
+                mock.patch.object(ch.control, "port_owner", return_value={"pid": 4242, "cmd": "pythonw panel.py --port 8771"}), \
+                mock.patch.object(ch.control, "kill") as kill, \
+                mock.patch.object(ch.control, "spawn_panel") as sp:
+            self.assertEqual(ch.refresh_panels({"paths": {}}), ["en"])
+        kill.assert_called_once_with(4242)
+        sp.assert_called_once()
+
+    def test_current_panel_untouched(self):
+        import channels as ch
+        from config import VERSION
+        with mock.patch.object(ch, "keys", return_value=["en"]), \
+                mock.patch.object(ch, "status", return_value={"panel_running": True, "panel_port": 8771}), \
+                mock.patch.object(ch, "panel_version", return_value=VERSION), \
+                mock.patch.object(ch.control, "spawn_panel") as sp:
+            self.assertEqual(ch.refresh_panels({"paths": {}}), [])
+        sp.assert_not_called()
