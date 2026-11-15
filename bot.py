@@ -242,13 +242,21 @@ class Bot:
     def has_details(self, item: dict) -> bool:
         return any(r.get("status") != "ok" or r.get("tried") for r in item["results"].values())
 
-    def publish_all(self, by="") -> str:
-        """Опублікувати всі шортси, що чекають на підтвердження (пропущені слоти) — по черзі, з поточними назвами."""
+    def publish_all(self, by="", chat: int | None = None) -> str:
+        """Опублікувати всі шортси, що чекають на підтвердження (пропущені слоти) — по черзі.
+        Якщо ввімкнено «питати назву й хештеги» і натиснуто в Telegram — спершу назва й хештеги для кожного."""
         items = [i for i in self.db.items("status='notified'", order="slot_at")
                  if self.app.publisher.targets(i) and not self.app.publisher.is_active(i["id"])]
         if not items:
             raise ValueError("Немає шортсів, що чекають на підтвердження")
         ids = [i["id"] for i in items]
+        if chat and self.cfg.get("ask_texts_before_publish"):
+            self.dialog_start(chat, ids[0], preset="bulk", bulk=ids[1:])
+            return f"✍️ Назва й хештеги для кожного ({len(ids)} шт.), далі — публікація по черзі"
+        self._queue_bulk(ids, by)
+        return f"🚀 Публікую по черзі: {', '.join('#' + str(i) for i in ids)}"
+
+    def _queue_bulk(self, ids: list[int], by="") -> None:
         for i in ids:
             self.db.update_item(i, status="approved")
             self.db.event(i, "approved", {"by": by, "bulk": True})
@@ -262,7 +270,6 @@ class Bot:
         self.db.set("bulk_ids", json.dumps(pending + [i for i in ids if i not in pending]))
         self.resume_bulk()
         self.db.set("last_activity", now_ts())
-        return f"🚀 Публікую по черзі: {', '.join('#' + str(i) for i in ids)}"
 
     def resume_bulk(self) -> None:
         """Черга «опублікувати всі»: по одному шортсу; переживає перезапуск бота (список — у базі)."""
@@ -1162,7 +1169,7 @@ class Bot:
                     self.app.scheduler.restore(target)
                     answer("↩️ Повернуто — перший у черзі", True)
                 else:
-                    answer(self.publish_all(by=chat)[:190], True)
+                    answer(self.publish_all(by=chat, chat=chat)[:190], True)
             except ValueError as e:
                 answer(str(e)[:190], True)
             return
@@ -1280,16 +1287,17 @@ class Bot:
     def dialog_set(self, chat: int, state: dict | None) -> None:
         self.db.set(f"dialog:{chat}", json.dumps(state, ensure_ascii=False) if state else None)
 
-    def dialog_start(self, chat: int, item_id: int, preset=None) -> None:
+    def dialog_start(self, chat: int, item_id: int, preset=None, bulk: list | None = None) -> None:
         item = self.db.get_item(item_id)
         meta = self._raw_meta(item)
-        self.dialog_set(chat, {"item": item_id, "step": "title", "preset": preset})
+        self.dialog_set(chat, {"item": item_id, "step": "title", "preset": preset, "bulk": bulk or []})
         kb = {"inline_keyboard": [
             [{"text": f"Залишити: {meta.yt_title[:40]}", "callback_data": f"keep:{item_id}:title"}],
             [{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}"}]]}
         always = self._always_line()
         note = f"\nℹ️ У кінець назви автоматично додаються: {esc(always)}" if always else ""
-        self.tmp(chat, f"✍️ <b>Крок 1/2.</b> Надішліть <b>назву</b> для шортса #{item_id}.\n"
+        left = f" · ще {len(bulk)} після нього" if bulk else ""
+        self.tmp(chat, f"✍️ <b>Крок 1/2.</b> Надішліть <b>назву</b> для шортса #{item_id}{left}.\n"
                        f"Зараз: <i>{esc(meta.yt_title)}</i>{note}", reply_markup=kb)
 
     def _ask_tags(self, chat: int, item_id: int) -> None:
@@ -1371,7 +1379,17 @@ class Bot:
         self.db.update_item(item_id, title_override=None, edited=edited)
         if len(tags) > 15:
             self.tmp(chat, "⚠️ YouTube ігнорує всі хештеги, якщо їх більше 15.", html_mode=False)
-        preset = (self.dialog_get(chat) or {}).get("preset")
+        prev = self.dialog_get(chat) or {}
+        preset = prev.get("preset")
+        if preset == "bulk":  # «опублікувати всі»: цей — у чергу публікації, далі — наступний шортс
+            rest = [i for i in prev.get("bulk") or []
+                    if (self.db.get_item(i) or {}).get("status") == "notified"]
+            self.dialog_set(chat, None)
+            self.refresh(item_id, texts=True)
+            self._queue_bulk([item_id], by=chat)
+            if rest:
+                return self.dialog_start(chat, rest[0], preset="bulk", bulk=rest[1:])
+            return self.cleanup(chat)
         st = {"item": item_id, "step": "time", "mode": "dialog", "title": title, "tags": tags}
         self.dialog_set(chat, st)
         self.refresh(item_id, texts=True)

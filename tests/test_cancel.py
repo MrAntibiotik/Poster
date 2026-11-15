@@ -75,6 +75,30 @@ class CancelTest(FlowBase):
         with self.assertRaises(ValueError):
             self.app.bot.publish_all()
 
+    def test_publish_all_asks_title_and_tags_for_each(self):
+        self.cfg["on_missed_approval"] = "wait"
+        self.cfg["ask_texts_before_publish"] = True
+        self.sch.tick(self.ts(11, "09:00"))
+        self.sch.tick(self.ts(11, "10:00"))
+        self.sch.tick(self.ts(11, "12:00"))
+        self.sch.tick(self.ts(11, "13:00"))
+        a, b = self.db.items("status='notified'", order="slot_at")
+        say = lambda t: self.app.bot.handle({"update_id": 1, "message": {  # noqa: E731
+            "message_id": 50, "text": t, "chat": {"id": 42, "type": "private"}}})
+        self.button("pall:0", a)
+        self.assertIn(f"назву</b> для шортса #{a['id']} · ще 1", self.app.bot.tg.sent[-1][1])
+        self.assertEqual(self.db.get_item(a["id"])["status"], "notified")  # без назви — не публікуємо
+        say("Перший")
+        say("wot танки")
+        self.assertEqual(self.db.get_item(a["id"])["status"], "posted")
+        self.assertIn(f"назву</b> для шортса #{b['id']}", self.app.bot.tg.sent[-1][1])
+        say("Другий")
+        say("-")
+        self.assertEqual(self.db.get_item(b["id"])["status"], "posted")
+        import json
+        self.assertIn("Перший", json.dumps(json.loads(Path(self.db.get_item(a["id"])["json"]).read_text(encoding="utf-8")),
+                                            ensure_ascii=False))
+
 
 if __name__ == "__main__":
     unittest.main()
