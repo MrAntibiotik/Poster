@@ -20,6 +20,7 @@ TOKEN_ERROR_CODES = {102, 190, 463, 467}
 # 613 — частота, 80001–80014 — ліміти Business Use Case. Вікно — ковзна година.
 RATE_LIMIT_CODES = {4, 17, 32, 613} | set(range(80001, 80015))
 LIMIT_FILE = Path(tempfile.gettempdir()) / "poster-meta-limit.json"   # спільний для всіх каналів (один додаток Meta)
+AFTER_400_WAIT = 8 * 60   # після «rupload 400» довго чекати марно — далі наступний варіант файлу
 STATS_MAX_USAGE = 60      # статистику не знімаємо, якщо використано ≥ N% годинної квоти — бережемо для публікацій
 
 
@@ -340,9 +341,10 @@ class Instagram(_MetaBase):
             st = g.get(cid, fields="status_code,status")
             code = st.get("status_code")
             self.report("Instagram обробляє відео")   # «живий»: остання перевірка щойно
-            if code == "IN_PROGRESS" and upload_error and deadline < start + 20 * 60:
-                log.info("Instagram: попри помилку завантаження відео обробляється — чекаю до 20 хв")
-                deadline = start + 20 * 60
+            if code == "IN_PROGRESS" and upload_error and deadline < start + AFTER_400_WAIT:
+                log.info("Instagram: попри помилку завантаження відео обробляється — чекаю до %s хв",
+                         AFTER_400_WAIT // 60)
+                deadline = start + AFTER_400_WAIT
             if code == "FINISHED":
                 if upload_error:
                     log.info("Instagram: попри помилку завантаження контейнер готовий — публікую")
