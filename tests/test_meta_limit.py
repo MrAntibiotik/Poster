@@ -260,3 +260,21 @@ class StuckPublishingButtonsTest(FlowBase):
         self.app.publisher.active.add(it["id"])
         self.assertIsNone(self.app.bot.keyboard(item))          # справді публікується — без кнопок
         self.app.publisher.active.discard(it["id"])
+
+
+class StatusNowTest(FlowBase):
+    def test_status_shows_what_is_publishing(self):
+        app = self.app
+        self.assertIn("✅ Нічого не публікується", app.status_text())
+        self.make_short("a")
+        self.make_short("b")
+        app.scheduler.scan()
+        a, b = app.db.items("status='queued'")[:2]
+        app.db.update_item(a["id"], status="publishing", results={"youtube": {"status": "ok"}})
+        app.db.update_item(b["id"], status="publishing")
+        app.publisher.active.add(a["id"])
+        app.db.set(f"pubnow:{a['id']}", "instagram")
+        text = app.status_text()
+        self.assertIn(f"#{a['id']} a — Instagram — вантажиться / обробляється (вже: YT ✅)", text)
+        self.assertIn(f"#{b['id']} b — ⚠️ перервано", text)
+        app.publisher.active.discard(a["id"])

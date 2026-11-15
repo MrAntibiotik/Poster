@@ -231,11 +231,15 @@ class Instagram(_MetaBase):
         # по одному відео за раз: паралельні великі завантаження Instagram відхиляє; поки чекаємо — слухаємо «Стоп»
         while not Instagram._upload_lock.acquire(timeout=3):
             self._check_stop()
+        Instagram.current = video_path   # для «🕐 Статус»: що саме зараз вантажиться в Instagram
         try:
             self._check_stop()
             return self._publish_locked(video_path, meta)
         finally:
+            Instagram.current = None
             Instagram._upload_lock.release()
+
+    current: str | None = None
 
     def _check_stop(self) -> None:
         if self.should_stop():

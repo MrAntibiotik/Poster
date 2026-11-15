@@ -6,7 +6,7 @@ import html
 import logging
 import os
 from pathlib import Path
-from app.core.config import NAMES, ConfigError, enabled_platforms, ensure_dirs, fmt_slot, fmt_when, load_config, now_ts
+from app.core.config import NAMES, SHORT, ConfigError, enabled_platforms, ensure_dirs, fmt_slot, fmt_when, load_config, now_ts
 from app.core.db import DB
 from app.platforms import build_platforms
 
@@ -95,9 +95,52 @@ class App:
             lines.append("\n❌ Не опубліковано: " + ", ".join(f"#{i['id']}" for i in failed) + " (/retry N)")
         return "\n".join(lines)
 
+    def now_lines(self, now: int) -> list[str]:
+        """Що відбувається просто зараз: публікації, черга Instagram, повтори, ліміт Meta."""
+        out = ["⏫ <b>Зараз</b>"]
+        ig_now = None
+        try:
+            from app.platforms import meta_graph
+            ig_now = meta_graph.Instagram.current
+            until = meta_graph.blocked_until()
+            usage = meta_graph.usage_pct()
+        except Exception:  # noqa: BLE001
+            until, usage = 0, 0
+        stopped = self.db.get("stopped") == "1"
+        busy = False
+        for it in self.db.items("status='publishing'", order="id"):
+            busy = True
+            name = f"#{it['id']} {esc(Path(it['mp4']).stem)}"
+            done = [SHORT[p] for p, r in it["results"].items() if r.get("status") == "ok"]
+            ok = f" (вже: {', '.join(done)} ✅)" if done else ""
+            if not self.publisher.is_active(it["id"]):
+                out.append(f"• {name} — {'⛔ зупинено' if stopped else '⚠️ перервано (🔁 Повторити під відео)'}{ok}")
+                continue
+            cur = self.db.get(f"pubnow:{it['id']}")
+            tr = self.db.get(f"pubtry:{it['id']}:{cur}") if cur else None
+            if cur == "instagram" and ig_now and Path(ig_now).stem != Path(it["mp4"]).stem \
+                    and not Path(ig_now).stem.startswith(Path(it["mp4"]).stem):
+                state = "📸 чекає черги в Instagram (по одному відео)"
+            elif cur:
+                state = f"{NAMES.get(cur, cur)} — вантажиться / обробляється" + (f", спроба {tr}" if tr else "")
+            else:
+                state = "готується"
+            out.append(f"• {name} — {state}{ok}")
+        for r in self.db.q("SELECT slot_at, item_id FROM slots WHERE state='retry' AND slot_at>? ORDER BY slot_at",
+                           (now,))[:5]:
+            busy = True
+            out.append(f"• 🔁 повтор #{r['item_id']} — {fmt_when(self.cfg, r['slot_at'], now)}")
+        if not busy:
+            out.append("✅ Нічого не публікується")
+        if until:
+            out.append(f"⏳ Meta (Instagram/Facebook) обмежила запити до {fmt_slot(self.cfg, until, now)}")
+        elif usage >= 50:
+            out.append(f"📊 Квота запитів Meta використана на {usage}%")
+        return out
+
     def status_text(self) -> str:
         now = now_ts()
-        lines = ["🕐 <b>Найближчі слоти</b>"]
+        lines = self.now_lines(now) + ["", "🕐 <b>Найближчі слоти</b>"]
         kinds = {"notified": "⏳ чекає підтвердження", "approved": "👍 підтверджено", "publishing": "⏫ публікується",
                  "planned": "📦 з черги"}
         for s in self.scheduler.slot_plan(now, 6):
