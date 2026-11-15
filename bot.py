@@ -1014,11 +1014,24 @@ class Bot:
                 if fixed >= limit:
                     break
         fixed += self.upgrade_text_cards()
-        if (self.cfg.get("telegram") or {}).get("queue_cards", True):  # у черзі, але картки в чаті ще немає
-            missing = [i["id"] for i in self.db.items("status='queued' AND id NOT IN (SELECT item_id FROM tg_msgs)")]
+        if (self.cfg.get("telegram") or {}).get("queue_cards", True):
+            today = self.today_queue_ids()
+            # картки з відео — лише для тих, що вийдуть сьогодні; решта — списком у «📋 Черга»
+            for it in self.db.items("status='queued' AND id IN (SELECT item_id FROM tg_msgs)"):
+                if it["id"] not in today:
+                    for r in self.db.tg_msgs(it["id"]):
+                        self._delete(r["chat_id"], [r["msg_id"]])
+                    self.db.clear_tg_msgs(it["id"])
+            missing = [i for i in today if not self.db.tg_msgs(i)]
             if missing:
                 fixed += self.queue_cards(missing, limit=3)
         return fixed
+
+    def today_queue_ids(self) -> list[int]:
+        """Шортси з черги, що за планом виходять сьогодні (у порядку черги)."""
+        now = now_ts()
+        day = local_dt(self.cfg, now).date()
+        return [it["id"] for it, ts in self.app.scheduler.projection(now) if ts and local_dt(self.cfg, ts).date() == day]
 
     def upgrade_text_cards(self, limit: int = 2) -> int:
         """Картка без відео (відео тоді не вдалося надіслати — світло, інтернет, збій стискання):

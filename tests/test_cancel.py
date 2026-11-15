@@ -144,6 +144,24 @@ class QueueCardTest(FlowBase):
         it = db.get_item(item["id"])
         self.assertEqual((it["status"], it["slot_at"]), ("approved", self.ts(11, "10:00")))
 
+    def test_cards_only_for_today_rest_as_list(self):
+        self.cfg["telegram"]["queue_cards"] = True
+        tg, db, sch = self.app.bot.tg, self.app.db, self.app.scheduler
+        for n in "abcdefg":
+            self.make_short(n, age=1000 - ord(n))
+        import config
+        config.FAKE_NOW = self.ts(11, "08:00")
+        sch.scan()  # 5 слотів сьогодні (10…21), 2 — завтра
+        with_card = [i for i in db.items("status='queued'") if db.tg_msg(i["id"], 42)]
+        self.assertEqual(len(with_card), 5)
+        self.assertTrue(any("Нові шортси в черзі: 2" in str(m[1]) for m in tg.sent))  # решта — списком
+        config.FAKE_NOW = self.ts(12, "08:00")  # наступного дня завтрашні стають «сьогоднішніми»
+        for i in with_card:  # (вчорашні вже опубліковано б — прибираємо з черги для тесту)
+            db.update_item(i["id"], status="posted")
+        self.app.bot.heal()
+        later = [i for i in db.items("status='queued'") if db.tg_msg(i["id"], 42)]
+        self.assertEqual(len(later), 2)
+
     def test_queued_without_card_gets_one(self):
         db, sch = self.app.db, self.app.scheduler
         self.make_short("b")

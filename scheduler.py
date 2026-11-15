@@ -205,9 +205,12 @@ class Scheduler:
                 log.info("У чергу додано #%s: %s", item_id, path)
         if added:
             if (self.cfg.get("telegram") or {}).get("queue_cards", True) and hasattr(self.app.bot, "queue_cards"):
-                n = self.app.bot.queue_cards(added)  # кожен новий шортс — карткою з відео (як в основному каналі)
-                if len(added) > n:
-                    self.announce_queued(added[n:])
+                today = set(self.app.bot.today_queue_ids())
+                cards = [i for i in added if i in today]  # картки з відео — лише на сьогодні
+                self.app.bot.queue_cards(cards)
+                rest = [i for i in added if i not in today]
+                if rest:
+                    self.announce_queued(rest)  # решта — одним списком із часом публікації
             else:
                 self.announce_queued(added)
         return added
