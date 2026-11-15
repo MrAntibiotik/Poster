@@ -78,6 +78,31 @@ class UpdaterTest(unittest.TestCase):
         self.assertEqual(backups[0].read_text(), "# old\n")
 
 
+class RollbackTest(UpdaterTest):
+    def test_rollback_restores_backup(self):
+        updater.requests.get = lambda url, **kw: Resp(200, content=make_zip("2099.01.01-1"))
+        from config import VERSION
+        updater.apply(self.cfg, root=self.root)
+        self.assertEqual((self.root / "poster.py").read_text(), "# new poster\n")
+        n = updater.rollback(self.cfg, VERSION, root=self.root)
+        self.assertGreaterEqual(n, 1)
+        self.assertEqual((self.root / "poster.py").read_text(), "# old\n")
+        self.assertEqual((self.root / ".env").read_text(encoding="utf-8"), "TELEGRAM_BOT_TOKEN=mine\n")
+        with self.assertRaises(updater.UpdateError):
+            updater.rollback(self.cfg, "1999.01.01-1", root=self.root)
+
+    def test_wait_new_boot(self):
+        import poster
+
+        class DB(dict):
+            def get(self, k, d=None):
+                return dict.get(self, k, d)
+        db = DB(boot_ok="2026.11.15-74|1")
+        self.assertFalse(poster.wait_new_boot(db, "2026.11.15-74", timeout=1))
+        db["boot_ok"] = "2026.11.15-75|2"
+        self.assertTrue(poster.wait_new_boot(db, "2026.11.15-74", timeout=1))
+
+
 class AutoUpdateFlowTest(FlowBase):
     def test_installs_when_idle_and_requests_restart(self):
         self.cfg["updates"] = {"auto": True, "check_minutes": 5}

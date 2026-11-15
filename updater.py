@@ -133,6 +133,24 @@ def apply(cfg: dict, root: Path = ROOT) -> str:
     return new_version
 
 
+def rollback(cfg: dict, version: str, root: Path = ROOT) -> int:
+    """Повертає файли програми з резервної копії data/backup/<версія> (якщо нова версія не запустилась)."""
+    backup = Path(cfg["paths"]["data"]) / "backup" / version
+    if not backup.is_dir():
+        raise UpdateError(f"резервної копії {version} немає")
+    n = 0
+    for f in backup.rglob("*"):
+        if f.is_file():
+            rel = f.relative_to(backup)
+            if _protected(rel):
+                continue
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, root / rel)
+            n += 1
+    log.warning("Відкат до %s: відновлено %s файлів", version, n)
+    return n
+
+
 def install_requirements(root: Path = ROOT) -> None:
     from control import python_exe
     log.info("Змінились залежності — встановлюю")

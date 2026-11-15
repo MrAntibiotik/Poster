@@ -163,6 +163,17 @@ def restart_after_update(cfg: dict, lock) -> None:
         updater.spawn([str(root / "panel.py"), "--config", cfg["config_path"], "--no-browser"])
 
 
+def wait_new_boot(db, old_version: str, timeout: int = 120) -> bool:
+    """Чекаємо, поки новий процес запишеться в базу «я запустився»."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        boot = db.get("boot_ok") or ""
+        if boot and not boot.startswith(old_version + "|"):
+            return True
+        time.sleep(2)
+    return False
+
+
 def single_instance(port: int) -> socket.socket | None:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -216,6 +227,7 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
         log.warning("Кнопки: %s", e)
     from config import VERSION
     log.info("Версія %s", VERSION)
+    app.db.set("boot_ok", f"{VERSION}|{time.time()}")  # для процесу, що перезапускає нас після оновлення
     log.info("poster запущено. Платформи: %s. dry_run=%s", list(app.platforms), cfg.get("dry_run"))
     app.scheduler.scan()
     app.scheduler.ensure_slots(now_ts())
@@ -230,9 +242,29 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
     def stop_requested() -> bool:
         ctl = app.db.get("control")
         if ctl == "restart":
+            nonlocal lock
             app.db.set("control", None)
+            from config import VERSION as old_version
+            app.db.set("boot_ok", f"{old_version}|{time.time()}")
             restart_after_update(cfg, lock)
-            return True
+            if wait_new_boot(app.db, old_version):
+                log.info("Нова версія запустилась — цей процес завершується")
+                return True
+            # Нова версія не стартувала за 2 хв: повертаємо попередні файли і працюємо далі самі (старий код у пам'яті)
+            relock = single_instance(int(cfg["lock_port"]))
+            if relock is None:  # новий процес тримає замок — він живий, просто довго стартує; виходимо
+                return True
+            lock = relock
+            log.error("Нова версія не запустилась за 2 хв — відкат до %s", old_version)
+            import updater
+            try:
+                updater.rollback(cfg, old_version)
+                note = f"файли повернуто до {old_version}"
+            except Exception as e:  # noqa: BLE001
+                note = f"відкат не вдався: {e}"
+            app.db.set("update_error", f"нова версія не запустилась; {note}")
+            app.bot.send(f"⚠️ Оновлення не запустилось — {note}. Бот працює далі. Надішліть «📄 Журнал».")
+            return False
         if ctl != "stop":
             return False
         app.db.set("control", None)
