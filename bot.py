@@ -689,7 +689,10 @@ class Bot:
         if st == "queued":
             if item["note"]:
                 return esc(item["note"])
-            return f"⏭ Пропущено ({item['skips']}/{self.cfg['max_skips']}) — шортс переміщено в кінець черги"
+            if item["skips"]:
+                return f"⏭ Пропущено ({item['skips']}/{self.cfg['max_skips']}) — шортс переміщено в кінець черги"
+            return (f"📥 <b>Новий у черзі</b> — за {self.cfg['notify_before_minutes']} хв до часу прийде "
+                    "на підтвердження. Раніше — «🕐 Обрати час / ⚡ зараз».")
         if st == "skipped":
             return f"⏭ Пропущено {item['skips']} рази — файли перенесено в skipped/"
         if st == "cancelled":
@@ -824,6 +827,12 @@ class Bot:
         if item["status"] == "cancelled":
             return {"inline_keyboard": [[{"text": "↩️ Повернути в чергу", "callback_data": f"cr:{item['id']}"}]]} \
                 if Path(item["mp4"]).exists() else None
+        if item["status"] == "queued":
+            i = item["id"]
+            return {"inline_keyboard": [
+                [{"text": "🕐 Обрати час / ⚡ зараз", "callback_data": f"qt:{i}"}],
+                [{"text": "⬆️ Першим у черзі", "callback_data": f"qf:{i}"},
+                 {"text": "🚫 Скасувати", "callback_data": f"qd:{i}"}]]}
         if item["status"] not in ("notified", "approved"):
             return None
         i = item["id"]
@@ -844,6 +853,40 @@ class Bot:
             rows.append([{"text": f"🚀 Опублікувати всі, що чекають ({waiting})", "callback_data": "pall:0"}])
         rows.append([{"text": "🚫 Скасувати цей шортс", "callback_data": f"cx:{i}"}])
         return {"inline_keyboard": rows}
+
+    def queue_cards(self, item_ids: list[int], limit: int = 10) -> int:
+        """Щойно шортс став у чергу — картка з відео в чаті: час публікації й кнопки (час / першим / скасувати).
+        За годину до слоту вона замінюється карткою на підтвердження."""
+        sent = 0
+        admins = set(self.admins())
+        for item_id in item_ids[:limit]:
+            item = self.db.get_item(item_id)
+            if not item or item["status"] != "queued" or self.db.tg_msgs(item_id):
+                continue
+            try:
+                video = media.telegram_copy(item["mp4"], self.cfg)
+                info = media.probe(video, self.cfg["ffprobe"])
+            except (media.MediaError, OSError) as e:
+                log.warning("Картка черги #%s без відео: %s", item_id, e)
+                video, info = None, {}
+            cap, kb = self.caption(item), self.keyboard(item)
+            file_id = None
+            for cid in self.recipients():
+                markup = kb if cid in admins else None
+                try:
+                    if video:
+                        msg = self.tg.send_video(cid, file_id or video, cap, markup, width=info.get("width"),
+                                                 height=info.get("height"), duration=info.get("duration"))
+                        file_id = file_id or ((msg or {}).get("video") or {}).get("file_id")
+                        is_text = 0
+                    else:
+                        msg, is_text = self.tg.send_message(cid, cap, reply_markup=markup), 1
+                    self.db.set_tg_msg(item_id, cid, msg["message_id"], None, is_text)
+                    self.db.set(f"cap:{item_id}:{cid}", self._cap_digest(cap, markup))
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Картка черги #%s для %s: %s", item_id, cid, e)
+            sent += 1
+        return sent
 
     def notify_item(self, item_id: int) -> None:
         """Надсилає сам шортс (відеоповідомлення) + тексти всім отримувачам; кнопки — лише адміністраторам."""
@@ -869,6 +912,9 @@ class Bot:
         separate = bool((self.cfg.get("telegram") or {}).get("texts_message", False))
         caption, kb, texts = self.caption(item, meta), self.keyboard(item), self.texts(item, meta, qline)
         admins = self.admins()
+        old = self.db.tg_msgs(item_id)  # картка «нове в черзі» (або попередня) — замінюється новою, щоб не дублювались
+        for r in old:
+            self._delete(r["chat_id"], [r["msg_id"]] + ([r["text_msg_id"]] if r.get("text_msg_id") else []))
         self.db.clear_tg_msgs(item_id)
         video, info, file_id, video_error = None, {}, None, None
         try:

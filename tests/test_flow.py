@@ -65,7 +65,7 @@ class FlowBase(unittest.TestCase):
             "slots": ["10:00", "13:00", "16:00", "19:00", "21:00"],
             "dry_run": True,
             "retry": {"attempts": 3, "pause_seconds": 0},
-            "telegram": {"bot_token": "123:abc", "chat_id": "42"},
+            "telegram": {"bot_token": "123:abc", "chat_id": "42", "queue_cards": False},
             "reports": {"daily_time": "22:30", "stats_after_hours": 24},
             "always_hashtags": {"tags": []},
             "on_missed_approval": "skip",

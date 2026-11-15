@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.15-73"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.15-74"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -98,7 +98,7 @@ DEFAULTS: dict = {
         "tokens": "tokens",
         "log": "log.txt",
     },
-    "telegram": {"bot_token": "", "chat_id": "",
+    "telegram": {"bot_token": "", "chat_id": "", "queue_cards": True,
                  "preview_height": 720},  # якість відео в Telegram (0 — оригінал); на платформи завжди оригінал
     "retry": {"attempts": 3, "pause_seconds": 120},
     "reports": {"daily_time": "22:30", "stats_after_hours": 24, "health_check_time": "09:00",

@@ -196,7 +196,12 @@ class Scheduler:
                 self.db.event(item_id, "queued", {"file": Path(path).name})
                 log.info("У чергу додано #%s: %s", item_id, path)
         if added:
-            self.announce_queued(added)
+            if (self.cfg.get("telegram") or {}).get("queue_cards", True) and hasattr(self.app.bot, "queue_cards"):
+                n = self.app.bot.queue_cards(added)  # кожен новий шортс — карткою з відео (як в основному каналі)
+                if len(added) > n:
+                    self.announce_queued(added[n:])
+            else:
+                self.announce_queued(added)
         return added
 
     def _scan_highlights(self, known: set) -> list[tuple]:

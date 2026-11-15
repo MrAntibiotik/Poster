@@ -100,5 +100,27 @@ class CancelTest(FlowBase):
                                             ensure_ascii=False))
 
 
+class QueueCardTest(FlowBase):
+    def test_new_short_shows_in_chat_then_card_is_replaced(self):
+        self.cfg["telegram"]["queue_cards"] = True
+        tg, db, sch = self.app.bot.tg, self.app.db, self.app.scheduler
+        self.make_short("a")
+        import config
+        config.FAKE_NOW = self.ts(11, "08:00")
+        sch.scan()
+        item = db.items("status='queued'")[0]
+        card = db.tg_msg(item["id"], 42)
+        self.assertIsNotNone(card)  # одразу в чаті
+        sent = [m for m in tg.sent if "Новий у черзі" in str(m[1])]
+        self.assertTrue(sent)
+        self.assertIn("📦 У черзі → сьогодні 10:00", sent[-1][1])
+        self.assertIn("qt:", str(sent[-1][2]))
+        sch.tick(self.ts(11, "09:00"))  # за годину до слоту — картка на підтвердження замість картки черги
+        self.assertIn(card["msg_id"], tg.deleted)
+        new = db.tg_msg(item["id"], 42)
+        self.assertNotEqual(new["msg_id"], card["msg_id"])
+        self.assertEqual(db.get_item(item["id"])["status"], "notified")
+
+
 if __name__ == "__main__":
     unittest.main()
