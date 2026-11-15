@@ -142,6 +142,8 @@ class Scheduler:
                 continue
             js = mp4.with_suffix(".json")
             game = game_of(mp4, ready)
+            if self.foreign_channel(mp4, ready):
+                continue  # шортс іншого каналу (напр. реплеї для EN) — не наш контент
             try:
                 if time.time() - mp4.stat().st_mtime < 30:
                     continue  # файл ще записується / копіюється
@@ -160,6 +162,8 @@ class Scheduler:
                 log.debug("Пропускаю %s: %s", mp4, e)
                 continue
             if json_status(data) != self.cfg["ready_status"]:
+                continue
+            if self.foreign_channel(mp4, ready, data):
                 continue
             found.append((order, path, str(js.resolve()), game, "short"))
         found += self._scan_highlights(known)
@@ -234,6 +238,34 @@ class Scheduler:
             out.append((mp4.stat().st_mtime, path, str(js.resolve()), "WoT", "highlight"))
         return out
 
+    def channel_key(self) -> str:
+        """Ключ цього каналу: "" — основний, "en" — EN/EU-канал тощо."""
+        return str((self.cfg.get("channel") or {}).get("key") or "")
+
+    def foreign_channel(self, mp4: Path, ready: Path, data: dict | None = None) -> str:
+        """Ключ іншого каналу, якому належить відео, або "" (наше). Різний контент не змішується:
+        • json із "channel" (або "source": "replay" — шортси з реплеїв для EN-каналу);
+        • файл-мітка .poster_channel у папці відео чи вище (до папки готових шортсів) —
+          напр. output_replays_en програми нарізки, де шортси з реплеїв лежать ще без json."""
+        mine = self.channel_key()
+        if data is not None:
+            ch = str(data.get("channel") or ("en" if data.get("source") == "replay" else ""))
+            if ch and ch != mine:
+                return ch
+        try:
+            stop = ready.resolve()
+            for d in Path(mp4).resolve().parents:
+                mark = d / ".poster_channel"
+                if mark.is_file():
+                    ch = mark.read_text(encoding="utf-8").strip()
+                    if ch and ch != mine:
+                        return ch
+                if d == stop:
+                    break
+        except OSError:
+            pass
+        return ""
+
     def _home(self, item: dict, ready: Path) -> Path:
         """Папка, з якої відео має бути в черзі: шортси — папка шортсів, хайлайти — папка хайлайтів."""
         if item.get("kind") == "highlight":
@@ -252,9 +284,15 @@ class Scheduler:
             gone = not mp4.exists()
             home = self._home(item, ready)
             moved = not gone and item["status"] == "queued" and home not in mp4.resolve().parents
-            if not (gone or moved):
+            try:
+                data = read_json(item["json"]) if not gone else None
+            except (OSError, ValueError):
+                data = None
+            foreign = "" if gone else self.foreign_channel(mp4, home, data)
+            if not (gone or moved or foreign):
                 continue
-            reason = "файл видалено" if gone else "не з поточної папки"
+            reason = ("файл видалено" if gone else
+                      f"контент іншого каналу ({foreign.upper()}) — не для цього" if foreign else "не з поточної папки")
             self.db.update_item(item["id"], status="missing", note=reason)
             self.db.event(item["id"], "missing", {"file": mp4.name, "reason": reason})
             if item["slot_at"]:  # звільняємо слот для наступного відео
