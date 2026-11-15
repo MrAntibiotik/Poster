@@ -36,6 +36,7 @@ EN_TEMPLATE: dict = {
               "data": "data", "tokens": "tokens", "log": "log.txt"},
     # код оновлює основний бот — тут лише перезапуск після його оновлення
     "updates": {"auto": False},
+    "highlights": {"enabled": False},  # хайлайти публікує лише основний канал
     "always_hashtags": {"tags": ["#worldoftanks", "#wot", "#shorts"], "in_title": True, "in_captions": True},
     "footer": {
         "text": "🇺🇦 Ukrainian veteran on the road to 1000 subscribers — subscribe to support 🛡️♥️",

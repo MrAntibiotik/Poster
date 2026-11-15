@@ -1279,8 +1279,8 @@ class Bot:
                 return answer("Усі платформи вимкнено — нічого публікувати", True)
             if item["status"] != "notified":
                 return answer()
-            if self.cfg.get("ask_texts_before_publish"):
-                answer("Введіть назву й хештеги")
+            if self.cfg.get("ask_texts_before_publish") or item.get("kind") == "highlight":
+                answer("Введіть назву" + (" і надішліть прев'ю" if item.get("kind") == "highlight" else " й хештеги"))
                 return self.dialog_start(chat, item_id)
             self.db.update_item(item_id, status="approved")
             self.db.event(item_id, "approved", {"by": chat})
@@ -1348,6 +1348,59 @@ class Bot:
         self.tmp(chat, f"✍️ <b>Крок 1/2.</b> Надішліть <b>назву</b> для шортса #{item_id}{left}.\n"
                        f"Зараз: <i>{esc(meta.yt_title)}</i>{note}", reply_markup=kb)
 
+    def _after_title(self, chat: int, item: dict, st: dict, title: str) -> None:
+        """Після назви: шортс — хештеги; хайлайт — прев'ю (картинка для YouTube)."""
+        if item.get("kind") == "highlight":
+            self.dialog_set(chat, {**st, "step": "thumb", "title": title})
+            return self._ask_thumb(chat, item["id"])
+        self.dialog_set(chat, {**st, "step": "tags", "title": title})
+        return self._ask_tags(chat, item["id"])
+
+    def _ask_thumb(self, chat: int, item_id: int) -> None:
+        rows = []
+        if self.db.get(f"thumb:{item_id}") and Path(self.db.get(f"thumb:{item_id}")).exists():
+            rows.append([{"text": "✅ Залишити поточне прев'ю", "callback_data": f"keep:{item_id}:thumb"}])
+        rows.append([{"text": "Без прев'ю (YouTube вибере кадр сам)", "callback_data": f"keep:{item_id}:thumb:none"}])
+        rows.append([{"text": "❌ Скасувати", "callback_data": f"dlgx:{item_id}"}])
+        self.tmp(chat, "🖼 <b>Крок 2/2.</b> Надішліть <b>прев'ю</b> для хайлайта — картинку 16:9 "
+                       "(фото або файлом JPG/PNG, краще 1280×720).", reply_markup={"inline_keyboard": rows})
+
+    def save_thumb(self, chat: int, m: dict) -> None:
+        """Картинка прев'ю з чату → data/thumbs/<id>.jpg (≤2 МБ, як вимагає YouTube) → далі вибір часу."""
+        st = self.dialog_get(chat) or {}
+        item = self.db.get_item(st.get("item") or 0)
+        if not item:
+            return
+        photo = (m.get("photo") or [])[-1:] or []
+        doc = m.get("document") or {}
+        file_id = photo[0]["file_id"] if photo else (doc.get("file_id") if str(doc.get("mime_type", "")).startswith("image/") else None)
+        if not file_id:
+            return self.tmp(chat, "Це не картинка. Надішліть фото або файл JPG/PNG.", html_mode=False)
+        self._track(chat, m.get("message_id"))
+        folder = Path(self.cfg["paths"]["data"]) / "thumbs"
+        raw = folder / f"{item['id']}_src"
+        out = folder / f"{item['id']}.jpg"
+        try:
+            self.tg.download(file_id, raw)
+            r = media.run_hidden([self.cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(raw),
+                                  "-vf", "scale='min(1280,iw)':-2", "-q:v", "3", str(out)], timeout=60)
+            if r.returncode != 0 or not out.exists():
+                raise RuntimeError(r.stderr.decode(errors="ignore")[-200:])
+            if out.stat().st_size > 2 * 1024 * 1024:  # YouTube приймає прев'ю до 2 МБ
+                media.run_hidden([self.cfg["ffmpeg"], "-y", "-loglevel", "error", "-i", str(raw), "-vf",
+                                  "scale='min(1280,iw)':-2", "-q:v", "8", str(out)], timeout=60)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Прев'ю #%s: %s", item["id"], e)
+            return self.tmp(chat, f"⚠️ Не вдалося обробити картинку: {e}. Спробуйте ще раз.", html_mode=False)
+        finally:
+            try:
+                raw.unlink()
+            except OSError:
+                pass
+        self.db.set(f"thumb:{item['id']}", str(out))
+        self.tmp(chat, "🖼 Прев'ю збережено — його буде встановлено на YouTube.", html_mode=False)
+        self._dialog_finish(chat, item, st.get("title"), self._raw_meta(item).hashtags)
+
     def _ask_tags(self, chat: int, item_id: int) -> None:
         meta = self._raw_meta(self.db.get_item(item_id))
         always = {t.lower() for t in (self._always_line().split())}
@@ -1386,8 +1439,12 @@ class Bot:
             title = re.sub(r"\s+", " ", text).strip()[:100]
             if not title:
                 return self.tmp(chat, "Назва порожня — надішліть текст.", html_mode=False)
-            self.dialog_set(chat, {**st, "step": "tags", "title": title})
-            return self._ask_tags(chat, item["id"])
+            return self._after_title(chat, item, st, title)
+        if st["step"] == "thumb":
+            if text.strip() in ("-", "—"):
+                return self._dialog_finish(chat, item, st.get("title"), self._raw_meta(item).hashtags)
+            return self.tmp(chat, "Надішліть картинку прев'ю (фото або файл JPG/PNG) або «-» — без прев'ю.",
+                            html_mode=False)
         tags = parse_hashtags(text)
         if text.strip() not in ("-", "—") and not tags:
             return self.tmp(chat, "Не бачу хештегів — надішліть слова через пробіл або «-».", html_mode=False)
@@ -1407,9 +1464,13 @@ class Bot:
             return answer()
         meta = self._raw_meta(item)
         if rest and rest[0] == "title" and st["step"] == "title":
-            self.dialog_set(chat, {**st, "step": "tags", "title": meta.yt_title})
             answer("Назву залишено")
-            return self._ask_tags(chat, item_id)
+            return self._after_title(chat, item, st, meta.yt_title)
+        if rest and rest[0] == "thumb" and st["step"] == "thumb":
+            if len(rest) > 1 and rest[1] == "none":
+                self.db.set(f"thumb:{item_id}", None)
+            answer("Без нового прев'ю" if len(rest) > 1 and rest[1] == "none" else "Прев'ю залишено")
+            return self._dialog_finish(chat, item, st.get("title"), meta.hashtags)
         if rest and rest[0] == "tags" and st["step"] == "tags":
             answer("Хештеги залишено")
             return self._dialog_finish(chat, item, st.get("title"), meta.hashtags)
@@ -2074,6 +2135,9 @@ class Bot:
     # ---------- повідомлення й команди ----------
     def on_message(self, m: dict, chat: int, role: str) -> None:
         text = (m.get("text") or "").strip()
+        if (m.get("photo") or m.get("document")) and role == "admin" \
+                and (self.dialog_get(chat) or {}).get("step") == "thumb":
+            return self.save_thumb(chat, m)
         if not text:
             return
         if text in BTN:

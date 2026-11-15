@@ -24,6 +24,7 @@ class PostMeta:
     auto: bool = False  # тексти створено автоматично з імені файлу
     ai: bool = False    # тексти написало ШІ
     kind: str = "short"  # short — шортс; highlight — довге горизонтальне відео (YouTube, не Shorts)
+    thumbnail: str = ""  # прев'ю (картинка) для YouTube — для хайлайтів
 
 
 def read_json(path: str | Path) -> dict:

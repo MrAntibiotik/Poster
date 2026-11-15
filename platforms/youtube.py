@@ -162,6 +162,15 @@ class YouTube(Platform):
         out = {"id": vid, "url": f"https://youtu.be/{vid}" if highlight else f"https://youtube.com/shorts/{vid}"}
         real = (resp.get("status") or {}).get("privacyStatus") or privacy
         out["privacy"] = real
+        thumb = getattr(meta, "thumbnail", "")
+        if thumb:
+            try:  # власне прев'ю: YouTube дозволяє лише для підтвердженого каналу (телефон у налаштуваннях)
+                yt.thumbnails().set(videoId=vid, media_body=MediaFileUpload(thumb, mimetype="image/jpeg")).execute()
+                out["thumbnail"] = True
+            except Exception as e:  # noqa: BLE001 — відео вже опубліковано, прев'ю — не критично
+                log.warning("YouTube прев'ю %s: %s", vid, e)
+                out["note"] = (f"прев'ю не встановлено ({str(e)[:150]}). Перевірте, що канал підтверджено "
+                               "телефоном: youtube.com/verify")
         if real != privacy:
             out["note"] = (f"YouTube зробив відео «{PRIVACY_UA.get(real, real)}», хоча в налаштуваннях "
                            f"«{PRIVACY_UA.get(privacy, privacy)}». Так Google робить для API-проєктів без аудиту: "

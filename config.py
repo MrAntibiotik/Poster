@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).resolve().parent
-VERSION = "2026.11.15-75"  # показується в панелі; змінюється з кожним оновленням
+VERSION = "2026.11.15-76"  # показується в панелі; змінюється з кожним оновленням
 
 PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
 SHORT = {"youtube": "YT", "tiktok": "TT", "instagram": "IG", "facebook": "FB"}
@@ -186,6 +186,8 @@ def load_config(path: str | os.PathLike | None = None) -> dict:
         except json.JSONDecodeError as e:
             raise ConfigError(f"Помилка в {path.name}: {e}") from e
     cfg = _merge(DEFAULTS, user)
+    if user.get("channel") and "highlights" not in user:
+        cfg["highlights"]["enabled"] = False  # хайлайти — лише основний канал (додаткові канали їх не беруть)
     cfg["config_path"] = str(path)
     cfg["root"] = str(root)
     cfg["env_path"] = str(root / ".env")

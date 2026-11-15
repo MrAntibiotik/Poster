@@ -67,6 +67,8 @@ class Publisher:
         meta = apply_always_hashtags(load_meta(item["json"], item["title_override"]), app.cfg)
         if item.get("kind") == "highlight":
             meta.kind = "highlight"
+            thumb = db.get(f"thumb:{item_id}")
+            meta.thumbnail = thumb if thumb and Path(thumb).exists() else ""
         results = dict(item["results"])
         log.info("Публікую #%s «%s» (%s)", item_id, meta.yt_title, item["mp4"])
         app.bot.refresh(item_id)

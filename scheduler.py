@@ -211,6 +211,16 @@ class Scheduler:
     def _scan_highlights(self, known: set) -> list[tuple]:
         """Хайлайти з окремої папки (Робочий стіл\\Хайлайти): json від shorts-autocut або створений тут."""
         if not highlights_on(self.cfg):
+            for it in self.db.items("status IN ('queued','notified','approved') AND kind='highlight'"):
+                # хайлайти тут не публікуються (напр. EN-канал) — прибираємо з черги; файл не чіпаємо
+                self.db.update_item(it["id"], status="missing", note="хайлайти публікує лише основний канал")
+                if it["slot_at"]:
+                    self.db.x("UPDATE slots SET state='pending', item_id=NULL WHERE slot_at=? AND item_id=?",
+                              (it["slot_at"], it["id"]))
+                if hasattr(self.app.bot, "_delete"):
+                    for r in self.db.tg_msgs(it["id"]):
+                        self.app.bot._delete(r["chat_id"], [r["msg_id"]])
+                log.info("#%s: хайлайт прибрано з черги цього каналу", it["id"])
             return []
         folder = Path(self.cfg["highlights"]["folder_path"])
         if not folder.is_dir():

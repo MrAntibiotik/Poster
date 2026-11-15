@@ -110,6 +110,18 @@ class TelegramAPI:
                          parse_mode="HTML", disable_web_page_preview=True,
                          reply_markup=reply_markup or {"inline_keyboard": []})
 
+    def download(self, file_id: str, dest) -> str:
+        """Завантажує файл, надісланий у чат (фото/документ), у dest. Повертає шлях."""
+        from pathlib import Path as _P
+        info = self.call("getFile", file_id=file_id)
+        url = f"https://api.telegram.org/file/bot{self.token}/{info['file_path']}"
+        r = self._session().get(url, timeout=120)
+        if r.status_code != 200:
+            raise TelegramError(f"getFile: HTTP {r.status_code}")
+        _P(dest).parent.mkdir(parents=True, exist_ok=True)
+        _P(dest).write_bytes(r.content)
+        return str(dest)
+
     def answer_callback(self, callback_id, text="", alert=False):
         try:
             return self.call("answerCallbackQuery", callback_query_id=callback_id, text=text[:200],

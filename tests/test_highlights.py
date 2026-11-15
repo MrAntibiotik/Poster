@@ -63,6 +63,10 @@ class HighlightTest(FlowBase):
         self.assertEqual(sorted(h1["disabled"]), ["facebook", "instagram", "tiktok"])
         self.assertIn("🎞 хайлайт", self.app.queue_text())
 
+    def say(self, text):
+        self.app.bot.handle({"update_id": 1, "message": {"message_id": 70, "text": text,
+                                                          "chat": {"id": 42, "type": "private"}}})
+
     def test_notify_and_publish_youtube_only(self):
         self.make_short("a")
         self.make_highlight("h1")
@@ -76,10 +80,56 @@ class HighlightTest(FlowBase):
         self.assertEqual(len(caps), 1)
         item = hl[0]
         self.press(f"pub:{item['id']}", self.app.db.get_item(item["id"]))
+        self.assertIn("назву", self.app.bot.tg.sent[-1][1])  # хайлайт: спершу назва
+        self.say("Мій хайлайт")
+        self.assertIn("прев'ю", self.app.bot.tg.sent[-1][1])  # далі — прев'ю
+        self.say("-")  # без прев'ю
+        self.app.bot.handle({"update_id": 1, "callback_query": {"id": "c", "data": f"tk:{item['id']}",
+                             "message": {"message_id": 999, "chat": {"id": 42}, "text": ""}}})
         sch.tick(self.ts(11, "18:00"))
         item = self.app.db.get_item(item["id"])
         self.assertEqual(item["status"], "posted")
         self.assertEqual(list(item["results"]), ["youtube"])
+
+    def test_thumbnail_from_chat(self):
+        import shutil
+        import subprocess
+        if not shutil.which("ffmpeg"):
+            self.skipTest("потрібен ffmpeg")
+        self.make_highlight("h1")
+        sch = self.app.scheduler
+        sch.tick(self.ts(11, "17:00"))
+        item = [i for i in self.app.db.items("status='notified'") if i["kind"] == "highlight"][0]
+        src = self.tmp / "pic.png"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=red:s=1920x1080",
+                        "-frames:v", "1", str(src)], check=True)
+        self.app.bot.tg.download = lambda file_id, dest: (Path(dest).parent.mkdir(parents=True, exist_ok=True),
+                                                          shutil.copy(src, dest))[1]
+        self.press(f"pub:{item['id']}", self.app.db.get_item(item["id"]))
+        self.say("Назва")
+        self.app.bot.handle({"update_id": 2, "message": {"message_id": 77, "chat": {"id": 42, "type": "private"},
+                                                          "photo": [{"file_id": "small"}, {"file_id": "big"}]}})
+        thumb = self.app.db.get(f"thumb:{item['id']}")
+        self.assertTrue(thumb and Path(thumb).exists() and Path(thumb).stat().st_size < 2 * 1024 * 1024)
+        self.assertIn("Крок 3/3", self.app.bot.tg.sent[-1][1])  # далі — час публікації
+
+    def test_extra_channel_never_takes_highlights(self):
+        import config as C
+        raw = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
+        self.make_highlight("h1")
+        self.app.scheduler.scan()
+        hl = self.app.db.queue("highlight")
+        self.assertTrue(hl)  # «основний канал» узяв хайлайт
+        raw["channel"] = {"key": "en"}
+        raw.pop("highlights", None)
+        (self.tmp / "config.json").write_text(json.dumps(raw), encoding="utf-8")
+        cfg = C.load_config(self.tmp / "config.json")
+        self.assertFalse(cfg["highlights"]["enabled"])  # EN-канал без явного налаштування — без хайлайтів
+        self.cfg["highlights"]["enabled"] = False
+        self.app.scheduler.scan()
+        it = self.app.db.get_item(hl[0]["id"])
+        self.assertEqual(it["status"], "missing")
+        self.assertTrue(Path(it["mp4"]).exists())  # файл лишився для основного каналу
 
     def test_auto_json_without_shorts_tag(self):
         self.make_highlight("2026-11-13 23-38 · rec1 · 05_бій5 · хайлайт", with_json=False)
