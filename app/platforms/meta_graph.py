@@ -112,6 +112,9 @@ def short_error(e) -> str:
         parts.append(m.group(1).strip())
     elif "ProcessingFailedError" in t:
         parts.append("ProcessingFailedError")
+    m = re.search(r"rupload отримав [\d.]+ з [\d.]+ МБ", t)
+    if m:
+        parts.append(m.group(0) + " — файл не дійшов до Instagram")
     m = re.search(r"стан контейнера: ([^|(]{0,90})", t)
     if m:
         parts.append("стан: " + m.group(1).strip())
@@ -213,24 +216,41 @@ class Graph:
             raise PublishError(f"мережа: {e}") from e
         return self._check(r)
 
-    def upload_binary(self, url: str, path: str) -> dict:
+    def upload_binary(self, url: str, path: str, chunk_mb: float = 0) -> dict:
+        """rupload. chunk_mb > 0 — частинами зі зсувом (offset): один довгий запит Instagram обриває з 400."""
         size = os.path.getsize(path)
-        headers = {"Authorization": f"OAuth {self.token}", "offset": "0", "file_size": str(size)}
+        chunk = int(chunk_mb * 1024 * 1024) if chunk_mb and chunk_mb > 0 else 0
+        self.last_upload = {"bytes": size, "url_host": url.split("/")[2] if "//" in url else url,
+                            "chunk_mb": chunk_mb or 0, "chunks": []}
         t0 = time.time()
-        self.last_upload = {"bytes": size, "url_host": url.split("/")[2] if "//" in url else url}
+        offset, last = 0, None
         try:
             with open(path, "rb") as f:
-                r = requests.post(url, headers=headers, data=f, timeout=1800)
+                while True:
+                    n = (size - offset) if not chunk else min(chunk, size - offset)
+                    data = f.read(n) if chunk else f
+                    headers = {"Authorization": f"OAuth {self.token}", "offset": str(offset), "file_size": str(size)}
+                    tc = time.time()
+                    r = requests.post(url, headers=headers, data=data, timeout=1800)
+                    code = getattr(r, "status_code", None)
+                    self.last_upload["chunks"].append([offset, n, round(time.time() - tc, 1), code])
+                    last = r
+                    if not chunk or code != 200:
+                        break
+                    offset += n
+                    if offset >= size:
+                        break
+                    self.last_upload["sent"] = offset
         except requests.RequestException as e:
-            self.last_upload.update(seconds=round(time.time() - t0, 1), error=str(e)[:300])
+            self.last_upload.update(seconds=round(time.time() - t0, 1), error=str(e)[:300], sent=offset)
             raise PublishError(f"завантаження файлу: {e}") from e
         sec = max(0.1, time.time() - t0)
-        hdr = getattr(r, "headers", None) or {}
+        hdr = getattr(last, "headers", None) or {}
         self.last_upload.update(
-            seconds=round(sec, 1), http=getattr(r, "status_code", None), mbps=round(size * 8 / sec / 1e6, 1),
-            body=(getattr(r, "text", "") or "")[:400],
+            seconds=round(sec, 1), http=getattr(last, "status_code", None), mbps=round(size * 8 / sec / 1e6, 1),
+            body=(getattr(last, "text", "") or "")[:400], sent=offset if chunk else size,
             trace={k: hdr.get(k) for k in ("x-fb-trace-id", "x-fb-rev", "x-fb-debug") if hdr.get(k)})
-        return self._check(r)
+        return self._check(last)
 
     def upload_status(self, url: str) -> dict:
         """Скільки байтів rupload реально отримав (GET того ж URI). Для діагностики; помилки — не критичні."""
@@ -323,6 +343,7 @@ class Instagram(_MetaBase):
             # Діагностичний режим (тимчасово): одна спроба — один контейнер, одне завантаження, без перебору
             # варіантів і без запасного шляху через Facebook. Повтор — вручну («🔁»), після аналізу етапів.
             files = files[:1]
+            tokens = tokens[:1]   # і один токен: жодного другого контейнера / завантаження
         errors = []
         via_fb = bool(self.pcfg.get("facebook_fallback", True) and self.secrets.get("FB_PAGE_ID")) and not single
         for tname, token in tokens:
@@ -473,7 +494,7 @@ class Instagram(_MetaBase):
         self.report(f"завантажую файл ({os.path.getsize(video_path) / 1024 / 1024:.0f} МБ)")
         upload_error = None
         try:
-            g.upload_binary(uri, video_path)
+            g.upload_binary(uri, video_path, float(self.pcfg.get("upload_chunk_mb", 8) or 0))
             up = getattr(g, "last_upload", {})
             self._stage("rupload", True, up.get("seconds", 0), f"HTTP {up.get('http')}, {up.get('mbps')} Мбіт/с")
         except PublishError as e:
@@ -481,8 +502,16 @@ class Instagram(_MetaBase):
             got = g.upload_status(uri)
             diag["rupload"] = {**up, "after": got}
             self._stage("rupload", False, up.get("seconds", 0),
-                        f"HTTP {up.get('http')} за {up.get('seconds')} с ({up.get('mbps')} Мбіт/с); "
+                        f"HTTP {up.get('http')} за {up.get('seconds')} с ({up.get('mbps')} Мбіт/с"
+                        + (f", частинами по {up.get('chunk_mb'):g} МБ: прийнято {len(up.get('chunks') or []) - 1}"
+                           f" з {-(-up.get('bytes', 0) // int(up.get('chunk_mb') * 1048576))}" if up.get("chunk_mb") else "")
+                        + "); "
                         f"сервер каже: {json.dumps(got, ensure_ascii=False)[:160]}")
+            if isinstance(got.get("offset"), int) and got["offset"] < size:
+                # файл не дійшов (сервер має менше байтів, ніж ми надіслали) — чекати «обробки» марно
+                self._save_diag("файл не дійшов до Instagram")
+                raise PublishError(f"{e} | rupload отримав {got['offset'] / 1048576:.1f} з {size / 1048576:.1f} МБ — "
+                                   "файл не дійшов до Instagram (обробку не чекали)")
             # 400 від rupload буває хибною: файл дійшов і обробляється. Повторно в той самий контейнер НЕ шлемо —
             # друга відправка ламає обробку («Video Transcoding Error: both HD and SD progressive failed»).
             upload_error = e

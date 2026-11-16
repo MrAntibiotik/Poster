@@ -48,7 +48,7 @@ class FakeHTTP:
             kw["data"] = kw["data"].read()
         self.calls.append((method, url, kw))
         if method == "GET" and "rupload" in url:   # діагностика «скільки байтів дійшло» — окремо від маршрутів
-            return Resp({"offset": 0})
+            return Resp(getattr(self, "rupload_status", {"dc": "test"}))
         for m, sub, h in self.routes:
             if m == method and sub in url:
                 if isinstance(h, list):
@@ -515,7 +515,7 @@ if __name__ == "__main__":
 class InstagramDiagnosticTest(Base):
     """Діагностичний режим: одна спроба, без повторних завантажень, звіт по етапах, затримки 10/20/40/80 с."""
     routes = InstagramSpecTest.routes
-    fail = InstagramSpecTest.fail
+    fail400 = InstagramSpecTest.fail
 
     def setUp(self):
         Base.setUp(self)
@@ -549,7 +549,7 @@ class InstagramDiagnosticTest(Base):
 
     def test_one_container_one_upload_and_stage_report(self):
         import json as J
-        routes = self.routes(self.fail())
+        routes = self.routes(self.fail400())
         routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 50)
         f = self.http(meta_graph, routes)
         self.fake_time()
@@ -585,3 +585,28 @@ class InstagramDiagnosticTest(Base):
         self.assertEqual(int(sum(sleeps)), 10 + 20 + 40 + 80 + 80 + 80)
         files = list((self.tmp / "data" / "ig_diag").glob("*.json"))
         self.assertIn("публікація", files[0].read_text(encoding="utf-8"))
+
+
+class InstagramUploadTest(InstagramDiagnosticTest):
+    """rupload: файл не дійшов (offset 0) — обробку не чекаємо; завантаження частинами зі зсувом."""
+
+    def test_nothing_arrived_fails_fast(self):
+        routes = self.routes(self.fail400())
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 50)
+        f = self.http(meta_graph, routes)
+        f.rupload_status = {"offset": 0, "dc": "pnb"}
+        self.fake_time()
+        with self.assertRaises(meta_graph.PublishError) as cm:
+            meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertIn("файл не дійшов до Instagram", str(cm.exception))
+        self.assertFalse([c for c in f.calls if c[0] == "GET" and c[1].endswith("/C1") and "rupload" not in c[1]])   # статус не опитували
+
+    def test_chunked_upload_with_offsets(self):
+        self.cfg["platforms"]["instagram"]["upload_chunk_mb"] = 512 / 1048576    # 512 байт на частину
+        f = self.http(meta_graph, self.routes(Resp({"success": True})))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")
+        ups = [c for c in f.calls if c[0] == "POST" and "rupload" in c[1]]
+        self.assertEqual([u[2]["headers"]["offset"] for u in ups], ["0", "512", "1024", "1536"])
+        self.assertTrue(all(u[2]["headers"]["file_size"] == "2048" for u in ups))
+        self.assertEqual(b"".join(u[2]["data"] for u in ups), b"x" * 2048)
