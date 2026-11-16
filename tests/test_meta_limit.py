@@ -392,3 +392,31 @@ class HoldTest(FlowBase):
             time.sleep(0.05)
         self.assertEqual(app.db.get_item(a)["status"], "posted")
         self.assertEqual(order[:2], ["a", "b"])
+
+
+class IgWatchTest(FlowBase):
+    def test_daily_long_video_check_notifies_once(self):
+        from unittest import mock
+        from app.core import config
+        cfg = self.app.cfg
+        cfg["dry_run"] = False
+        cfg["platforms"]["instagram"]["enabled"] = False
+        cfg["secrets"].update(IG_USER_ID="1", META_PAGE_TOKEN="T")
+        calls = []
+
+        class FakeIG:
+            def __init__(self, c):
+                pass
+
+            def long_video_ok(self, workdir):
+                calls.append(1)
+                return True, "59 с: ✅ прийнято"
+        now = self.ts(11, "12:00")
+        config.FAKE_NOW = now
+        import threading as th
+        with mock.patch("app.platforms.get_class", return_value=FakeIG), \
+                mock.patch.object(th, "Thread", lambda target, **kw: type("T", (), {"start": lambda s: target()})()):
+            self.app.scheduler.maybe_ig_watch(now)
+            self.app.scheduler.maybe_ig_watch(now + 3600)       # тієї ж доби — не повторює
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(any("знову приймає довгі відео" in s[1] for s in self.app.bot.tg.sent if s[0] == "text"))

@@ -95,6 +95,39 @@ class PeriodicMixin:
             self._ai_thread = threading.Thread(target=work, daemon=True, name="ai")
             self._ai_thread.start()
 
+    def maybe_ig_watch(self, now: int) -> None:
+        """Поки Instagram вимкнено (бо Meta відкидає довгі відео через API) — раз на добу тест без публікації:
+        згенерований ролик 59 с. Щойно пройде — повідомлення в Telegram (один раз)."""
+        ig = (self.cfg.get("platforms") or {}).get("instagram") or {}
+        sec = self.cfg.get("secrets") or {}
+        if ig.get("enabled", True) or not ig.get("watch_long_video", True) or self.cfg.get("dry_run"):
+            return
+        if not (sec.get("IG_USER_ID") and (sec.get("META_PAGE_TOKEN") or sec.get("META_IG_TOKEN"))):
+            return
+        if now - int(self.db.get("igwatch_ts") or 0) < 24 * 3600 or getattr(self, "_igwatch_busy", False):
+            return
+        if local_dt(self.cfg, now).hour < 11:   # удень, не вночі (і не під час ранкових слотів)
+            return
+        self.db.set("igwatch_ts", now)
+        self._igwatch_busy = True
+
+        def work():
+            from pathlib import Path
+            from app.platforms import get_class
+            try:
+                ok, line = get_class("instagram")(self.cfg).long_video_ok(Path(self.cfg["paths"]["data"]) / "previews")
+                log.info("Щоденна перевірка Instagram (довге відео, без публікації): %s", line)
+                self.db.set("igwatch_last", f"{line}")
+                if ok:
+                    self.app.bot.send("✅ <b>Instagram знову приймає довгі відео</b> через API (тест 59 с без публікації "
+                                      "пройшов).\nУвімкніть: «🔌 Платформи» → Instagram ✅. Шортси, що не пішли в Instagram, "
+                                      "— «⚠️ Невдалі» → «🔁 Повторити» (по одному).", html_mode=True, keep="igwatch")
+            except Exception as e:  # noqa: BLE001
+                log.warning("Щоденна перевірка Instagram: %s", e)
+            finally:
+                self._igwatch_busy = False
+        threading.Thread(target=work, daemon=True, name="ig-watch").start()
+
     def maybe_health_check(self, now: int) -> None:
         """Раз на день (і при запуску) перевіряє доступ до платформ, щоб про протерміновані
         токени дізнатися до слоту, а не під час публікації."""

@@ -49,6 +49,7 @@ class BaseMixin:
         self.maybe_daily_report(now)
         self.maybe_stats(now)
         self.maybe_health_check(now)
+        self.maybe_ig_watch(now)
         self.maybe_ai()
         self.maybe_update(now)
         if time.time() - self._last_heal >= 60:  # раз на хвилину: підписи відео, що «застрягли» без зв'язку

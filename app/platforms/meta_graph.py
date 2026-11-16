@@ -868,6 +868,23 @@ class Instagram(_MetaBase):
             report(line)
         return out
 
+    def long_video_ok(self, workdir: Path, seconds: int = 59) -> tuple[bool | None, str]:
+        """Чи Instagram зараз приймає довге відео (згенероване, без публікації). Для щоденної перевірки."""
+        from app.core import media as _media
+        workdir.mkdir(parents=True, exist_ok=True)
+        clip = workdir / f"ig_watch_{seconds}.mp4"
+        r = _media.run_hidden([self.cfg.get("ffmpeg", "ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
+                               "-f", "lavfi", "-i", "color=black:s=1080x1920:r=30", "-f", "lavfi",
+                               "-i", "sine=frequency=440:sample_rate=48000", "-t", str(seconds), "-c:v", "libx264",
+                               "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                               "-movflags", "+faststart", str(clip)], timeout=300)
+        if r.returncode != 0:
+            return None, "не вдалося підготувати тестовий ролик"
+        try:
+            return self.test_upload(clip, f"{seconds} с")
+        finally:
+            clip.unlink(missing_ok=True)
+
     def test_lengths(self, workdir: Path, lengths=(10, 20, 30, 45), report=lambda line: None) -> list[str]:
         """Межа довжини, яку Instagram зараз приймає: крихітні ролики (чорний кадр + тон) різної довжини, без публікації."""
         from app.core import media as _media
