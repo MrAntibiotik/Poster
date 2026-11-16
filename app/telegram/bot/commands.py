@@ -217,6 +217,20 @@ class CommandsMixin:
                                     pass
                             res = plat.test_suite(item["mp4"], _P(self.cfg["paths"]["data"]) / "previews", show)
                             text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
+                    elif args and args[0].lower() in ("len", "довжина"):
+                        from pathlib import Path as _P
+                        head = text + "\n\n📏 <b>Яку довжину Instagram зараз приймає (без публікації)</b>"
+                        done = []
+
+                        def show_len(line, _h=head):
+                            done.append(line)
+                            try:
+                                self.tg.edit_text(chat, (wait or {})["message_id"], _h + "\n" + "\n".join(
+                                    f"• {esc(x)}" for x in done) + "\n⏳ далі…")
+                            except Exception:  # noqa: BLE001
+                                pass
+                        res = plat.test_lengths(_P(self.cfg["paths"]["data"]) / "previews", report=show_len)
+                        text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
                     elif args and args[0].lower() in ("test", "тест"):
                         try:
                             self.tg.edit_text(chat, (wait or {})["message_id"], text + "\n\n🧪 Тестове відео (без публікації)…")
@@ -227,7 +241,7 @@ class CommandsMixin:
                         text += "\n\n🧪 <b>Тестове відео (без публікації)</b>\n" + "\n".join(f"• {esc(x)}" for x in test)
                     else:
                         text += ("\n\nТест відео без публікації: <code>/igcheck test</code>; "
-                                 "серія тестів на шортсі: <code>/igcheck test 41</code>")
+                                 "серія тестів на шортсі: <code>/igcheck test 41</code>; межа довжини: <code>/igcheck len</code>")
                 except Exception as e:  # noqa: BLE001
                     text = f"⚠️ Перевірка не вдалась: {esc(str(e))}"
                 self.task_done(chat, wait, text)

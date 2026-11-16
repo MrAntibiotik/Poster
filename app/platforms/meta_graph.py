@@ -819,6 +819,30 @@ class Instagram(_MetaBase):
             report(line)
         return out
 
+    def test_lengths(self, workdir: Path, lengths=(10, 20, 30, 45), report=lambda line: None) -> list[str]:
+        """Межа довжини, яку Instagram зараз приймає: крихітні ролики (чорний кадр + тон) різної довжини, без публікації."""
+        from app.core import media as _media
+        workdir.mkdir(parents=True, exist_ok=True)
+        out = []
+        for sec in lengths:
+            clip = workdir / f"ig_len_{sec}.mp4"
+            r = _media.run_hidden([self.cfg.get("ffmpeg", "ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
+                                   "-f", "lavfi", "-i", "color=black:s=1080x1920:r=30", "-f", "lavfi",
+                                   "-i", "sine=frequency=440:sample_rate=48000", "-t", str(sec), "-c:v", "libx264",
+                                   "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                                   "-movflags", "+faststart", str(clip)], timeout=300)
+            if r.returncode != 0:
+                line = f"{sec} с: не вдалося підготувати"
+            else:
+                try:
+                    _, line = self.test_upload(clip, f"{sec} с")
+                except Exception as e:  # noqa: BLE001
+                    line = f"{sec} с: помилка тесту — {e}"
+                clip.unlink(missing_ok=True)
+            out.append(line)
+            report(line)
+        return out
+
     def test_video(self, workdir: Path) -> list[str]:
         """Тест БЕЗ публікації: 5-секундне згенероване відео (смуги + тон) → контейнер → rupload → обробка.
         Показує, чи Instagram API приймає БУДЬ-ЯКЕ відео від нас (контейнер потім просто спливає, на акаунті нічого)."""
