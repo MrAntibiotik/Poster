@@ -638,7 +638,13 @@ class Instagram(_MetaBase):
         self.diag = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "file": Path(path).name,
                      "size_mb": round(check["size"] / 1048576, 1), "method": "через Facebook (video_url)",
                      "stages": []}
-        self._stage("файл", True, 0, f"{check['size'] / 1048576:.1f} МБ, {fname}")
+        try:
+            orig = _media.ig_summary(_media.ig_probe(original, self.cfg.get("ffprobe", "ffprobe")))
+            copy = _media.ig_summary(_media.ig_probe(path, self.cfg.get("ffprobe", "ffprobe")))
+        except Exception:  # noqa: BLE001
+            orig = copy = ""
+        self._stage("файл", True, 0, f"{check['size'] / 1048576:.1f} МБ, {fname}"
+                    + (f"; оригінал: {orig}" if orig else "") + (f"; копія: {copy}" if copy and path != original else ""))
         t0 = time.time()
         try:
             out = self._publish_via_facebook(path, meta)

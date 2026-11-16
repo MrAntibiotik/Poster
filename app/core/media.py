@@ -87,7 +87,8 @@ def ig_probe(path: str, ffprobe: str = "ffprobe") -> dict:
     try:
         r = run_hidden([ffprobe, "-v", "error", "-show_entries",
                         "stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,bit_rate,sample_rate,channels,"
-                        "pix_fmt:format=duration,bit_rate", "-of", "json", str(path)], timeout=60)
+                        "pix_fmt,color_transfer,color_primaries,color_space:format=duration,bit_rate", "-of", "json", str(path)],
+                       timeout=60)
         info = json.loads(r.stdout or b"{}")
     except (MediaError, ValueError):
         return {}
@@ -114,7 +115,15 @@ def ig_probe(path: str, ffprobe: str = "ffprobe") -> dict:
             "vkbps": int(v.get("bit_rate") or 0) // 1000 or max(0, total_k - a_k),
             "acodec": a.get("codec_name"), "akbps": a_k, "arate": int(a.get("sample_rate") or 0),
             "channels": int(a.get("channels") or 0), "duration": float(fmt.get("duration") or 0),
+            "trc": v.get("color_transfer") or "", "primaries": v.get("color_primaries") or "",
+            "colorspace": v.get("color_space") or "",
             "size_mb": os.path.getsize(path) / 1024 / 1024}
+
+
+def is_hdr(p: dict) -> bool:
+    """HDR / широка гама (BT.2020, PQ, HLG) — Instagram такі Reels не приймає."""
+    return (p.get("trc") in ("smpte2084", "arib-std-b67") or p.get("primaries") == "bt2020"
+            or str(p.get("colorspace") or "").startswith("bt2020"))
 
 
 def ig_summary(p: dict) -> str:
@@ -124,6 +133,10 @@ def ig_summary(p: dict) -> str:
     m, s = divmod(int(p.get("duration") or 0), 60)
     parts = [f"{p['width']}×{p['height']}", f"{p['fps']:.0f} к/с" + (" (змінна частота!)" if p.get("vfr") else ""),
              f"{p['vkbps'] / 1000:.1f} Мбіт/с", f"{m}:{s:02d}", f"{p['size_mb']:.0f} МБ", str(p.get("pix_fmt") or "")]
+    if is_hdr(p):
+        parts.append(f"HDR ({p.get('trc')}/{p.get('primaries')})!")
+    elif p.get("trc") or p.get("primaries"):
+        parts.append(f"колір {p.get('primaries') or '?'}/{p.get('trc') or '?'}")
     if p.get("acodec"):
         parts.append(f"звук {p['acodec']} {p['akbps']} кбіт/с {p['arate'] // 1000} кГц")
     else:
@@ -154,6 +167,8 @@ def ig_problems(p: dict) -> list[str]:
         out.append("звук понад 48 кГц / стерео")
     if p["size_mb"] > IG_MAX_MB:
         out.append(f"розмір {p['size_mb']:.0f} МБ > {IG_MAX_MB}")
+    if is_hdr(p):
+        out.append(f"HDR / BT.2020 ({p.get('trc')})")
     return out
 
 
@@ -171,7 +186,7 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
     target = float((cfg.get("platforms") or {}).get("instagram", {}).get("copy_target_mb") or IG_TARGET_MB)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}".encode()).hexdigest()[:10]
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl'}.get(mode, 'ig') }.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
@@ -182,6 +197,9 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     fps_args = ["-r", "30", "-vsync", "cfr"] if lite or not 23 <= fps <= 60.5 else ["-vsync", "cfr"]
     g = int(round(min(max(fps, 23), 60) * 2))
     vf = "scale='if(gt(iw,ih),min(iw,1920),min(iw,1080))':-2:flags=lanczos,setsar=1,format=yuv420p"
+    if is_hdr(p) and cfg.get("_ig_tonemap", True):   # HDR → SDR (Instagram HDR-Reels через API не приймає)
+        vf = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,"
+              "zscale=t=bt709:m=bt709:r=tv," + vf)
     level = ["-level:v", "4.1"] if lite else ["-level:v", "4.2"]
     cap = 6000 if lite else 10000 if strict else 20000            # кбіт/с
     dur = float(p.get("duration") or 0)
@@ -192,10 +210,16 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
             "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-vf", vf, *fps_args, *level,
             "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", *rate, "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
+            # завжди позначки SDR BT.709: без них (або з BT.2020/PQ від джерела) Instagram відкидає відео
+            "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
             "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-tag:v", "avc1",
             "-movflags", "+faststart", str(out)]
-    log.info("Готую копію для Instagram (%s): %s", mode or "під вимоги", path)
+    log.info("Готую копію для Instagram (%s): %s%s", mode or "під вимоги", path,
+             " — HDR → SDR" if is_hdr(p) else "")
     r = run_hidden(args, timeout=3600)
+    if r.returncode != 0 and "zscale" in vf and b"zscale" in (r.stderr or b""):   # ffmpeg без zimg — без тонмапінгу
+        log.warning("ffmpeg без zscale — HDR лише перепозначається як SDR (кольори можуть бути блідими)")
+        return instagram_copy(path, {**cfg, "_ig_tonemap": False}, lite=lite, mode=mode)
     if r.returncode != 0:
         out.unlink(missing_ok=True)
         raise MediaError(f"ffmpeg (Instagram): {r.stderr.decode(errors='ignore')[-300:]}")
@@ -242,7 +266,7 @@ def telegram_copy(path: str, cfg: dict) -> str:
         return path  # і так маленьке — надсилаємо як є
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}".encode()).hexdigest()[:10]
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_tg.mp4"
     if out.exists() and 0 < out.stat().st_size <= TG_LIMIT:
         return str(out)
