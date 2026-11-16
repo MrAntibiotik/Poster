@@ -420,7 +420,8 @@ class Instagram(_MetaBase):
         d["saved"] = True
         d["result"] = result
         line = " → ".join(f"{s['stage']} {'✅' if s['ok'] else '❌'} {s['seconds']:g} с"
-                          + (f" ({s['info']})" if s["info"] and not s["ok"] else "") for s in d["stages"])
+                          + (f" ({s['info']})" if s["info"] and (not s["ok"] or s["stage"] == "файл") else "")
+                          for s in d["stages"])
         d["summary"] = line
         log.info("Instagram діагностика [%s, %s МБ]: %s", d.get("file"), d.get("size_mb"), line)
         try:
@@ -467,15 +468,21 @@ class Instagram(_MetaBase):
 
     def _publish_file(self, video_path: str, meta, token: str | None = None) -> dict:
         g = self.graph(token) if token else self._g()
-        size = os.path.getsize(video_path)
+        from app.core import media as _media
+        try:   # той самий файл, що підемо вантажити: є, читається повністю, не змінюється
+            check = _media.file_check(video_path)
+        except _media.MediaError as e:
+            raise PublishError(f"Instagram: перевірка файлу перед завантаженням — {e}") from e
+        size = check["size"]
         self.diag = diag = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "file": Path(video_path).name,
                             "size_mb": round(size / 1048576, 1), "token": "користувача" if token else "сторінки",
-                            "stages": []}
+                            "stages": [], "file_check": {"size": check["size"], "md5": check["md5"]}}
         try:
             from app.core import media
             diag["probe"] = media.ig_summary(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
         except Exception:  # noqa: BLE001
             pass
+        self._stage("файл", True, 0, f"{size / 1048576:.1f} МБ, читається повністю, не змінюється")
         t0 = time.time()
         try:
             c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable",
@@ -495,10 +502,15 @@ class Instagram(_MetaBase):
         upload_error = None
         try:
             g.upload_binary(uri, video_path, float(self.pcfg.get("upload_chunk_mb", 8) or 0))
+            if not _media.file_unchanged(video_path, check):
+                diag["file_changed_during_upload"] = True
             up = getattr(g, "last_upload", {})
             self._stage("rupload", True, up.get("seconds", 0), f"HTTP {up.get('http')}, {up.get('mbps')} Мбіт/с")
         except PublishError as e:
             up = getattr(g, "last_upload", {})
+            if not _media.file_unchanged(video_path, check):
+                diag["file_changed_during_upload"] = True
+                log.warning("Instagram: файл змінився під час завантаження (OneDrive / інша програма?): %s", video_path)
             got = g.upload_status(uri)
             diag["rupload"] = {**up, "after": got}
             self._stage("rupload", False, up.get("seconds", 0),

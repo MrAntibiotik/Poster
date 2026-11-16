@@ -283,3 +283,41 @@ def drop_previews(path: str, cfg: dict) -> None:
             p.unlink()
         except OSError:
             pass
+
+
+FILE_SETTLE = 2.0   # скільки секунд розмір файлу має не змінюватися перед завантаженням
+
+
+def file_check(path: str, settle: float | None = None) -> dict:
+    """Перевірка файлу перед завантаженням: існує, не порожній, повністю читається, розмір не змінюється
+    (ніхто не дописує / не синхронізує — напр. OneDrive). Повертає {"size", "mtime", "md5"}; MediaError — якщо ні."""
+    import time as _t
+    p = Path(path)
+    if not p.is_file():
+        raise MediaError(f"файлу немає: {path}")
+    st1 = p.stat()
+    if st1.st_size == 0:
+        raise MediaError(f"файл порожній: {path}")
+    _t.sleep(FILE_SETTLE if settle is None else settle)
+    st2 = p.stat()
+    if (st2.st_size, st2.st_mtime) != (st1.st_size, st1.st_mtime):
+        raise MediaError(f"файл ще змінюється (дописується або синхронізується): {path}")
+    h, n = hashlib.md5(), 0
+    try:
+        with open(p, "rb") as f:
+            for block in iter(lambda: f.read(4 * 1024 * 1024), b""):
+                h.update(block)
+                n += len(block)
+    except OSError as e:
+        raise MediaError(f"файл не читається: {e}") from e
+    if n != st2.st_size:
+        raise MediaError(f"прочитано {n} з {st2.st_size} байт — файл недоступний повністю: {path}")
+    return {"size": st2.st_size, "mtime": st2.st_mtime, "md5": h.hexdigest()}
+
+
+def file_unchanged(path: str, before: dict) -> bool:
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return False
+    return (st.st_size, st.st_mtime) == (before["size"], before["mtime"])

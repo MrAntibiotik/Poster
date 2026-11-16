@@ -212,6 +212,18 @@ class Publisher:
                     r = {"id": f"dry-{key}-{item['id']}", "url": f"https://example.com/{key}/{item['id']}",
                          "note": "dry_run: реальної публікації не було"}
                 else:
+                    if not Path(item["mp4"]).is_file():   # файл перенесли? шукаємо за назвою, перш ніж здаватися
+                        new = None
+                        try:
+                            from app.channels import cutter_link
+                            new = cutter_link.locate(item["mp4"], cutter_link.build_index(app))
+                        except Exception:  # noqa: BLE001
+                            pass
+                        if not new:
+                            raise RuntimeError(f"файлу немає на місці: {item['mp4']}")
+                        log.info("#%s: файл перенесено — беру з нового місця %s", item["id"], new)
+                        app.db.update_item(item["id"], mp4=str(new), json=str(new.with_suffix(".json")))
+                        item = {**item, "mp4": str(new), "json": str(new.with_suffix(".json"))}
                     previews = Path(app.cfg["paths"]["data"]) / "previews"
                     if previews in Path(item["mp4"]).parents:
                         raise RuntimeError("спроба опублікувати стиснуту прев'ю-копію замість оригіналу — зупинено")

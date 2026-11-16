@@ -96,8 +96,12 @@ class Base(unittest.TestCase):
         self._orig = (meta_graph.requests, meta_graph.time, tiktok.requests, tiktok.time)
         meta_graph.time = FAST_TIME
         tiktok.time = FAST_TIME
+        from app.core import media
+        self._settle, media.FILE_SETTLE = media.FILE_SETTLE, 0   # перевірка «файл не змінюється» — без очікування
 
     def tearDown(self):
+        from app.core import media
+        media.FILE_SETTLE = self._settle
         meta_graph.requests, meta_graph.time, tiktok.requests, tiktok.time = self._orig
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -566,7 +570,7 @@ class InstagramDiagnosticTest(Base):
         files = list((self.tmp / "data" / "ig_diag").glob("*.json"))
         self.assertEqual(len(files), 1)
         d = J.loads(files[0].read_text(encoding="utf-8"))
-        self.assertEqual([s["stage"] for s in d["stages"]], ["контейнер", "rupload", "обробка"])
+        self.assertEqual([s["stage"] for s in d["stages"]], ["файл", "контейнер", "rupload", "обробка"])
         self.assertEqual(d["rupload"]["http"], 400)
         self.assertTrue(d["polls"])
 
@@ -610,3 +614,22 @@ class InstagramUploadTest(InstagramDiagnosticTest):
         self.assertEqual([u[2]["headers"]["offset"] for u in ups], ["0", "512", "1024", "1536"])
         self.assertTrue(all(u[2]["headers"]["file_size"] == "2048" for u in ups))
         self.assertEqual(b"".join(u[2]["data"] for u in ups), b"x" * 2048)
+
+
+class FileCheckTest(unittest.TestCase):
+    def test_file_check(self):
+        from app.core import media
+        d = Path(tempfile.mkdtemp())
+        f = d / "a.mp4"
+        f.write_bytes(b"x" * 1000)
+        r = media.file_check(str(f), settle=0)
+        self.assertEqual(r["size"], 1000)
+        self.assertTrue(media.file_unchanged(str(f), r))
+        f.write_bytes(b"y" * 1001)
+        self.assertFalse(media.file_unchanged(str(f), r))
+        with self.assertRaisesRegex(media.MediaError, "файлу немає"):
+            media.file_check(str(d / "none.mp4"), settle=0)
+        (d / "e.mp4").write_bytes(b"")
+        with self.assertRaisesRegex(media.MediaError, "порожній"):
+            media.file_check(str(d / "e.mp4"), settle=0)
+        shutil.rmtree(d, ignore_errors=True)
