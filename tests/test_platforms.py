@@ -553,10 +553,23 @@ class InstagramDiagnosticTest(Base):
         self.addCleanup(lambda: setattr(meta_graph, "time", orig))
         return sleeps
 
+    def test_long_processing_goes_to_background(self):
+        # обробка довша за INLINE_WAIT — не помилка: StillProcessing з тим самим контейнером, без нового завантаження
+        routes = self.routes(self.fail400())
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 50)
+        f = self.http(meta_graph, routes)
+        self.fake_time()
+        with self.assertRaises(meta_graph.StillProcessing) as cm:
+            meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(cm.exception.container_id, "C1")
+        self.assertEqual(len([c for c in f.calls if c[0] == "POST" and c[1].endswith("/IG1/media")]), 1)
+        self.assertEqual(len([c for c in f.calls if c[0] == "POST" and "rupload" in c[1]]), 1)
+
     def test_one_container_one_upload_and_stage_report(self):
         import json as J
         routes = self.routes(self.fail400())
-        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 50)
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 3
+                     + [Resp({"status_code": "ERROR", "status": "Error: transcoding failed"})] * 5)
         f = self.http(meta_graph, routes)
         self.fake_time()
         with self.assertRaises(meta_graph.PublishError) as cm:
@@ -659,7 +672,7 @@ class InstagramChunk206Test(InstagramDiagnosticTest):
         f = self.http(meta_graph, routes)
         f.rupload_status = {"offset": 512}
         self.fake_time()
-        with self.assertRaisesRegex(meta_graph.PublishError, "не повністю.*чекали"):
+        with self.assertRaises(meta_graph.StillProcessing):   # обробляється довго — далі у фоні, не помилка
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertTrue([c for c in f.calls if c[0] == "GET" and c[1].endswith("/C1") and "rupload" not in c[1]])
 

@@ -16,6 +16,14 @@ class Stopped(Exception):
     """Натиснуто «⛔ Стоп публікацій» посеред публікації — платформу не публікуємо, продовжимо після «Відновити»."""
 
 
+class StillProcessing(PublishError):
+    """Файл дійшов, Instagram ще обробляє контейнер — публікація завершиться у фоні (без нового завантаження)."""
+
+    def __init__(self, msg: str, container_id: str):
+        super().__init__(msg)
+        self.container_id = str(container_id)
+
+
 class RateLimited(PublishError):
     """Платформа тимчасово обмежила кількість запитів. retry_at — коли можна знову (unix-час)."""
 

@@ -138,7 +138,7 @@ class CardsMixin:
         if st in ("posted", "failed"):
             targets = [p for p in PLATFORMS if p in self.app.platforms and p not in item["disabled"]] or \
                 list(item["results"])
-            ok = [p for p in targets if (item["results"].get(p) or {}).get("status") in ("ok", "manual", "skipped")]
+            ok = [p for p in targets if (item["results"].get(p) or {}).get("status") in ("ok", "manual", "skipped", "processing", "ig_wait")]
             if not ok:
                 head = "❌ <b>Не опубліковано</b>"
             elif len(ok) < len([p for p in targets if p in item["results"]]):
@@ -230,6 +230,13 @@ class CardsMixin:
             if r.get("status") == "skipped":
                 lines.append(f"{icon} {NAMES[p]} — ⏭ пропущено")
                 continue
+            if r.get("status") == "processing":
+                mins = max(0, (now_ts() - int(r.get("since") or now_ts())) // 60)
+                lines.append(f"{icon} {NAMES[p]} — ⏳ Instagram ще обробляє відео ({mins} хв) — опублікую, щойно буде готово")
+                continue
+            if r.get("status") == "ig_wait":
+                lines.append(f"{icon} {NAMES[p]} — ⏳ чекає, поки Instagram обробить #{r.get('after')}")
+                continue
             if r.get("status") == "ok":
                 lock = {"SELF_ONLY": " 🔒", "private": " 🔒", "unlisted": " 🔗"}.get(r.get("privacy"), "")
                 name = f'<a href="{esc(r["url"])}">{NAMES[p]}</a>' if r.get("url") else NAMES[p]
@@ -301,13 +308,13 @@ class CardsMixin:
 
     def failed_errors(self, item: dict) -> dict:
         return {p: r for p, r in item["results"].items()
-                if r.get("status") not in ("ok", "manual", "skipped") and p in self.app.platforms and p not in item["disabled"]}
+                if r.get("status") not in ("ok", "manual", "skipped", "processing", "ig_wait") and p in self.app.platforms and p not in item["disabled"]}
 
     def retry_keyboard(self, item_id: int) -> dict:
         item = self.db.get_item(item_id) or {"results": {}}
         ig = (item.get("results") or {}).get("instagram") or {}
         manual_row = ([[{"text": "📱 Надіслати мені для Instagram", "callback_data": f"igsend:{item_id}"}]]
-                      if ig and ig.get("status") not in ("ok", "manual", "skipped") else [])
+                      if ig and ig.get("status") not in ("ok", "manual", "skipped", "processing", "ig_wait") else [])
         return {"inline_keyboard": manual_row + [
             [{"text": "🔁 Повторити зараз", "callback_data": f"rf:{item_id}"}],
             [{"text": "🕐 Обрати час", "callback_data": f"rt:{item_id}"},

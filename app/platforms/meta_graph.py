@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from .base import Platform, PublishError, RateLimited, Stopped, TokenExpired
+from .base import Platform, PublishError, RateLimited, Stopped, StillProcessing, TokenExpired
 
 log = logging.getLogger("meta")
 
@@ -22,7 +22,9 @@ TOKEN_ERROR_CODES = {102, 190, 463, 467}
 RATE_LIMIT_CODES = {4, 17, 32, 613} | set(range(80001, 80015))
 LIMIT_FILE = Path(tempfile.gettempdir()) / "poster-meta-limit.json"   # спільний для всіх каналів (один додаток Meta)
 POLL_DELAYS = (10, 20, 40, 80)   # перевірки стану контейнера: затримка наростає, далі — раз на 80 с
-AFTER_400_WAIT = 20 * 60  # як у робочих версіях 11–14.11: після «rupload 400» контейнер часто таки обробляється
+AFTER_400_WAIT = 10 * 60  # після «rupload 400» контейнер часто таки обробляється (як у робочих версіях 11–14.11)
+INLINE_WAIT = 10 * 60     # стільки чекаємо обробки, тримаючи чергу; далі — у фоні (StillProcessing)
+CONTAINER_TTL = 23 * 3600  # контейнер Instagram живе 24 год — після цього чекати марно
 STATS_MAX_USAGE = 60      # статистику не знімаємо, якщо використано ≥ N% годинної квоти — бережемо для публікацій
 
 
@@ -361,6 +363,8 @@ class Instagram(_MetaBase):
                     if fname != "оригінал":
                         self.report("готую копію для Instagram")
                     out = self._publish_file(get_file(), meta, token)
+                except StillProcessing:
+                    raise   # файл дійшов, Instagram обробляє — дочекаємось у фоні; новий контейнер = дубль
                 except PublishError as e:
                     if not self._upload_rejected(e):
                         raise  # інша помилка (токен, ліміт, формат) — без перебору
@@ -552,7 +556,7 @@ class Instagram(_MetaBase):
     def _wait_and_publish(self, g, cid: str, upload_error=None) -> dict:
         """Чекає, поки Instagram обробить контейнер, і публікує його."""
         start = time.time()
-        deadline = start + (3 * 60 if upload_error else 20 * 60)
+        deadline = start + (3 * 60 if upload_error else INLINE_WAIT)
         self.report("Instagram обробляє відео")
         delays = iter(POLL_DELAYS)
         diag = getattr(self, "diag", None) or {"stages": []}
@@ -577,6 +581,12 @@ class Instagram(_MetaBase):
                 reason = f"{st.get('status')}{ig_hint(st.get('status'))}"
                 raise PublishError(f"{upload_error} | стан контейнера: {reason}" if upload_error
                                    else f"Instagram відхилив відео: {reason}")
+            if time.time() > deadline and code == "IN_PROGRESS":
+                # обробляється довго — не здаємось і не тримаємо чергу: далі чекаємо у фоні той самий контейнер
+                self._stage("обробка", True, time.time() - start, f"IN_PROGRESS після {len(polls)} перевірок — далі у фоні")
+                log.info("Instagram: контейнер %s обробляється понад %d хв — дочекаюсь у фоні й опублікую",
+                         cid, int((time.time() - start) / 60))
+                raise StillProcessing(f"Instagram ще обробляє відео (контейнер {cid})", cid)
             if time.time() > deadline:
                 srv = g.upload_status(diag["uri"]) if diag.get("uri") else {}
                 if srv:
@@ -588,7 +598,7 @@ class Instagram(_MetaBase):
                 if upload_error:
                     waited = int((time.time() - start) / 60)
                     raise PublishError(f"{upload_error}{self._container_reason(g, cid)} (чекали {waited} хв)")
-                raise PublishError("Instagram: обробка відео триває понад 20 хв"
+                raise PublishError("Instagram: обробка відео триває понад 10 хв"
                                    + (f". Етапи: {diag.get('summary')}" if diag.get("summary") else ""))
             # перевіряємо рідше, що довше обробка: кожен запит з'їдає годинну квоту Meta; «Стоп» — щосекунди
             # квота Meta ≈200 запитів/год на весь додаток: опитування раз на 20 с, потім раз на хвилину,
@@ -710,6 +720,26 @@ class Instagram(_MetaBase):
         return f" | стан контейнера: {reason}{ig_hint(reason)}" if reason else ""
 
     _metric: str | None = None   # яка метрика переглядів спрацювала — щоб не витрачати 3 запити щоразу
+
+    def finish_container(self, cid: str) -> dict | None:
+        """Фонове завершення: контейнер готовий — публікуємо ({"id", "url"}); ще обробляється — None;
+        ERROR/EXPIRED — PublishError. Файл повторно НЕ вантажимо."""
+        g = self._g()
+        st = g.get(cid, fields="status_code,status")
+        code = st.get("status_code")
+        if code in ("ERROR", "EXPIRED"):
+            raise PublishError(f"Instagram відхилив відео під час обробки: {st.get('status')}{ig_hint(st.get('status'))}")
+        if code == "PUBLISHED":
+            raise PublishError("контейнер уже опубліковано раніше — перевірте профіль Instagram")
+        if code != "FINISHED":
+            return None
+        mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
+        out = {"id": mid, "url": ""}
+        try:
+            out["url"] = g.get(mid, fields="permalink").get("permalink", "")
+        except Exception as e:  # noqa: BLE001
+            log.warning("Instagram permalink: %s", e)
+        return out
 
     def get_views(self, result: dict) -> int | None:
         g = self._g()

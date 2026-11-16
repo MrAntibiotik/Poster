@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.core.config import enabled_platforms
 
-from .base import Platform, PublishError, RateLimited, Stopped, TokenExpired
+from .base import Platform, PublishError, RateLimited, Stopped, StillProcessing, TokenExpired
 
 
 def get_class(key: str):
@@ -25,4 +25,4 @@ def build_platforms(cfg: dict) -> dict[str, Platform]:
     return {k: get_class(k)(cfg) for k in enabled_platforms(cfg)}
 
 
-__all__ = ["Platform", "PublishError", "RateLimited", "Stopped", "TokenExpired", "build_platforms", "get_class"]
+__all__ = ["Platform", "PublishError", "RateLimited", "Stopped", "StillProcessing", "TokenExpired", "build_platforms", "get_class"]
