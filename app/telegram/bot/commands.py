@@ -253,7 +253,9 @@ class CommandsMixin:
                                     f"• {esc(x)}" for x in done) + "\n⏳ далі…")
                             except Exception:  # noqa: BLE001
                                 pass
-                        res = plat.test_lengths(_P(self.cfg["paths"]["data"]) / "previews", report=show_len)
+                        custom = tuple(int(a) for a in args[1:] if a.isdigit() and 3 <= int(a) <= 90)[:6]
+                        res = plat.test_lengths(_P(self.cfg["paths"]["data"]) / "previews", report=show_len,
+                                                **({"lengths": custom} if custom else {}))
                         text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
                     elif args and args[0].lower() in ("test", "тест"):
                         try:
