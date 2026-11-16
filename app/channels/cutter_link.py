@@ -133,12 +133,27 @@ def _sync_items(app, moved: list) -> int:
 
 
 # ---------------------------------------------------------------- пошук «зниклих» файлів за назвою
+def content_guesses() -> list[Path]:
+    """Типові місця папки «Контент» Різака."""
+    home = Path.home()
+    return [home / "Videos" / "Контент", home / "Відео" / "Контент", home / "Desktop" / "Контент",
+            home / "OneDrive" / "Desktop" / "Контент", home / "OneDrive" / "Робочий стіл" / "Контент"]
+
+
+def main_channel_roots(app) -> list[Path]:
+    """Папки контенту основного каналу («Контент\Мій канал») — відео звідти завжди «свої», не чужі."""
+    if app.cfg.get("channel"):
+        return []
+    data = load() or {}
+    bases = [Path(data["content"])] if data.get("content") else []
+    bases += content_guesses()
+    return [b / "Мій канал" for b in bases if (b / "Мій канал").is_dir()]
+
+
 def search_roots(app) -> list[Path]:
     """Де шукати відео, якщо його немає на старому місці: папки Різака (Контент, До публікації…) і папка шортсів."""
     data = load() or {}
-    home = Path.home()
-    guesses = [home / "Videos" / "Контент", home / "Відео" / "Контент", home / "Desktop" / "Контент",
-               home / "OneDrive" / "Desktop" / "Контент", home / "OneDrive" / "Робочий стіл" / "Контент"]
+    guesses = content_guesses()
     roots = [data.get("publish"), data.get("content"), *((data.get("folders") or {}).values()),
              str(app.cfg["paths"]["ready"]), *map(str, guesses)]   # типові місця «Контент», навіть без cutter.json
     out, seen = [], set()
@@ -203,13 +218,16 @@ def follow_publish_folder(app) -> bool:
     if cfg.get("channel"):
         return False
     pub = (load() or {}).get("publish")
-    if not pub or not Path(pub).is_dir():
+    if not pub or not Path(pub).is_dir():   # Різак не повідомив — типове «Контент\Мій канал\До публікації»
+        pub = next((str(g / "Мій канал" / "До публікації") for g in content_guesses()
+                    if (g / "Мій канал" / "До публікації").is_dir()), None)
+    if not pub:
         return False
     ready = Path(cfg["paths"]["ready"])
     if str(ready.resolve()).lower() == str(Path(pub).resolve()).lower():
         return False
     empty = not ready.exists() or not any(ready.rglob("*.mp4"))
-    if not empty or not any(Path(pub).rglob("*.mp4")):
+    if not empty:   # стара папка жива й з відео — нічого не міняємо
         return False
     path = Path(cfg.get("config_path") or "")
     try:

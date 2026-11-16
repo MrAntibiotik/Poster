@@ -133,3 +133,29 @@ class FindMovedTest(CutterLinkTest):
         self.assertEqual(back["status"], "queued")
         self.assertTrue(back["mp4"].startswith(str(new)))
         self.assertEqual(len(self.app.db.queue()), 1)          # без дубля
+
+
+class VideosContentTest(CutterLinkTest):
+    """Різак переніс усе в Відео\\Контент і не повідомив Poster (немає cutter.json): знаходимо й не прибираємо."""
+
+    def test_found_in_videos_content_and_kept(self):
+        from unittest import mock
+        self.make_short("a")
+        self.make_short("b")
+        config.FAKE_NOW = self.ts(11, "08:00")
+        self.app.scheduler.scan()
+        ids = [i["id"] for i in self.app.db.queue()]
+        old = Path(self.cfg["paths"]["ready"])
+        content = self.tmp / "Videos" / "Контент"
+        cuts = content / "Мій канал" / "Нарізки" / "_до_публікації"
+        cuts.parent.mkdir(parents=True)
+        (content / "Мій канал" / "До публікації").mkdir(parents=True)
+        shutil.move(str(old), str(cuts))
+        with mock.patch.object(cutter_link, "content_guesses", return_value=[content]):
+            self.app.scheduler.scan()
+            self.app.scheduler.scan()                        # і наступні скани — нічого не прибирають
+        q = self.app.db.queue()
+        self.assertEqual(sorted(i["id"] for i in q), sorted(ids))
+        self.assertTrue(all(str(cuts) in i["mp4"] for i in q))
+        raw = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(raw["paths"]["ready"], str(content / "Мій канал" / "До публікації"))

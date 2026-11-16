@@ -236,6 +236,13 @@ class ScanMixin:
                     continue
             home = self._home(item, ready)
             moved = not gone and item["status"] == "queued" and home not in mp4.resolve().parents
+            if moved:   # у папках Різака для основного каналу (Контент\Мій канал\…) — своє, не прибираємо
+                try:
+                    from app.channels import cutter_link
+                    if any(r.resolve() in mp4.resolve().parents for r in cutter_link.main_channel_roots(self.app)):
+                        moved = False
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 data = read_json(item["json"]) if not gone else None
             except (OSError, ValueError):
