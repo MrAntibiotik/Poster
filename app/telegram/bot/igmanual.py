@@ -59,3 +59,29 @@ class IgManualMixin:
         self.db.set(f"igman:{item_id}", None)
         answer("✅ Позначено: опубліковано в Instagram" if done else "⏭ Instagram для цього шортса пропущено")
         self.refresh(item_id)
+
+    def instagram_send_now(self, chat: int, item_id: int, answer) -> None:
+        """Кнопка «📱 Надіслати мені для Instagram» під невдалим шортсом — незалежно від налаштування режиму."""
+        item = self.db.get_item(item_id)
+        if not item:
+            return answer("Шортс не знайдено", True)
+        from pathlib import Path
+        if not Path(item["mp4"]).exists():
+            return answer("Файлу шортса вже немає на диску", True)
+        answer("📱 Готую відео для Instagram…")
+
+        def work():
+            from app.core.meta import apply_always_hashtags, load_meta
+            try:
+                meta = apply_always_hashtags(load_meta(item["json"], item["title_override"]), self.cfg)
+                self.instagram_manual(item_id, meta)
+                results = dict(self.db.get_item(item_id)["results"])
+                results["instagram"] = {"status": "manual", "sent_at": now_ts(),
+                                        "note": "надіслано в Telegram для публікації з телефона"}
+                self.db.update_item(item_id, results=results)
+                self.drop_failed_card(item_id)
+                self.refresh(item_id)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Instagram вручну #%s: %s", item_id, e)
+                self.say(chat, f"⚠️ Не вдалося надіслати відео для Instagram: {e}", html_mode=False)
+        self._bg(work)

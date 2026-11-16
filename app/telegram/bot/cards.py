@@ -304,7 +304,11 @@ class CardsMixin:
                 if r.get("status") not in ("ok", "manual", "skipped") and p in self.app.platforms and p not in item["disabled"]}
 
     def retry_keyboard(self, item_id: int) -> dict:
-        return {"inline_keyboard": [
+        item = self.db.get_item(item_id) or {"results": {}}
+        ig = (item.get("results") or {}).get("instagram") or {}
+        manual_row = ([[{"text": "📱 Надіслати мені для Instagram", "callback_data": f"igsend:{item_id}"}]]
+                      if ig and ig.get("status") not in ("ok", "manual", "skipped") else [])
+        return {"inline_keyboard": manual_row + [
             [{"text": "🔁 Повторити зараз", "callback_data": f"rf:{item_id}"}],
             [{"text": "🕐 Обрати час", "callback_data": f"rt:{item_id}"},
              {"text": "📦 У вільний слот", "callback_data": f"rq:{item_id}"}],

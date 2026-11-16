@@ -455,3 +455,24 @@ class IgManualTest(FlowBase):
         item = self.app.db.get_item(it["id"])
         self.assertEqual(item["results"]["instagram"]["status"], "ok")
         self.assertIsNone(self.app.db.get(f"igman:{it['id']}"))
+
+
+class IgSendButtonTest(FlowBase):
+    def test_send_for_instagram_button(self):
+        from unittest import mock
+        from app.core import media
+        self.make_short("a")
+        self.app.scheduler.scan()
+        it = self.app.db.items("status='queued'")[0]
+        self.app.db.update_item(it["id"], status="posted", results={
+            "youtube": {"status": "ok", "url": "u"}, "instagram": {"status": "error", "error": "ProcessingFailedError"}})
+        kb = json.dumps(self.app.bot.retry_keyboard(it["id"]))
+        self.assertIn(f"igsend:{it['id']}", kb)
+        self.app.bot._bg = lambda fn, *a: fn(*a)
+        with mock.patch.object(media, "instagram_copy", lambda path, cfg, **kw: path):
+            self.app.bot.handle({"update_id": 1, "callback_query": {"id": "c", "data": f"igsend:{it['id']}",
+                                 "message": {"message_id": 5, "chat": {"id": 42}}}})
+        item = self.app.db.get_item(it["id"])
+        self.assertEqual(item["results"]["instagram"]["status"], "manual")
+        self.assertTrue(any(s[0] == "video" and "Для Instagram" in s[1] for s in self.app.bot.tg.sent))
+        self.assertNotIn("igsend", json.dumps(self.app.bot.retry_keyboard(it["id"])))
