@@ -996,6 +996,18 @@ class Instagram(_MetaBase):
             out.append(f"Добовий ліміт публікацій через API: використано {d.get('quota_usage')} з {total or '?'}")
         except Exception as e:  # noqa: BLE001
             out.append(f"Добовий ліміт: {e}")
+        # навантаження застосунку саме зараз — із заголовків щойно отриманих відповідей Meta
+        st = _limit_state()
+        fresh = time.time() - float(st.get("usage_ts") or 0) < 120
+        until = blocked_until()
+        if until:
+            out.append(f"Квота запитів Meta: ❌ вичерпано — пауза до {_hm(until)}")
+        elif fresh:
+            pct = int(st.get("usage") or 0)
+            mark = "✅" if pct < 50 else "⚠️" if pct < 90 else "❌"
+            out.append(f"Квота запитів Meta зараз: {mark} {pct}% від годинної")
+        else:
+            out.append("Квота запитів Meta зараз: ✅ навантаження мале (Meta навіть не повідомляє відсоток)")
         return out
 
 

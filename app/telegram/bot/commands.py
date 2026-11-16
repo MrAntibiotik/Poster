@@ -198,6 +198,10 @@ class CommandsMixin:
                     from app.platforms.meta_graph import Instagram
                     plat = self.app.platforms.get("instagram") or Instagram(self.cfg)
                     lines = plat.api_report()
+                    busy = [i for i in self.db.items("status='publishing'") if self.app.publisher.is_active(i["id"])]
+                    now_pub = [f"#{i['id']} ({self.db.get('pubnow:' + str(i['id'])) or 'черга'})" for i in busy]
+                    lines.append("Зараз програма публікує: " + (", ".join(now_pub) if now_pub
+                                                                else "нічого — Instagram ніхто не навантажує"))
                     text = "🔬 <b>Instagram API — перевірка доступу</b>\n" + "\n".join(f"• {esc(x)}" for x in lines)
                     if args and args[0].lower() in ("test", "тест") and len(args) > 1 and args[1].lstrip("#").isdigit():
                         item = self.db.get_item(int(args[1].lstrip("#")))
