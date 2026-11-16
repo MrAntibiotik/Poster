@@ -166,11 +166,42 @@ def is_gone(e: Exception) -> bool:
     return "(100/33)" in s or "does not exist" in s or "videoNotFound" in s or "HTTP 404" in s
 
 
+def link_manual(app, item: dict) -> dict:
+    """Instagram, опублікований вручну: знайти цей Reels в акаунті (номер медіа + посилання), щоб рахувати перегляди."""
+    r = (item.get("results") or {}).get("instagram") or {}
+    plat = app.platforms.get("instagram")
+    if r.get("status") != "ok" or r.get("id") or not plat or not hasattr(plat, "find_manual"):
+        return item
+    db = app.db
+    if db.get(f"iglinkfail:{item['id']}"):
+        return item
+    since = r.get("sent_at") or item.get("posted_at") or r.get("published_at") or 0
+    taken = {((it.get("results") or {}).get("instagram") or {}).get("id")
+             for it in db.items("status='posted' AND posted_at>=?", (since - 7 * 86400,))}
+    found = plat.find_manual(since - 600, taken - {None})
+    if not found:
+        if now_ts() - (r.get("published_at") or since) > 3 * 86400:
+            db.set(f"iglinkfail:{item['id']}", 1)   # за 3 доби не знайшли — більше не шукаємо
+        return item
+    results = dict(item["results"])
+    results["instagram"] = {**r, **found}
+    db.update_item(item["id"], results=results)
+    log.info("#%s instagram: знайдено ручну публікацію %s", item["id"], found["url"])
+    return {**item, "results": results}
+
+
 def send_stats(app, item: dict) -> None:
     """Перегляди через 24 год: повідомлення в Telegram + запис у json."""
     from app.core.meta import load_meta
 
     db = app.db
+    try:
+        item = link_manual(app, item)
+    except RateLimited as e:
+        log.info("Перегляди #%s відкладено: %s", item["id"], e)
+        return
+    except Exception as e:  # noqa: BLE001
+        log.info("Пошук ручної публікації #%s в Instagram: %s", item["id"], e)
     views: dict[str, int | None | str] = {}
     likes: dict[str, int] = {}
     for p in PLATFORMS:
@@ -275,6 +306,13 @@ def collect(app, days: int = 8) -> dict:
     limited: set[str] = set()
     for item in db.items("status='posted' AND posted_at>=?", (now - 400 * DAY,), order="posted_at DESC"):
         recent = item["posted_at"] >= now - days * DAY
+        if recent and "instagram" not in limited:
+            try:
+                item = link_manual(app, item)
+            except RateLimited:
+                limited.add("instagram")
+            except Exception as e:  # noqa: BLE001
+                log.info("Пошук ручної публікації #%s в Instagram: %s", item["id"], e)
         title = _title(item)
         for key, res in item["results"].items():
             if res.get("status") != "ok" or key not in app.platforms or dry:

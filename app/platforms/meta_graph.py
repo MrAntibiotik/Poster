@@ -736,7 +736,26 @@ class Instagram(_MetaBase):
                     return int(d["total_value"].get("value") or 0)
         return None
 
+    def find_manual(self, after: float, taken: set) -> dict | None:
+        """Reels, опублікований вручну з телефона (без номера медіа): найраніший після `after`, ще не привʼязаний."""
+        from datetime import datetime
+        r = self._g().get(f"{self.ig_id}/media", low=True, limit=25,
+                          fields="id,permalink,timestamp,media_product_type")
+        best = None
+        for m in r.get("data") or []:
+            if m.get("id") in taken or m.get("media_product_type") not in (None, "REELS"):
+                continue
+            try:
+                ts = datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z").timestamp()
+            except (KeyError, ValueError):
+                continue
+            if ts >= after and (best is None or ts < best[0]):
+                best = (ts, m)
+        return best and {"id": best[1]["id"], "url": best[1].get("permalink") or ""}
+
     def get_stats(self, result: dict) -> dict:
+        if not result.get("id"):   # опубліковано вручну й ще не знайдено в акаунті — статистики немає
+            return {}
         out = {"views": self.get_views(result)}
         try:
             r = self._g().get(result["id"], low=True, fields="like_count,comments_count")

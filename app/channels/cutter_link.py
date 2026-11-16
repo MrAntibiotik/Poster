@@ -194,6 +194,13 @@ def recover_missing(app, days: int = 7) -> int:
         return 0
     roots = search_roots(app)
     idx = build_index(app)
+    # той самий набір зниклих і ті самі відео в папках — результат не зміниться, мовчки пропускаємо
+    import hashlib
+    sig = hashlib.sha1(repr((sorted(it["id"] for it in items),
+                             sorted((k, len(v)) for k, v in idx.items()))).encode()).hexdigest()
+    if db.get("recover_sig") == sig:
+        return 0
+    db.set("recover_sig", sig)
     log.info("Шукаю перенесені відео: зниклих %d, папки пошуку: %s, відео в них: %d", len(items),
              ", ".join(str(r) for r in roots) or "— (Різак не повідомив своїх папок)", sum(len(v) for v in idx.values()))
     n = 0

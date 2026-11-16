@@ -46,8 +46,10 @@ class IgManualMixin:
         if not item:
             return answer("Шортс не знайдено", True)
         results = dict(item["results"])
+        prev = results.get("instagram") or {}
         results["instagram"] = ({"status": "ok", "url": "", "note": "опубліковано вручну з телефона",
-                                 "published_at": now_ts()} if done else
+                                 "published_at": now_ts(),
+                                 **({"sent_at": prev["sent_at"]} if prev.get("sent_at") else {})} if done else
                                 {"status": "skipped", "note": "Instagram пропущено вручну"})
         self.db.update_item(item_id, results=results)
         self.db.event(item_id, "instagram_manual", {"done": done, "by": chat})
