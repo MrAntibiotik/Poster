@@ -819,13 +819,13 @@ class Instagram(_MetaBase):
             report(line)
         return out
 
-    def raw_v1_test(self, workdir: Path, seconds=(5, 59), report=lambda line: None) -> list[str]:
+    def raw_v1_test(self, workdir: Path, seconds=(5, 59), report=lambda line: None, version: str = "") -> list[str]:
         """Дослівно спосіб найпершої версії (11.11): прямі запити requests, без класу Graph, копій і перевірок.
         Згенеровані ролики, БЕЗ публікації. Якщо 59 с і тут не проходить — справа не в коді програми."""
         from app.core import media as _media
         import requests as rq
         workdir.mkdir(parents=True, exist_ok=True)
-        ver = self.cfg["graph_api_version"]
+        ver = version or self.cfg["graph_api_version"]
         token = self.secrets.get("META_IG_TOKEN") or self.secrets["META_PAGE_TOKEN"]
         ig = self.ig_id
         out = [f"як у версії 11.11: graph.facebook.com/{ver}, токен сторінки, один запит rupload"]
