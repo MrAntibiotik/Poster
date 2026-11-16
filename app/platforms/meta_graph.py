@@ -505,7 +505,12 @@ class Instagram(_MetaBase):
             if not _media.file_unchanged(video_path, check):
                 diag["file_changed_during_upload"] = True
             up = getattr(g, "last_upload", {})
-            self._stage("rupload", True, up.get("seconds", 0), f"HTTP {up.get('http')}, {up.get('mbps')} Мбіт/с")
+            parts = len(up.get("chunks") or [])
+            self._stage("rupload", True, up.get("seconds", 0),
+                        f"HTTP {up.get('http')}, {up.get('mbps')} Мбіт/с" + (f", частин {parts}" if parts > 1 else ""))
+            log.info("Instagram rupload ✅ %.1f МБ за %s с%s", size / 1048576, up.get("seconds"),
+                     f" ({parts} частин по {up.get('chunk_mb'):g} МБ)" if parts > 1 else "")
+            diag["uri"] = uri
         except PublishError as e:
             up = getattr(g, "last_upload", {})
             if not _media.file_unchanged(video_path, check):
@@ -561,8 +566,12 @@ class Instagram(_MetaBase):
                 raise PublishError(f"{upload_error} | стан контейнера: {reason}" if upload_error
                                    else f"Instagram відхилив відео: {reason}")
             if time.time() > deadline:
+                srv = g.upload_status(diag["uri"]) if diag.get("uri") else {}
+                if srv:
+                    diag["rupload_after_wait"] = srv
                 self._stage("обробка", False, time.time() - start,
-                            f"{code} після {len(polls)} перевірок: {(st.get('status') or '')[:100]}")
+                            f"{code} після {len(polls)} перевірок: {(st.get('status') or '')[:100]}"
+                            + (f"; rupload має: {json.dumps(srv, ensure_ascii=False)[:120]}" if srv else ""))
                 self._save_diag("обробка не завершилась")
                 if upload_error:
                     waited = int((time.time() - start) / 60)
