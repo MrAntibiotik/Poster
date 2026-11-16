@@ -199,7 +199,25 @@ class CommandsMixin:
                     plat = self.app.platforms.get("instagram") or Instagram(self.cfg)
                     lines = plat.api_report()
                     text = "🔬 <b>Instagram API — перевірка доступу</b>\n" + "\n".join(f"• {esc(x)}" for x in lines)
-                    if args and args[0].lower() in ("test", "тест"):
+                    if args and args[0].lower() in ("test", "тест") and len(args) > 1 and args[1].lstrip("#").isdigit():
+                        item = self.db.get_item(int(args[1].lstrip("#")))
+                        if not item:
+                            text += "\n\n❌ Шортс не знайдено"
+                        else:
+                            from pathlib import Path as _P
+                            head = text + f"\n\n🧪 <b>Тести на шортсі #{item['id']} (без публікації)</b>"
+                            done = []
+
+                            def show(line, _h=head):
+                                done.append(line)
+                                try:
+                                    self.tg.edit_text(chat, (wait or {})["message_id"], _h + "\n" + "\n".join(
+                                        f"• {esc(x)}" for x in done) + "\n⏳ далі…")
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            res = plat.test_suite(item["mp4"], _P(self.cfg["paths"]["data"]) / "previews", show)
+                            text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
+                    elif args and args[0].lower() in ("test", "тест"):
                         try:
                             self.tg.edit_text(chat, (wait or {})["message_id"], text + "\n\n🧪 Тестове відео (без публікації)…")
                         except Exception:  # noqa: BLE001
@@ -208,7 +226,8 @@ class CommandsMixin:
                         test = plat.test_video(_P(self.cfg["paths"]["data"]) / "previews")
                         text += "\n\n🧪 <b>Тестове відео (без публікації)</b>\n" + "\n".join(f"• {esc(x)}" for x in test)
                     else:
-                        text += "\n\nТест відео без публікації: <code>/igcheck test</code>"
+                        text += ("\n\nТест відео без публікації: <code>/igcheck test</code>; "
+                                 "серія тестів на шортсі: <code>/igcheck test 41</code>")
                 except Exception as e:  # noqa: BLE001
                     text = f"⚠️ Перевірка не вдалась: {esc(str(e))}"
                 self.task_done(chat, wait, text)

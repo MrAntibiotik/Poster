@@ -755,6 +755,70 @@ class Instagram(_MetaBase):
         r = self._g().get(self.ig_id, fields="username")
         return f"@{r.get('username')}"
 
+    def test_upload(self, clip: Path, label: str) -> tuple[bool | None, str]:
+        """Один тест без публікації: контейнер → rupload → обробка. (True/False/None — пройшло / ні / невідомо, текст)."""
+        g = self._g()
+        size = clip.stat().st_size / 1048576
+        t0 = time.time()
+        c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable", caption="test",
+                   share_to_feed="false")
+        cid = c["id"]
+        uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
+        try:
+            g.upload_binary(uri, str(clip))
+        except PublishError as e:
+            return False, f"{label} ({size:.1f} МБ): ❌ rupload {time.time() - t0:.0f} с — {short_error(e)}"
+        t1 = time.time()
+        code = None
+        for delay in (5, 10, 20, 30, 40, 60, 60, 60):
+            st = g.get(cid, fields="status_code,status")
+            code = st.get("status_code")
+            if code == "FINISHED":
+                return True, f"{label} ({size:.1f} МБ): ✅ прийнято (завантаження {t1 - t0:.0f} с, обробка {time.time() - t1:.0f} с)"
+            if code in ("ERROR", "EXPIRED"):
+                return False, f"{label} ({size:.1f} МБ): ❌ обробка — {st.get('status')}"
+            time.sleep(delay)
+        return None, f"{label} ({size:.1f} МБ): ⏳ обробка не завершилась ({code})"
+
+    def test_suite(self, original: str, workdir: Path, report=lambda line: None) -> list[str]:
+        """Серія тестів без публікації на справжньому шортсі — кожен міняє одну річ, щоб знайти, що не подобається."""
+        from app.core import media as _media
+        workdir.mkdir(parents=True, exist_ok=True)
+        ff = self.cfg.get("ffmpeg", "ffmpeg")
+        p = _media.ig_probe(original, self.cfg.get("ffprobe", "ffprobe"))
+        dur = max(5, int(p.get("duration") or 30))
+        enc = ["-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p",
+               "-maxrate", "6M", "-bufsize", "12M", "-crf", "21", "-r", "30",
+               "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"]
+        aud = ["-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"]
+        tests = [
+            ("1) перші 5 с шортса", ["-i", original, "-t", "5", *enc, *aud]),
+            ("2) шортс БЕЗ звуку", ["-i", original, *enc, "-an"]),
+            ("3) лише звук шортса (чорний кадр)", ["-f", "lavfi", "-i", "color=black:s=1080x1920:r=30", "-i", original,
+                                                   "-map", "0:v", "-map", "1:a", "-shortest", "-t", str(dur),
+                                                   "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", *aud]),
+            (f"4) згенероване {dur} с 1080×1920", ["-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=30", "-f", "lavfi",
+                                                   "-i", "sine=frequency=440:sample_rate=48000", "-t", str(dur),
+                                                   "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                                                   "-maxrate", "6M", "-bufsize", "12M", *aud]),
+        ]
+        out = [f"оригінал: {_media.ig_summary(p)}"]
+        for i, (label, args) in enumerate(tests, 1):
+            clip = workdir / f"ig_suite_{i}.mp4"
+            r = _media.run_hidden([ff, "-y", "-hide_banner", "-loglevel", "error", *args,
+                                   "-movflags", "+faststart", str(clip)], timeout=900)
+            if r.returncode != 0:
+                line = f"{label}: не вдалося підготувати ({r.stderr.decode(errors='ignore')[-120:]})"
+            else:
+                try:
+                    _, line = self.test_upload(clip, label)
+                except Exception as e:  # noqa: BLE001
+                    line = f"{label}: помилка тесту — {e}"
+                clip.unlink(missing_ok=True)
+            out.append(line)
+            report(line)
+        return out
+
     def test_video(self, workdir: Path) -> list[str]:
         """Тест БЕЗ публікації: 5-секундне згенероване відео (смуги + тон) → контейнер → rupload → обробка.
         Показує, чи Instagram API приймає БУДЬ-ЯКЕ відео від нас (контейнер потім просто спливає, на акаунті нічого)."""
