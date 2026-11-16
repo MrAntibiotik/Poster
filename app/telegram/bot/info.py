@@ -77,6 +77,21 @@ class InfoMixin:
                 err = str(r.get("error", ""))
                 for part in err.split("; ") if "спроб)" in err else [err]:
                     lines.append(f"   • {esc(short_error(part) if len(part) > 400 else part)}")
+        if self.app.publisher.is_active(item_id):   # публікація йде зараз — етапи наживо
+            cur = self.db.get(f"pubnow:{item_id}")
+            lines.append(f"\n⏳ <b>Зараз: {NAMES.get(cur, cur or '—')}</b> — {self._phase_text(item_id)}")
+            plat = self.app.platforms.get(cur) if cur else None
+            d = getattr(plat, "diag", None) or {}
+            if d.get("file") and cur == "instagram":
+                lines.append(f"   файл: {esc(d['file'])} ({d.get('size_mb')} МБ)")
+                for s in d.get("stages") or []:
+                    lines.append(f"   {'✅' if s['ok'] else '❌'} {esc(s['stage'])} · {s['seconds']:g} с"
+                                 + (f" — {esc(str(s['info'])[:200])}" if s.get("info") else ""))
+                polls = d.get("polls") or []
+                if polls:
+                    last = polls[-1]
+                    lines.append(f"   🔄 перевірок обробки: {len(polls)}, остання (через {last[0]} с): "
+                                 f"{esc(str(last[1]))} {esc(str(last[2])[:100])}")
         evs = self.db.q("SELECT ts, details FROM events WHERE item_id=? AND kind='platform_error' ORDER BY ts DESC LIMIT 6",
                         (item_id,))
         if evs:

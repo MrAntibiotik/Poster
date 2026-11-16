@@ -306,7 +306,8 @@ class CardsMixin:
 
     def keyboard(self, item: dict) -> dict | None:
         if item["status"] == "publishing" and self.app.publisher.is_active(item["id"]):
-            return {"inline_keyboard": [[{"text": "⏸ Пауза — далі наступне", "callback_data": f"hold:{item['id']}"}]]}
+            return {"inline_keyboard": [[{"text": "⏸ Пауза — далі наступне", "callback_data": f"hold:{item['id']}"}],
+                                        [{"text": "🧾 Деталі (наживо)", "callback_data": f"err:{item['id']}"}]]}
         if item["status"] == "publishing" and self.db.get(f"held:{item['id']}"):
             return {"inline_keyboard": [[{"text": "▶️ Продовжити", "callback_data": f"unhold:{item['id']}"}],
                                         [{"text": "✖️ Ігнорувати", "callback_data": f"ri:{item['id']}"}]]}
