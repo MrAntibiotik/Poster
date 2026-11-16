@@ -344,7 +344,11 @@ class Instagram(_MetaBase):
         if single:
             # Діагностичний режим (тимчасово): одна спроба — один контейнер, одне завантаження, без перебору
             # варіантів і без запасного шляху через Facebook. Повтор — вручну («🔁»), після аналізу етапів.
-            files = files[:1]
+            # Яку одну копію пробуємо — експеримент діагностики (platforms.instagram.diag_variant):
+            # "" — звичайна (60 к/с), "safe60" — 60 к/с полегшена, "safe30" — 30 к/с рівень 4.1 (єдина, що проходила)
+            want = {"safe30": "крайній", "safe60": "сувора"}.get(str(self.pcfg.get("diag_variant", "safe30")))
+            pick = [f for f in files if want and f[0].startswith(want)]
+            files = pick[:1] or files[:1]
             tokens = tokens[:1]   # і один токен: жодного другого контейнера / завантаження
         errors = []
         via_fb = bool(self.pcfg.get("facebook_fallback", True) and self.secrets.get("FB_PAGE_ID")) and not single

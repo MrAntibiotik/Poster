@@ -532,6 +532,7 @@ class InstagramDiagnosticTest(Base):
         self.copy.write_bytes(b"c" * 100)
         media.instagram_copy = lambda path, cfg, **kw: str(self.copy)
         self.cfg["platforms"]["instagram"]["single_attempt"] = True
+        self.cfg["platforms"]["instagram"]["diag_variant"] = ""      # більшість тестів — з оригіналом
         media.ig_probe = lambda path, ffprobe="ffprobe": {}
         media.ig_problems = lambda p: []
 
@@ -659,3 +660,15 @@ class InstagramChunk206Test(InstagramDiagnosticTest):
         with self.assertRaisesRegex(meta_graph.PublishError, "не дійшов"):
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertFalse([c for c in f.calls if c[0] == "GET" and c[1].endswith("/C1") and "rupload" not in c[1]])
+
+
+class InstagramDiagVariantTest(InstagramDiagnosticTest):
+    def test_default_experiment_is_30fps_copy(self):
+        self.cfg["platforms"]["instagram"].pop("diag_variant")
+        modes = []
+        self.media.instagram_copy = lambda path, cfg, **kw: modes.append(kw.get("mode", "")) or str(self.copy)
+        f = self.http(meta_graph, self.routes(Resp({"success": True})))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")
+        self.assertEqual(modes, ["safe30"])                                   # одна спроба — 30 к/с
+        self.assertEqual(len([c for c in f.calls if c[0] == "POST" and c[1].endswith("/IG1/media")]), 1)
