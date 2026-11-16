@@ -144,6 +144,7 @@ SECRETS = {
     "META_PAGE_TOKEN": ("meta", "page_token"),
     "META_IG_TOKEN": ("meta", "ig_token"),
     "META_USER_TOKEN": ("meta", "user_token"),
+    "IG_LOGIN_TOKEN": ("meta", "ig_login_token"),   # токен «Instagram Login» (graph.instagram.com)
     "FB_PAGE_ID": ("meta", "page_id"),
     "IG_USER_ID": ("meta", "ig_user_id"),
     "TIKTOK_CLIENT_KEY": ("tiktok", "client_key"),

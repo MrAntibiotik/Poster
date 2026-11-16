@@ -819,16 +819,38 @@ class Instagram(_MetaBase):
             report(line)
         return out
 
-    def raw_v1_test(self, workdir: Path, seconds=(5, 59), report=lambda line: None, version: str = "") -> list[str]:
+    def raw_v1_test(self, workdir: Path, seconds=(5, 59), report=lambda line: None, version: str = "",
+                    kind: str = "page") -> list[str]:
         """Дослівно спосіб найпершої версії (11.11): прямі запити requests, без класу Graph, копій і перевірок.
         Згенеровані ролики, БЕЗ публікації. Якщо 59 с і тут не проходить — справа не в коді програми."""
         from app.core import media as _media
         import requests as rq
         workdir.mkdir(parents=True, exist_ok=True)
         ver = version or self.cfg["graph_api_version"]
-        token = self.secrets.get("META_IG_TOKEN") or self.secrets["META_PAGE_TOKEN"]
-        ig = self.ig_id
-        out = [f"як у версії 11.11: graph.facebook.com/{ver}, токен сторінки, один запит rupload"]
+        host = "graph.facebook.com"
+        if kind == "user":
+            token = self.secrets.get("META_USER_TOKEN") or ""
+            if not token:
+                return ["немає токена користувача — перепідключіть Meta в панелі («Отримати сторінки» → «Підключити»)"]
+            ig = self.ig_id
+            label = "токен користувача"
+        elif kind == "ig":
+            token = self.secrets.get("IG_LOGIN_TOKEN") or ""
+            if not token:
+                return ["немає токена Instagram Login — панель → «📸 Instagram + Facebook» → «Токен Instagram Login»"]
+            host = "graph.instagram.com"
+            import requests as _rq
+            me = _rq.get(f"https://{host}/{ver}/me", timeout=60,
+                         params={"fields": "user_id,username", "access_token": token}).json()
+            if me.get("error"):
+                return [f"токен Instagram Login не працює: {me['error'].get('message')}"]
+            ig = str(me.get("user_id") or me.get("id"))
+            label = f"Instagram Login (@{me.get('username')})"
+        else:
+            token = self.secrets.get("META_IG_TOKEN") or self.secrets["META_PAGE_TOKEN"]
+            ig = self.ig_id
+            label = "токен сторінки"
+        out = [f"{host}/{ver}, {label}, один запит rupload"]
         for sec in seconds:
             clip = workdir / f"ig_raw_{sec}.mp4"
             _media.run_hidden([self.cfg.get("ffmpeg", "ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
@@ -837,9 +859,11 @@ class Instagram(_MetaBase):
                                "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart",
                                str(clip)], timeout=300)
             try:
-                c = rq.post(f"https://graph.facebook.com/{ver}/{ig}/media", timeout=120, data={
+                c = rq.post(f"https://{host}/{ver}/{ig}/media", timeout=120, data={
                     "media_type": "REELS", "upload_type": "resumable", "caption": "test", "share_to_feed": "false",
                     "access_token": token}).json()
+                if "id" not in c:
+                    raise RuntimeError(f"контейнер: {(c.get('error') or {}).get('message') or c}")
                 cid = c["id"]
                 uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{ver}/{cid}"
                 size = os.path.getsize(clip)
@@ -852,7 +876,7 @@ class Instagram(_MetaBase):
                 else:
                     line = f"{sec} с: ❌ обробка не завершилась"
                     for _ in range(30):
-                        st = rq.get(f"https://graph.facebook.com/{ver}/{cid}", timeout=60, params={
+                        st = rq.get(f"https://{host}/{ver}/{cid}", timeout=60, params={
                             "fields": "status_code,status", "access_token": token}).json()
                         if st.get("status_code") == "FINISHED":
                             line = f"{sec} с: ✅ прийнято (rupload {time.time() - t0:.0f} с)"

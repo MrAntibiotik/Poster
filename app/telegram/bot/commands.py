@@ -236,7 +236,10 @@ class CommandsMixin:
                         ver = next((a for a in args[1:] if a.lower().startswith("v") and a[1:].split(".")[0].isdigit()), "")
                         if ver and "." not in ver:
                             ver += ".0"
-                        res = plat.raw_v1_test(_P(self.cfg["paths"]["data"]) / "previews", report=show_raw, version=ver)
+                        kind = "user" if "user" in [a.lower() for a in args] else \
+                            "ig" if any(a.lower() in ("ig", "iglogin", "instagram") for a in args) else "page"
+                        res = plat.raw_v1_test(_P(self.cfg["paths"]["data"]) / "previews", report=show_raw, version=ver,
+                                               kind=kind)
                         text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
                     elif args and args[0].lower() in ("len", "довжина"):
                         from pathlib import Path as _P

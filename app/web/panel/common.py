@@ -33,7 +33,7 @@ PUBLIC_IDS = {"TELEGRAM_CHAT_ID", "FB_PAGE_ID", "IG_USER_ID", "META_APP_ID", "TI
 SECRET_LABELS = {
     "TELEGRAM_BOT_TOKEN": "Токен бота", "TELEGRAM_CHAT_ID": "Головні адміністратори (chat_id)",
     "META_APP_ID": "App ID", "META_APP_SECRET": "App Secret", "META_PAGE_TOKEN": "Токен сторінки",
-    "META_IG_TOKEN": "Окремий токен Instagram", "META_USER_TOKEN": "Токен користувача Meta", "GEMINI_API_KEY": "Ключ Gemini API", "FB_PAGE_ID": "ID сторінки Facebook",
+    "META_IG_TOKEN": "Окремий токен Instagram", "META_USER_TOKEN": "Токен користувача Meta", "IG_LOGIN_TOKEN": "Токен Instagram Login", "GEMINI_API_KEY": "Ключ Gemini API", "FB_PAGE_ID": "ID сторінки Facebook",
     "IG_USER_ID": "ID акаунта Instagram", "GITHUB_TOKEN": "Токен GitHub (оновлення)", "TIKTOK_CLIENT_KEY": "Client key", "TIKTOK_CLIENT_SECRET": "Client secret",
 }
 
