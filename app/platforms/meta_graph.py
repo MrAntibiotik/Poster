@@ -350,10 +350,10 @@ class Instagram(_MetaBase):
             pick = [f for f in files if want and f[0].startswith(want)]
             files = pick[:1] or files[:1]
             tokens = tokens[:1]   # і один токен: жодного другого контейнера / завантаження
-        if single and str(self.pcfg.get("diag_method", "fb_link")) == "fb_link" and self.secrets.get("FB_PAGE_ID"):
+        if single and str(self.pcfg.get("diag_method", "rupload")) == "fb_link" and self.secrets.get("FB_PAGE_ID"):
             return self._diag_via_facebook(files[0], video_path, meta)
         errors = []
-        via_fb = bool(self.pcfg.get("facebook_fallback", True) and self.secrets.get("FB_PAGE_ID")) and not single
+        via_fb = bool(self.pcfg.get("facebook_fallback", False) and self.secrets.get("FB_PAGE_ID")) and not single
         for tname, token in tokens:
             for fname, get_file in files:
                 self._check_stop()
