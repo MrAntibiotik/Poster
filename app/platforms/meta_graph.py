@@ -819,6 +819,55 @@ class Instagram(_MetaBase):
             report(line)
         return out
 
+    def raw_v1_test(self, workdir: Path, seconds=(5, 59), report=lambda line: None) -> list[str]:
+        """Дослівно спосіб найпершої версії (11.11): прямі запити requests, без класу Graph, копій і перевірок.
+        Згенеровані ролики, БЕЗ публікації. Якщо 59 с і тут не проходить — справа не в коді програми."""
+        from app.core import media as _media
+        import requests as rq
+        workdir.mkdir(parents=True, exist_ok=True)
+        ver = self.cfg["graph_api_version"]
+        token = self.secrets.get("META_IG_TOKEN") or self.secrets["META_PAGE_TOKEN"]
+        ig = self.ig_id
+        out = [f"як у версії 11.11: graph.facebook.com/{ver}, токен сторінки, один запит rupload"]
+        for sec in seconds:
+            clip = workdir / f"ig_raw_{sec}.mp4"
+            _media.run_hidden([self.cfg.get("ffmpeg", "ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
+                               "-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=30", "-f", "lavfi",
+                               "-i", "sine=frequency=440:sample_rate=48000", "-t", str(sec), "-c:v", "libx264",
+                               "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart",
+                               str(clip)], timeout=300)
+            try:
+                c = rq.post(f"https://graph.facebook.com/{ver}/{ig}/media", timeout=120, data={
+                    "media_type": "REELS", "upload_type": "resumable", "caption": "test", "share_to_feed": "false",
+                    "access_token": token}).json()
+                cid = c["id"]
+                uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{ver}/{cid}"
+                size = os.path.getsize(clip)
+                t0 = time.time()
+                with open(clip, "rb") as f:
+                    r = rq.post(uri, headers={"Authorization": f"OAuth {token}", "offset": "0", "file_size": str(size)},
+                                data=f, timeout=1800)
+                if r.status_code >= 400:
+                    line = f"{sec} с: ❌ rupload HTTP {r.status_code} за {time.time() - t0:.0f} с — {r.text[:120]}"
+                else:
+                    line = f"{sec} с: ❌ обробка не завершилась"
+                    for _ in range(30):
+                        st = rq.get(f"https://graph.facebook.com/{ver}/{cid}", timeout=60, params={
+                            "fields": "status_code,status", "access_token": token}).json()
+                        if st.get("status_code") == "FINISHED":
+                            line = f"{sec} с: ✅ прийнято (rupload {time.time() - t0:.0f} с)"
+                            break
+                        if st.get("status_code") in ("ERROR", "EXPIRED"):
+                            line = f"{sec} с: ❌ обробка — {st.get('status')}"
+                            break
+                        time.sleep(10)
+            except Exception as e:  # noqa: BLE001
+                line = f"{sec} с: помилка — {e}"
+            clip.unlink(missing_ok=True)
+            out.append(line)
+            report(line)
+        return out
+
     def test_lengths(self, workdir: Path, lengths=(10, 20, 30, 45), report=lambda line: None) -> list[str]:
         """Межа довжини, яку Instagram зараз приймає: крихітні ролики (чорний кадр + тон) різної довжини, без публікації."""
         from app.core import media as _media

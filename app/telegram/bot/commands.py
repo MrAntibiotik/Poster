@@ -217,6 +217,20 @@ class CommandsMixin:
                                     pass
                             res = plat.test_suite(item["mp4"], _P(self.cfg["paths"]["data"]) / "previews", show)
                             text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
+                    elif args and args[0].lower() in ("raw", "v1"):
+                        from pathlib import Path as _P
+                        head = text + "\n\n🧪 <b>Код найпершої версії (11.11), без публікації</b>"
+                        done_raw = []
+
+                        def show_raw(line, _h=head):
+                            done_raw.append(line)
+                            try:
+                                self.tg.edit_text(chat, (wait or {})["message_id"], _h + "\n" + "\n".join(
+                                    f"• {esc(x)}" for x in done_raw) + "\n⏳ далі…")
+                            except Exception:  # noqa: BLE001
+                                pass
+                        res = plat.raw_v1_test(_P(self.cfg["paths"]["data"]) / "previews", report=show_raw)
+                        text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
                     elif args and args[0].lower() in ("len", "довжина"):
                         from pathlib import Path as _P
                         head = text + "\n\n📏 <b>Яку довжину Instagram зараз приймає (без публікації)</b>"
