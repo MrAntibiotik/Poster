@@ -71,3 +71,24 @@ class ChannelGuardTest(FlowBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FolderReasonsTest(FlowBase):
+    def test_reasons_and_queue_text(self):
+        self.make_short("mine")
+        rp = self.make_short("replay_x")
+        data = json.loads(rp.with_suffix(".json").read_text(encoding="utf-8"))
+        data.update(channel="en")
+        write_json(rp.with_suffix(".json"), data)
+        config.FAKE_NOW = self.ts(11, "08:00")
+        reasons = dict((m.stem, r) for m, r in self.app.scheduler.folder_reasons())
+        self.assertIn("нове", reasons["mine"])
+        self.assertIn("інший канал", reasons["replay_x"])
+        self.app.scheduler.scan()
+        reasons = dict((m.stem, r) for m, r in self.app.scheduler.folder_reasons())
+        self.assertIn("у черзі", reasons["mine"])
+        for it in self.app.db.queue():
+            self.app.db.update_item(it["id"], status="cancelled")
+        text = self.app.queue_text()
+        self.assertIn("відхилено: 1", text)
+        self.assertIn("інший канал", text)

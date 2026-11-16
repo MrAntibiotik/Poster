@@ -132,6 +132,51 @@ class ScanMixin:
                 self.announce_queued(added)
         return added
 
+    def folder_reasons(self) -> list[tuple[Path, str]]:
+        """Кожне відео з папки шортсів і чому воно (не) в черзі — для «Черга порожня, а відео є»."""
+        ready = Path(self.cfg["paths"]["ready"])
+        if not ready.is_dir():
+            return []
+        by_path = {}
+        for r in self.db.q("SELECT id, mp4, status, note FROM items ORDER BY id"):
+            try:
+                by_path[str(Path(r["mp4"]).resolve()).lower()] = r
+            except OSError:
+                continue
+        names = {"posted": "уже опубліковано", "cancelled": "відхилено", "skipped": "пропущено",
+                 "duplicate": "схоже на вже опубліковане — чекає відповіді «публікувати ще раз?»",
+                 "failed": "не опубліковано (помилка) — /failed", "missing": "позначено зниклим",
+                 "queued": "у черзі", "notified": "чекає підтвердження", "approved": "підтверджено",
+                 "publishing": "публікується"}
+        out = []
+        for mp4 in find_videos(ready, exclude=(self.cfg["paths"]["posted"], self.cfg["paths"]["skipped"],
+                                               self.cfg["paths"]["cancelled"])):
+            r = by_path.get(str(mp4.resolve()).lower())
+            if r:
+                out.append((mp4, f"#{r['id']} {names.get(r['status'], r['status'])}"
+                                 + (f" ({r['note']})" if r["note"] and r["status"] != "duplicate" else "")))
+                continue
+            ch = self.foreign_channel(mp4, ready)
+            if ch:
+                out.append((mp4, f"належить іншому каналу ({ch})"))
+                continue
+            js = mp4.with_suffix(".json")
+            try:
+                if js.exists():
+                    data = read_json(js)
+                    if json_status(data) != self.cfg["ready_status"]:
+                        out.append((mp4, f"у json статус «{json_status(data)}», потрібен «{self.cfg['ready_status']}»"))
+                        continue
+                    ch = self.foreign_channel(mp4, ready, data)
+                    if ch:
+                        out.append((mp4, f"у json вказано інший канал ({ch})"))
+                        continue
+            except (OSError, ValueError) as e:
+                out.append((mp4, f"json не читається: {e}"))
+                continue
+            out.append((mp4, "нове — стане в чергу при наступній перевірці папки"))
+        return out
+
     def _scan_highlights(self, known: set) -> list[tuple]:
         """Хайлайти з окремої папки (Робочий стіл\\Хайлайти): json від shorts-autocut або створений тут."""
         if not highlights_on(self.cfg):

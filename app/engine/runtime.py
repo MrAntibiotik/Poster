@@ -90,10 +90,31 @@ class App:
             lines.append("⏸ Розклад на паузі — час не призначається")
         if len(queue) > 25:
             lines.append(f"… і ще {len(queue) - 25}")
+        if not queue:
+            lines += self.folder_summary()
         failed = self.db.items("status='failed'")
         if failed:
             lines.append("\n❌ Не опубліковано: " + ", ".join(f"#{i['id']}" for i in failed) + " (/retry N)")
         return "\n".join(lines)
+
+    def folder_summary(self, limit: int = 15) -> list[str]:
+        """Черга порожня, а в папці є відео — показати, чому кожне не в черзі."""
+        from collections import Counter
+        try:
+            rows = self.scheduler.folder_reasons()
+        except Exception as e:  # noqa: BLE001
+            return [f"\n⚠️ Не вдалося перевірити папку: {esc(str(e)[:150])}"]
+        folder = esc(str(self.cfg["paths"]["ready"]))
+        if not rows:
+            return [f"\n📂 У папці <code>{folder}</code> відео немає"]
+        out = [f"\n📂 У папці <code>{folder}</code> відео: {len(rows)}, чому не в черзі:"]
+        kinds = Counter(r.split(" (")[0].split(" ", 1)[-1] if r.startswith("#") else r.split(" (")[0] for _, r in rows)
+        out += [f"• {esc(k)}: {n}" for k, n in kinds.most_common()]
+        out.append("")
+        out += [f"– {esc(m.name)}: {esc(r)}" for m, r in rows[:limit]]
+        if len(rows) > limit:
+            out.append(f"… і ще {len(rows) - limit}")
+        return out
 
     def now_lines(self, now: int) -> list[str]:
         """Що відбувається просто зараз: публікації, черга Instagram, повтори, ліміт Meta."""
