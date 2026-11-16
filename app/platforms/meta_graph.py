@@ -22,7 +22,7 @@ TOKEN_ERROR_CODES = {102, 190, 463, 467}
 RATE_LIMIT_CODES = {4, 17, 32, 613} | set(range(80001, 80015))
 LIMIT_FILE = Path(tempfile.gettempdir()) / "poster-meta-limit.json"   # спільний для всіх каналів (один додаток Meta)
 POLL_DELAYS = (10, 20, 40, 80)   # перевірки стану контейнера: затримка наростає, далі — раз на 80 с
-AFTER_400_WAIT = 8 * 60   # після «rupload 400» довго чекати марно — далі наступний варіант файлу
+AFTER_400_WAIT = 20 * 60  # як у робочих версіях 11–14.11: після «rupload 400» контейнер часто таки обробляється
 STATS_MAX_USAGE = 60      # статистику не знімаємо, якщо використано ≥ N% годинної квоти — бережемо для публікацій
 
 
@@ -509,7 +509,7 @@ class Instagram(_MetaBase):
         self.report(f"завантажую файл ({os.path.getsize(video_path) / 1024 / 1024:.0f} МБ)")
         upload_error = None
         try:
-            g.upload_binary(uri, video_path, float(self.pcfg.get("upload_chunk_mb", 8) or 0))
+            g.upload_binary(uri, video_path, float(self.pcfg.get("upload_chunk_mb", 0) or 0))
             if not _media.file_unchanged(video_path, check):
                 diag["file_changed_during_upload"] = True
             up = getattr(g, "last_upload", {})
@@ -539,11 +539,8 @@ class Instagram(_MetaBase):
                            f" з {-(-up.get('bytes', 0) // int(up.get('chunk_mb') * 1048576))}" if up.get("chunk_mb") else "")
                         + "); "
                         f"сервер каже: {json.dumps(got, ensure_ascii=False)[:160]}")
-            if isinstance(got.get("offset"), int) and got["offset"] < size:
-                # файл не дійшов (сервер має менше байтів, ніж ми надіслали) — чекати «обробки» марно
-                self._save_diag("файл не дійшов до Instagram")
-                raise PublishError(f"{e} | rupload отримав {got['offset'] / 1048576:.1f} з {size / 1048576:.1f} МБ — "
-                                   "файл не дійшов до Instagram (обробку не чекали)")
+            # offset 0 після 400 — НЕ доказ, що файл не дійшов: 11–14.11 так само було 400, а контейнер
+            # за кілька хвилин ставав FINISHED і відео публікувалось. Тому чекаємо обробки, як тоді.
             # 400 від rupload буває хибною: файл дійшов і обробляється. Повторно в той самий контейнер НЕ шлемо —
             # друга відправка ламає обробку («Video Transcoding Error: both HD and SD progressive failed»).
             upload_error = e
@@ -783,20 +780,27 @@ class Instagram(_MetaBase):
                    share_to_feed="false")
         cid = c["id"]
         uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
+        err = None
         try:
             g.upload_binary(uri, str(clip))
-        except PublishError as e:
-            return False, f"{label} ({size:.1f} МБ): ❌ rupload {time.time() - t0:.0f} с — {short_error(e)}"
+        except PublishError as e:   # як у робочих версіях: після 400 не здаємось, а дивимось, чи контейнер обробляється
+            err = f"rupload {short_error(e)[:60]}"
         t1 = time.time()
+        note = f"; попри {err}" if err else ""
         code = None
-        for delay in (5, 10, 20, 30, 40, 60, 60, 60):
+        for delay in (5, 10, 20, 30, 40, 60, 60, 60) + ((60,) * 14 if err else ()):   # після 400 — до ~20 хв
             st = g.get(cid, fields="status_code,status")
             code = st.get("status_code")
             if code == "FINISHED":
-                return True, f"{label} ({size:.1f} МБ): ✅ прийнято (завантаження {t1 - t0:.0f} с, обробка {time.time() - t1:.0f} с)"
+                return True, (f"{label} ({size:.1f} МБ): ✅ прийнято (завантаження {t1 - t0:.0f} с, "
+                              f"обробка {time.time() - t1:.0f} с{note})")
             if code in ("ERROR", "EXPIRED"):
-                return False, f"{label} ({size:.1f} МБ): ❌ обробка — {st.get('status')}"
+                return False, f"{label} ({size:.1f} МБ): ❌ обробка — {st.get('status')}{note}"
+            if err and code is None:
+                break
             time.sleep(delay)
+        if err:
+            return False, f"{label} ({size:.1f} МБ): ❌ {err}; контейнер так і не обробився ({code}, чекали {(time.time() - t1) / 60:.0f} хв)"
         return None, f"{label} ({size:.1f} МБ): ⏳ обробка не завершилась ({code})"
 
     def test_suite(self, original: str, workdir: Path, report=lambda line: None) -> list[str]:
@@ -898,20 +902,21 @@ class Instagram(_MetaBase):
                 with open(clip, "rb") as f:
                     r = rq.post(uri, headers={"Authorization": f"OAuth {token}", "offset": "0", "file_size": str(size)},
                                 data=f, timeout=1800)
-                if r.status_code >= 400:
-                    line = f"{sec} с: ❌ rupload HTTP {r.status_code} за {time.time() - t0:.0f} с — {r.text[:120]}"
-                else:
-                    line = f"{sec} с: ❌ обробка не завершилась"
-                    for _ in range(30):
-                        st = rq.get(f"https://{host}/{ver}/{cid}", timeout=60, params={
-                            "fields": "status_code,status", "access_token": token}).json()
-                        if st.get("status_code") == "FINISHED":
-                            line = f"{sec} с: ✅ прийнято (rupload {time.time() - t0:.0f} с)"
-                            break
-                        if st.get("status_code") in ("ERROR", "EXPIRED"):
-                            line = f"{sec} с: ❌ обробка — {st.get('status')}"
-                            break
-                        time.sleep(10)
+                bad = r.status_code >= 400
+                line = (f"{sec} с: ❌ rupload HTTP {r.status_code} за {time.time() - t0:.0f} с, "
+                        f"контейнер не обробився за 20 хв — {r.text[:100]}" if bad else f"{sec} с: ❌ обробка не завершилась")
+                # як у версіях 11–14.11: навіть після 400 чекаємо, чи контейнер обробиться
+                for _ in range(120 if bad else 30):
+                    st = rq.get(f"https://{host}/{ver}/{cid}", timeout=60, params={
+                        "fields": "status_code,status", "access_token": token}).json()
+                    if st.get("status_code") == "FINISHED":
+                        line = f"{sec} с: ✅ прийнято (rupload {time.time() - t0:.0f} с" + (
+                            f", попри HTTP {r.status_code})" if bad else ")")
+                        break
+                    if st.get("status_code") in ("ERROR", "EXPIRED"):
+                        line = f"{sec} с: ❌ обробка — {st.get('status')}"
+                        break
+                    time.sleep(10)
             except Exception as e:  # noqa: BLE001
                 line = f"{sec} с: помилка — {e}"
             clip.unlink(missing_ok=True)
