@@ -633,3 +633,29 @@ class FileCheckTest(unittest.TestCase):
         with self.assertRaisesRegex(media.MediaError, "порожній"):
             media.file_check(str(d / "e.mp4"), settle=0)
         shutil.rmtree(d, ignore_errors=True)
+
+
+class InstagramChunk206Test(InstagramDiagnosticTest):
+    """Справжня поведінка rupload: на проміжні частини — HTTP 206, на останню — 200."""
+
+    def test_206_continues_to_the_end(self):
+        self.cfg["platforms"]["instagram"]["upload_chunk_mb"] = 512 / 1048576
+        routes = self.routes([Resp({"success": True}, 206)] * 3 + [Resp({"success": True}, 200)])
+        f = self.http(meta_graph, routes)
+        f.rupload_status = {"offset": 2048}
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")
+        ups = [c for c in f.calls if c[0] == "POST" and "rupload" in c[1]]
+        self.assertEqual(len(ups), 4)                                     # усі частини, а не лише перша
+        self.assertEqual(b"".join(u[2]["data"] for u in ups), b"x" * 2048)
+
+    def test_incomplete_on_server_fails_fast(self):
+        self.cfg["platforms"]["instagram"]["upload_chunk_mb"] = 512 / 1048576
+        routes = self.routes([Resp({"success": True}, 206)] * 3 + [Resp({"success": True}, 200)])
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS"})] * 50)
+        f = self.http(meta_graph, routes)
+        f.rupload_status = {"offset": 512}
+        self.fake_time()
+        with self.assertRaisesRegex(meta_graph.PublishError, "не дійшов"):
+            meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertFalse([c for c in f.calls if c[0] == "GET" and c[1].endswith("/C1") and "rupload" not in c[1]])

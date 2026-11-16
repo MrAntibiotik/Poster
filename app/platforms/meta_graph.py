@@ -235,12 +235,12 @@ class Graph:
                     code = getattr(r, "status_code", None)
                     self.last_upload["chunks"].append([offset, n, round(time.time() - tc, 1), code])
                     last = r
-                    if not chunk or code != 200:
+                    if not chunk or code not in (200, 201, 206):   # 206 = «частину прийнято, давай далі»
                         break
                     offset += n
+                    self.last_upload["sent"] = offset
                     if offset >= size:
                         break
-                    self.last_upload["sent"] = offset
         except requests.RequestException as e:
             self.last_upload.update(seconds=round(time.time() - t0, 1), error=str(e)[:300], sent=offset)
             raise PublishError(f"завантаження файлу: {e}") from e
@@ -504,6 +504,13 @@ class Instagram(_MetaBase):
             g.upload_binary(uri, video_path, float(self.pcfg.get("upload_chunk_mb", 8) or 0))
             if not _media.file_unchanged(video_path, check):
                 diag["file_changed_during_upload"] = True
+            up = getattr(g, "last_upload", {})
+            if up.get("chunk_mb"):   # частинами: переконатись, що сервер має ВСІ байти, перш ніж чекати обробки
+                got = g.upload_status(uri)
+                diag["rupload_after"] = got
+                if isinstance(got.get("offset"), int) and got["offset"] < size:
+                    raise PublishError(f"rupload прийняв {got['offset'] / 1048576:.1f} з {size / 1048576:.1f} МБ "
+                                       f"(частин надіслано {len(up.get('chunks') or [])}) — файл дійшов не повністю")
             up = getattr(g, "last_upload", {})
             parts = len(up.get("chunks") or [])
             self._stage("rupload", True, up.get("seconds", 0),
