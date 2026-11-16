@@ -3,6 +3,9 @@
 Усі версії з комітами — у `releases.json` (оновлюється `python tools/make_releases.py`). Перейти на будь-яку: бот → «⬆️ Оновити» → «🕘 Версії / відкат»
 (або /versions), панель → «🔄 Оновлення» → «Історія версій». Нові записи — зверху.
 
+## 2026.11.16-134
+- /igcheck raw ig працює з обома видами нового токена: Instagram Login (IGAA…, graph.instagram.com) і системним токеном Unified login (graph.facebook.com)
+
 ## 2026.11.16-133
 - /igcheck raw user — той самий тест без публікації з токеном користувача
 - /igcheck raw ig — тест через новий спосіб Meta «Instagram Login» (graph.instagram.com) з окремим токеном; поле «Токен Instagram Login» у панелі (вкладка Instagram + Facebook)

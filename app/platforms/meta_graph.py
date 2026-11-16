@@ -838,14 +838,22 @@ class Instagram(_MetaBase):
             token = self.secrets.get("IG_LOGIN_TOKEN") or ""
             if not token:
                 return ["немає токена Instagram Login — панель → «📸 Instagram + Facebook» → «Токен Instagram Login»"]
-            host = "graph.instagram.com"
             import requests as _rq
-            me = _rq.get(f"https://{host}/{ver}/me", timeout=60,
-                         params={"fields": "user_id,username", "access_token": token}).json()
-            if me.get("error"):
-                return [f"токен Instagram Login не працює: {me['error'].get('message')}"]
-            ig = str(me.get("user_id") or me.get("id"))
-            label = f"Instagram Login (@{me.get('username')})"
+            if token.startswith("IG"):   # токен Instagram Login — свій сервер graph.instagram.com
+                host = "graph.instagram.com"
+                me = _rq.get(f"https://{host}/{ver}/me", timeout=60,
+                             params={"fields": "user_id,username", "access_token": token}).json()
+                if me.get("error"):
+                    return [f"токен Instagram Login не працює: {me['error'].get('message')}"]
+                ig = str(me.get("user_id") or me.get("id"))
+                label = f"Instagram Login (@{me.get('username')})"
+            else:   # системний токен (Unified login, SUAT) — graph.facebook.com
+                ig = self.ig_id
+                me = _rq.get(f"https://graph.facebook.com/{ver}/{ig}", timeout=60,
+                             params={"fields": "username", "access_token": token}).json()
+                if me.get("error"):
+                    return [f"новий токен не працює: {me['error'].get('message')}"]
+                label = f"системний токен Unified login (@{me.get('username')})"
         else:
             token = self.secrets.get("META_IG_TOKEN") or self.secrets["META_PAGE_TOKEN"]
             ig = self.ig_id
