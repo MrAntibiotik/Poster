@@ -199,6 +199,16 @@ class CommandsMixin:
                     plat = self.app.platforms.get("instagram") or Instagram(self.cfg)
                     lines = plat.api_report()
                     text = "🔬 <b>Instagram API — перевірка доступу</b>\n" + "\n".join(f"• {esc(x)}" for x in lines)
+                    if args and args[0].lower() in ("test", "тест"):
+                        try:
+                            self.tg.edit_text(chat, (wait or {})["message_id"], text + "\n\n🧪 Тестове відео (без публікації)…")
+                        except Exception:  # noqa: BLE001
+                            pass
+                        from pathlib import Path as _P
+                        test = plat.test_video(_P(self.cfg["paths"]["data"]) / "previews")
+                        text += "\n\n🧪 <b>Тестове відео (без публікації)</b>\n" + "\n".join(f"• {esc(x)}" for x in test)
+                    else:
+                        text += "\n\nТест відео без публікації: <code>/igcheck test</code>"
                 except Exception as e:  # noqa: BLE001
                     text = f"⚠️ Перевірка не вдалась: {esc(str(e))}"
                 self.task_done(chat, wait, text)

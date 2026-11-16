@@ -704,3 +704,22 @@ class InstagramDiagFacebookTest(InstagramViaFacebookTest):
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertTrue(any(c[0] == "DELETE" and "/FBV1" in c[1] for c in f.calls))
         self.assertFalse([c for c in f.calls if "rupload" in c[1]])
+
+
+class InstagramTestVideoTest(InstagramDiagnosticTest):
+    def test_test_video_never_publishes(self):
+        from unittest import mock
+        routes = self.routes(Resp({"success": True}))
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS"}), Resp({"status_code": "FINISHED"})])
+        f = self.http(meta_graph, routes)
+        clip_dir = self.tmp / "previews"
+        clip_dir.mkdir()
+        (clip_dir / "ig_api_test.mp4").write_bytes(b"v" * 4096)       # «згенероване» тестове відео
+        with mock.patch.object(meta_graph.time, "sleep", lambda s: None):
+            out = meta_graph.Instagram(self.cfg).test_video(clip_dir)
+        text = "\n".join(out)
+        self.assertIn("контейнер ✅", text)
+        self.assertIn("rupload ✅", text)
+        self.assertIn("обробка ✅", text)
+        self.assertIn("не публікуємо", text)
+        self.assertFalse([c for c in f.calls if "media_publish" in c[1]])    # нічого не опубліковано

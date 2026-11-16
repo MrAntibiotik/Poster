@@ -755,6 +755,50 @@ class Instagram(_MetaBase):
         r = self._g().get(self.ig_id, fields="username")
         return f"@{r.get('username')}"
 
+    def test_video(self, workdir: Path) -> list[str]:
+        """Тест БЕЗ публікації: 5-секундне згенероване відео (смуги + тон) → контейнер → rupload → обробка.
+        Показує, чи Instagram API приймає БУДЬ-ЯКЕ відео від нас (контейнер потім просто спливає, на акаунті нічого)."""
+        from app.core import media as _media
+        workdir.mkdir(parents=True, exist_ok=True)
+        clip = workdir / "ig_api_test.mp4"
+        if not clip.exists():
+            r = _media.run_hidden([self.cfg.get("ffmpeg", "ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
+                                   "-f", "lavfi", "-i", "testsrc2=size=720x1280:rate=30", "-f", "lavfi",
+                                   "-i", "sine=frequency=440:sample_rate=48000", "-t", "5", "-c:v", "libx264",
+                                   "-profile:v", "high", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                                   "-movflags", "+faststart", str(clip)], timeout=120)
+            if r.returncode != 0:
+                return [f"не вдалося створити тестове відео: {r.stderr.decode(errors='ignore')[-200:]}"]
+        g = self._g()
+        out = [f"тестове відео: 5 с, 720×1280, {clip.stat().st_size / 1024:.0f} КБ"]
+        t0 = time.time()
+        c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable", caption="test",
+                   share_to_feed="false")
+        cid = c["id"]
+        out.append(f"контейнер ✅ {time.time() - t0:.1f} с")
+        uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
+        t1 = time.time()
+        try:
+            g.upload_binary(uri, str(clip))
+            up = getattr(g, "last_upload", {})
+            out.append(f"rupload ✅ {time.time() - t1:.1f} с (HTTP {up.get('http')})")
+        except PublishError as e:
+            out.append(f"rupload ❌ {time.time() - t1:.1f} с — {short_error(e)}; сервер має: "
+                       f"{json.dumps(g.upload_status(uri), ensure_ascii=False)[:120]}")
+            return out
+        t2 = time.time()
+        for delay in (5, 10, 20, 30, 40, 60, 60, 60):
+            st = g.get(cid, fields="status_code,status")
+            code = st.get("status_code")
+            if code in ("FINISHED", "ERROR", "EXPIRED"):
+                ok = code == "FINISHED"
+                out.append(f"обробка {'✅' if ok else '❌'} {time.time() - t2:.0f} с — {code}"
+                           + ("" if ok else f": {st.get('status')}") + " (не публікуємо)")
+                return out
+            time.sleep(delay)
+        out.append(f"обробка ⏳ понад {time.time() - t2:.0f} с — досі {code}")
+        return out
+
     def api_report(self) -> list[str]:
         """Як Meta бачить наш доступ до публікації: токен (дійсний, дозволи, доступ до даних), акаунт, добовий ліміт."""
         out = []
@@ -787,8 +831,8 @@ class Instagram(_MetaBase):
             except Exception as e:  # noqa: BLE001
                 out.append(f"{name}: перевірка не вдалась — {e}")
         try:
-            r = g.get(self.ig_id, fields="username,account_type")
-            out.append(f"Instagram: @{r.get('username')} ({r.get('account_type') or 'тип невідомий'})")
+            r = g.get(self.ig_id, fields="username")
+            out.append(f"Instagram: @{r.get('username')}")
         except Exception as e:  # noqa: BLE001
             out.append(f"Instagram акаунт: {e}")
         try:
