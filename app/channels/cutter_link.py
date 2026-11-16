@@ -155,7 +155,8 @@ def search_roots(app) -> list[Path]:
     data = load() or {}
     guesses = content_guesses()
     roots = [data.get("publish"), data.get("content"), *((data.get("folders") or {}).values()),
-             str(app.cfg["paths"]["ready"]), *map(str, guesses)]   # типові місця «Контент», навіть без cutter.json
+             str(app.cfg["paths"]["ready"]), *map(str, guesses),   # типові місця «Контент», навіть без cutter.json
+             *(str(Path.home() / d / "Desktop" / "Publish") for d in ("OneDrive", ""))]   # куди Різак клав раніше
     out, seen = [], set()
     for r in roots:
         if r and Path(r).is_dir() and str(Path(r).resolve()).lower() not in seen:
