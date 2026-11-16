@@ -76,7 +76,11 @@ class InfoMixin:
                 lines.append(f"\n❌ <b>{NAMES[p]}</b> (спроб: {r.get('attempts', '?')})")
                 err = str(r.get("error", ""))
                 for part in err.split("; ") if "спроб)" in err else [err]:
-                    lines.append(f"   • {esc(short_error(part) if len(part) > 400 else part)}")
+                    lines.append(f"   • {esc(short_error(part) if len(part) > 700 else part)}")
+                if p == "instagram" and "Етапи:" not in err:
+                    diag = self._last_ig_diag(item)
+                    if diag:
+                        lines.append(f"   🔬 Етапи ({esc(diag.get('started', ''))}): {esc(diag.get('summary', ''))}")
         if self.app.publisher.is_active(item_id):   # публікація йде зараз — етапи наживо
             cur = self.db.get(f"pubnow:{item_id}")
             lines.append(f"\n⏳ <b>Зараз: {NAMES.get(cur, cur or '—')}</b> — {self._phase_text(item_id)}")
@@ -105,6 +109,23 @@ class InfoMixin:
                              f"{esc(short_error(d.get('error', '')))}")
         text = "\n".join(lines)
         return text if len(text) < 4000 else text[:3990] + "…"
+
+    def _last_ig_diag(self, item: dict) -> dict | None:
+        """Останній звіт діагностики Instagram (data/ig_diag) для цього шортса."""
+        folder = Path(self.cfg["paths"]["data"]) / "ig_diag"
+        stem = Path(item["mp4"]).stem.lower()
+        try:
+            files = sorted(folder.glob("*.json"), reverse=True)
+        except OSError:
+            return None
+        for f in files[:50]:
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if str(d.get("file", "")).lower().startswith(stem) and d.get("summary"):
+                return d
+        return None
 
     def has_details(self, item: dict) -> bool:
         return any(r.get("status") != "ok" or r.get("tried") for r in item["results"].values())

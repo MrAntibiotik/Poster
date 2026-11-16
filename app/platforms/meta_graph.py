@@ -576,7 +576,8 @@ class Instagram(_MetaBase):
                 if upload_error:
                     waited = int((time.time() - start) / 60)
                     raise PublishError(f"{upload_error}{self._container_reason(g, cid)} (чекали {waited} хв)")
-                raise PublishError("Instagram: обробка відео триває понад 20 хв")
+                raise PublishError("Instagram: обробка відео триває понад 20 хв"
+                                   + (f". Етапи: {diag.get('summary')}" if diag.get("summary") else ""))
             # перевіряємо рідше, що довше обробка: кожен запит з'їдає годинну квоту Meta; «Стоп» — щосекунди
             # квота Meta ≈200 запитів/год на весь додаток: опитування раз на 20 с, потім раз на хвилину,
             # а при квоті ≥80% — раз на 2 хв
