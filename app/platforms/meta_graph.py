@@ -350,6 +350,8 @@ class Instagram(_MetaBase):
             pick = [f for f in files if want and f[0].startswith(want)]
             files = pick[:1] or files[:1]
             tokens = tokens[:1]   # і один токен: жодного другого контейнера / завантаження
+        if single and str(self.pcfg.get("diag_method", "fb_link")) == "fb_link" and self.secrets.get("FB_PAGE_ID"):
+            return self._diag_via_facebook(files[0], video_path, meta)
         errors = []
         via_fb = bool(self.pcfg.get("facebook_fallback", True) and self.secrets.get("FB_PAGE_ID")) and not single
         for tname, token in tokens:
@@ -620,6 +622,38 @@ class Instagram(_MetaBase):
         return out
 
     FB_LINK_WAIT = 10 * 60
+
+    def _diag_via_facebook(self, variant, original: str, meta) -> dict:
+        """Експеримент діагностики: одна спроба БЕЗ rupload — через неопубліковане відео Facebook (video_url)."""
+        fname, get_file = variant
+        self._check_stop()
+        if fname != "оригінал":
+            self.report("готую копію для Instagram")
+        path = get_file()
+        from app.core import media as _media
+        try:
+            check = _media.file_check(path)
+        except _media.MediaError as e:
+            raise PublishError(f"Instagram: перевірка файлу перед завантаженням — {e}") from e
+        self.diag = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "file": Path(path).name,
+                     "size_mb": round(check["size"] / 1048576, 1), "method": "через Facebook (video_url)",
+                     "stages": []}
+        self._stage("файл", True, 0, f"{check['size'] / 1048576:.1f} МБ, {fname}")
+        t0 = time.time()
+        try:
+            out = self._publish_via_facebook(path, meta)
+        except Stopped:
+            raise
+        except PublishError as e:
+            self._stage("через Facebook", False, time.time() - t0, str(e)[:300])
+            self._save_diag("відмова (шлях через Facebook)")
+            raise PublishError("Instagram не прийняв відео (діагностика: одна спроба через Facebook, без rupload). "
+                               f"Етапи: {self.diag.get('summary')}") from e
+        self._stage("через Facebook", True, time.time() - t0, "опубліковано")
+        self._save_diag("опубліковано через Facebook")
+        out["note"] = ("Instagram: опубліковано через тимчасове відео Facebook (пряме завантаження rupload "
+                       "Instagram зараз відкидає)")
+        return out
 
     def _publish_via_facebook(self, video_path: str, meta) -> dict:
         """Запасний шлях, коли Instagram відхиляє пряме завантаження (rupload ProcessingFailedError):

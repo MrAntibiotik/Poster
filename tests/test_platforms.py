@@ -533,6 +533,7 @@ class InstagramDiagnosticTest(Base):
         media.instagram_copy = lambda path, cfg, **kw: str(self.copy)
         self.cfg["platforms"]["instagram"]["single_attempt"] = True
         self.cfg["platforms"]["instagram"]["diag_variant"] = ""      # більшість тестів — з оригіналом
+        self.cfg["platforms"]["instagram"]["diag_method"] = "rupload"
         media.ig_probe = lambda path, ffprobe="ffprobe": {}
         media.ig_problems = lambda p: []
 
@@ -672,3 +673,34 @@ class InstagramDiagVariantTest(InstagramDiagnosticTest):
         self.assertEqual(r["id"], "M1")
         self.assertEqual(modes, ["safe30"])                                   # одна спроба — 30 к/с
         self.assertEqual(len([c for c in f.calls if c[0] == "POST" and c[1].endswith("/IG1/media")]), 1)
+
+
+class InstagramDiagFacebookTest(InstagramViaFacebookTest):
+    """Діагностика за замовчуванням: одна спроба через Facebook (video_url), rupload не викликається взагалі."""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg["platforms"]["instagram"].update(single_attempt=True, diag_method="fb_link", diag_variant="safe30")
+
+    def test_single_attempt_without_rupload(self):
+        src = "https://video.xx.fbcdn.net/v/t42/temp.mp4?sig=1"
+        f = self.http(meta_graph, self.fb_routes(
+            [Resp({"status": {"video_status": "ready"}, "source": src})], Resp({"status_code": "FINISHED"})))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")
+        self.assertIn("через тимчасове відео Facebook", r["note"])
+        self.assertFalse([c for c in f.calls if "rupload" in c[1]])                 # без rupload
+        self.assertTrue(any(c[0] == "DELETE" and "/FBV1" in c[1] for c in f.calls))
+        self.assertTrue(list((self.tmp / "data" / "ig_diag").glob("*.json")))
+
+    def test_rejected_upload_goes_via_facebook_link(self):   # (батьківський сценарій — для rupload; тут не застосовний)
+        pass
+
+    def test_fallback_failure_continues_and_cleans_up(self):
+        f = self.http(meta_graph, self.fb_routes(
+            Resp({"status": {"video_status": "error", "processing_phase": {"status": "error"}}}),
+            Resp({"status_code": "ERROR", "status": "x"})))
+        with self.assertRaisesRegex(PublishError, "одна спроба через Facebook"):
+            meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertTrue(any(c[0] == "DELETE" and "/FBV1" in c[1] for c in f.calls))
+        self.assertFalse([c for c in f.calls if "rupload" in c[1]])
