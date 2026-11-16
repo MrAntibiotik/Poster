@@ -324,7 +324,9 @@ class Instagram(_MetaBase):
         if user and user != self._g().token:
             tokens.append(("користувача", user))
         size_mb = os.path.getsize(video_path) / 1024 / 1024
-        big = size_mb > float(self.pcfg.get("max_upload_mb", 100) or 10 ** 6)
+        limit = float(self.pcfg.get("max_upload_mb", 100) or 10 ** 6)
+        limit = min(limit, float(self.pcfg.get("copy_target_mb") or media.IG_TARGET_MB) + 5)   # більші — лише копією
+        big = size_mb > limit
         # Порядок спроб: оригінал (якщо легкий і за вимогами) → копія під вимоги Reels (вона вже не раз
         # проходила і з важкими файлами) → сувора копія 10 Мбіт/с → крайній варіант 30 к/с.
         files = ([] if problems or big else [("оригінал", lambda: video_path)]) + \

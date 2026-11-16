@@ -157,7 +157,7 @@ def ig_problems(p: dict) -> list[str]:
     return out
 
 
-IG_TARGET_MB = 90
+IG_TARGET_MB = 45   # rupload відкидав копії 85–89 МБ (ProcessingFailedError на останній частині), ~45 МБ проходили
 
 
 def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> str:
@@ -170,7 +170,8 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     та сама частота кадрів, до 20 Мбіт/с, AAC 128 кбіт/с 48 кГц, faststart. Оригінал не змінюється."""
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{IG_TARGET_MB}".encode()).hexdigest()[:10]
+    target = float((cfg.get("platforms") or {}).get("instagram", {}).get("copy_target_mb") or IG_TARGET_MB)
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl'}.get(mode, 'ig') }.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
@@ -184,8 +185,8 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     level = ["-level:v", "4.1"] if lite else ["-level:v", "4.2"]
     cap = 6000 if lite else 10000 if strict else 20000            # кбіт/с
     dur = float(p.get("duration") or 0)
-    if dur > 0:   # файл має вийти ≤ IG_TARGET_MB: великі завантаження Instagram часто відхиляє (rupload 400)
-        cap = min(cap, max(2500, int(IG_TARGET_MB * 8 * 1024 / dur) - 160))
+    if dur > 0:   # файл має вийти ≤ target МБ: великі файли Instagram відкидає (rupload 400)
+        cap = min(cap, max(2500, int(target * 8 * 1024 / dur) - 160))
     crf = "21" if lite else "19" if strict else "17"
     rate = ["-crf", crf, "-maxrate", f"{cap}k", "-bufsize", f"{cap * 2}k"]
     args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
