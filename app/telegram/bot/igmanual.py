@@ -20,15 +20,18 @@ class IgManualMixin:
         path = media.instagram_copy(item["mp4"], cfg)        # 1080×1920, ≤ 59,5 с, ≤ 47 МБ — бот може надіслати
         kb = {"inline_keyboard": [[{"text": "✅ Опубліковано в Instagram", "callback_data": f"igdone:{item_id}"}],
                                   [{"text": "⏭ Пропустити Instagram", "callback_data": f"igskip:{item_id}"}]]}
-        caption = (f"📸 <b>Для Instagram</b> · #{item_id}\n"
+        caption = (f"📸 <b>Для Instagram</b> · #{item_id} · вертикальне 1080×1920, оригінальна якість файлу\n"
                    "1) Утримайте відео → «Поділитися» → Instagram → Reels\n"
                    "2) Скопіюйте підпис з наступного повідомлення (дотик по тексту) і вставте\n"
                    "3) Після публікації — «✅ Опубліковано»")
         text = meta.instagram_text or meta.yt_title
-        sent = []
+        info = media.probe(path, self.cfg["ffprobe"])   # розміри кадру — інакше Telegram показує квадрат/обрізає
+        sent, file_id = [], None
         for cid in self.admins():
             try:
-                v = self.tg.send_video(cid, path, caption, kb)
+                v = self.tg.send_video(cid, file_id or path, caption, kb, width=info.get("width"),
+                                       height=info.get("height"), duration=info.get("duration"))
+                file_id = file_id or ((v.get("video") or {}).get("file_id"))   # інші адміни — той самий файл
                 t = self.tg.send_message(cid, f"<code>{esc(text)}</code>")
                 sent.append([cid, v["message_id"], t["message_id"]])
             except TelegramError as e:
