@@ -172,6 +172,7 @@ def ig_problems(p: dict) -> list[str]:
     return out
 
 
+IG_MAX_SECONDS = 59.5   # копія для Instagram не довша (Reels рівно 1:00 і довші — під підозрою)
 IG_TARGET_MB = 45   # rupload відкидав копії 85–89 МБ (ProcessingFailedError на останній частині), ~45 МБ проходили
 
 
@@ -186,7 +187,7 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
     target = float((cfg.get("platforms") or {}).get("instagram", {}).get("copy_target_mb") or IG_TARGET_MB)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2".encode()).hexdigest()[:10]
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2|t{IG_MAX_SECONDS}".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl'}.get(mode, 'ig') }.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
@@ -207,7 +208,8 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
         cap = min(cap, max(2500, int(target * 8 * 1024 / dur) - 160))
     crf = "21" if lite else "19" if strict else "17"
     rate = ["-crf", crf, "-maxrate", f"{cap}k", "-bufsize", f"{cap * 2}k"]
-    args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
+    trim = ["-t", f"{IG_MAX_SECONDS:g}"] if dur > IG_MAX_SECONDS else []   # Reels — менше хвилини
+    args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), *trim,
             "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-vf", vf, *fps_args, *level,
             "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", *rate, "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
             # завжди позначки SDR BT.709: без них (або з BT.2020/PQ від джерела) Instagram відкидає відео
@@ -266,7 +268,7 @@ def telegram_copy(path: str, cfg: dict) -> str:
         return path  # і так маленьке — надсилаємо як є
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2".encode()).hexdigest()[:10]
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2|t{IG_MAX_SECONDS}".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_tg.mp4"
     if out.exists() and 0 < out.stat().st_size <= TG_LIMIT:
         return str(out)
