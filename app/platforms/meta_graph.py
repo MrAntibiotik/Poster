@@ -755,6 +755,51 @@ class Instagram(_MetaBase):
         r = self._g().get(self.ig_id, fields="username")
         return f"@{r.get('username')}"
 
+    def api_report(self) -> list[str]:
+        """Як Meta бачить наш доступ до публікації: токен (дійсний, дозволи, доступ до даних), акаунт, добовий ліміт."""
+        out = []
+        s = self.secrets
+        g = self._g()
+        app_tok = f"{s.get('META_APP_ID')}|{s.get('META_APP_SECRET')}" if s.get("META_APP_ID") and s.get("META_APP_SECRET") else ""
+        for name, tok in (("токен сторінки", g.token), ("токен користувача", s.get("META_USER_TOKEN") or "")):
+            if not tok:
+                continue
+            if not app_tok:
+                out.append(f"{name}: немає App ID / App Secret — перевірку токена пропущено")
+                break
+            try:
+                r = requests.get(f"https://graph.facebook.com/{g.version}/debug_token",
+                                 params={"input_token": tok, "access_token": app_tok}, timeout=30).json()
+                d = r.get("data") or {}
+                if not d:
+                    out.append(f"{name}: {((r.get('error') or {}).get('message') or r)!s:.200}")
+                    continue
+                exp = d.get("expires_at") or 0
+                dax = d.get("data_access_expires_at") or 0
+                fmt = lambda ts: "безстроковий" if not ts else datetime.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M")  # noqa: E731
+                scopes = d.get("scopes") or []
+                need = ["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement"]
+                miss = [x for x in need if x not in scopes]
+                out.append(f"{name}: {'✅ дійсний' if d.get('is_valid') else '❌ НЕдійсний'}; діє до: {fmt(exp)}; "
+                           f"доступ до даних до: {fmt(dax)}"
+                           + (f"; ❌ бракує дозволів: {', '.join(miss)}" if miss else "; дозволи ✅")
+                           + (f"; помилка: {d['error'].get('message')}" if d.get("error") else ""))
+            except Exception as e:  # noqa: BLE001
+                out.append(f"{name}: перевірка не вдалась — {e}")
+        try:
+            r = g.get(self.ig_id, fields="username,account_type")
+            out.append(f"Instagram: @{r.get('username')} ({r.get('account_type') or 'тип невідомий'})")
+        except Exception as e:  # noqa: BLE001
+            out.append(f"Instagram акаунт: {e}")
+        try:
+            r = g.get(f"{self.ig_id}/content_publishing_limit", fields="quota_usage,config")
+            d = (r.get("data") or [{}])[0]
+            total = (d.get("config") or {}).get("quota_total")
+            out.append(f"Добовий ліміт публікацій через API: використано {d.get('quota_usage')} з {total or '?'}")
+        except Exception as e:  # noqa: BLE001
+            out.append(f"Добовий ліміт: {e}")
+        return out
+
 
 class Facebook(_MetaBase):
     key = "facebook"

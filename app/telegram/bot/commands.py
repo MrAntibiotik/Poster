@@ -188,6 +188,21 @@ class CommandsMixin:
             reply(text, kb=kb)
         elif cmd == "/failed":
             self._bg(self.failed_list, chat)
+        elif cmd == "/igcheck":
+            if role != "admin":
+                return reply("⛔ Лише для адміністратора.", False)
+            wait = self.task_start(chat, "🔬 Питаю в Meta про доступ Instagram…")
+
+            def ig_check():
+                try:
+                    from app.platforms.meta_graph import Instagram
+                    plat = self.app.platforms.get("instagram") or Instagram(self.cfg)
+                    lines = plat.api_report()
+                    text = "🔬 <b>Instagram API — перевірка доступу</b>\n" + "\n".join(f"• {esc(x)}" for x in lines)
+                except Exception as e:  # noqa: BLE001
+                    text = f"⚠️ Перевірка не вдалась: {esc(str(e))}"
+                self.task_done(chat, wait, text)
+            self._bg(ig_check)
         elif cmd == "/platforms":
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)
