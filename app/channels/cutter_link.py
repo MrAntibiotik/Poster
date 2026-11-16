@@ -136,8 +136,11 @@ def _sync_items(app, moved: list) -> int:
 def search_roots(app) -> list[Path]:
     """Де шукати відео, якщо його немає на старому місці: папки Різака (Контент, До публікації…) і папка шортсів."""
     data = load() or {}
+    home = Path.home()
+    guesses = [home / "Videos" / "Контент", home / "Відео" / "Контент", home / "Desktop" / "Контент",
+               home / "OneDrive" / "Desktop" / "Контент", home / "OneDrive" / "Робочий стіл" / "Контент"]
     roots = [data.get("publish"), data.get("content"), *((data.get("folders") or {}).values()),
-             str(app.cfg["paths"]["ready"])]
+             str(app.cfg["paths"]["ready"]), *map(str, guesses)]   # типові місця «Контент», навіть без cutter.json
     out, seen = [], set()
     for r in roots:
         if r and Path(r).is_dir() and str(Path(r).resolve()).lower() not in seen:
@@ -174,7 +177,10 @@ def recover_missing(app, days: int = 7) -> int:
              if (it.get("added_at") or 0) > _t.time() - days * 86400 and not Path(it["mp4"]).exists()]
     if not items:
         return 0
+    roots = search_roots(app)
     idx = build_index(app)
+    log.info("Шукаю перенесені відео: зниклих %d, папки пошуку: %s, відео в них: %d", len(items),
+             ", ".join(str(r) for r in roots) or "— (Різак не повідомив своїх папок)", sum(len(v) for v in idx.values()))
     n = 0
     for it in items:
         new = locate(it["mp4"], idx)
@@ -185,6 +191,8 @@ def recover_missing(app, days: int = 7) -> int:
         db.event(it["id"], "found_moved", {"from": it["mp4"], "to": str(new)})
         log.info("#%s знайдено на новому місці — повернуто в чергу: %s", it["id"], new)
         n += 1
+    if items and not n:
+        log.info("Перенесені відео не знайдено (шукали за назвою, напр. %s)", Path(items[0]["mp4"]).name)
     return n
 
 
