@@ -144,8 +144,8 @@ class Publisher:
 
         targets = self.targets(item)
         for key in targets:
-            if results.get(key, {}).get("status") == "ok":
-                continue  # уже опубліковано (відновлення після збою/перезапуску)
+            if results.get(key, {}).get("status") in ("ok", "manual", "skipped"):
+                continue  # уже опубліковано / надіслано вам для ручної публікації (відновлення після збою/перезапуску)
             if db.get("stopped") == "1":  # «⛔ Стоп» під час публікації: решту платформ — після відновлення
                 log.info("#%s: публікації зупинено — %s та далі після «Відновити»", item_id, key)
                 app.bot.refresh(item_id)
@@ -164,10 +164,12 @@ class Publisher:
             app.bot.refresh(item_id)  # у підписі відео видно, куди вже вийшло
 
         ok = [k for k in targets if results.get(k, {}).get("status") == "ok"]
-        failed = [k for k in targets if k not in ok]
+        # «manual» — Instagram надіслано вам у Telegram (публікуєте з телефона): не помилка; «skipped» — ви пропустили
+        waiting = [k for k in targets if results.get(k, {}).get("status") in ("manual", "skipped")]
+        failed = [k for k in targets if k not in ok and k not in waiting]
         now = now_ts()
         item = db.get_item(item_id)
-        if ok:
+        if ok or waiting:
             posted_root = Path(app.cfg["paths"]["posted"])
             if posted_root in Path(item["mp4"]).parents:  # повтор (/retry) уже заархівованого
                 new_mp4, new_json = item["mp4"], item["json"]
@@ -210,6 +212,14 @@ class Publisher:
 
     def _publish_one(self, key: str, item: dict, meta) -> dict:
         app = self.app
+        if key == "instagram" and (app.cfg["platforms"].get("instagram") or {}).get("manual") \
+                and hasattr(app.bot, "instagram_manual") and not app.cfg.get("dry_run"):
+            try:   # напівавтомат: відео й підпис — вам у Telegram, публікуєте з телефона
+                app.bot.instagram_manual(item["id"], meta)
+                return {"status": "manual", "sent_at": now_ts(), "note": "надіслано в Telegram для публікації з телефона"}
+            except Exception as e:  # noqa: BLE001
+                log.warning("#%s Instagram вручну: не вдалося надіслати в Telegram: %s", item["id"], e)
+                return {"status": "error", "attempts": 1, "error": f"не вдалося надіслати відео в Telegram: {e}"[:500]}
         plat = app.platforms[key]
         attempts = max(1, int(app.cfg["retry"]["attempts"]))
         if key == "instagram" and (app.cfg["platforms"].get("instagram") or {}).get("single_attempt", True):

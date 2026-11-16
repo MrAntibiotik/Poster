@@ -100,7 +100,8 @@ class PeriodicMixin:
         згенерований ролик 59 с. Щойно пройде — повідомлення в Telegram (один раз)."""
         ig = (self.cfg.get("platforms") or {}).get("instagram") or {}
         sec = self.cfg.get("secrets") or {}
-        if ig.get("enabled", True) or not ig.get("watch_long_video", True) or self.cfg.get("dry_run"):
+        if (ig.get("enabled", True) and not ig.get("manual")) or not ig.get("watch_long_video", True) \
+                or self.cfg.get("dry_run"):
             return
         if not (sec.get("IG_USER_ID") and (sec.get("META_PAGE_TOKEN") or sec.get("META_IG_TOKEN"))):
             return
@@ -120,8 +121,8 @@ class PeriodicMixin:
                 self.db.set("igwatch_last", f"{line}")
                 if ok:
                     self.app.bot.send("✅ <b>Instagram знову приймає довгі відео</b> через API (тест 59 с без публікації "
-                                      "пройшов).\nУвімкніть: «🔌 Платформи» → Instagram ✅. Шортси, що не пішли в Instagram, "
-                                      "— «⚠️ Невдалі» → «🔁 Повторити» (по одному).", html_mode=True, keep="igwatch")
+                                      "пройшов).\nУвімкніть: «🔌 Платформи» → Instagram ✅ (а в панелі вимкніть «📱 Instagram вручну»). "
+                                      "Шортси, що не пішли в Instagram, — «⚠️ Невдалі» → «🔁 Повторити» (по одному).", html_mode=True, keep="igwatch")
             except Exception as e:  # noqa: BLE001
                 log.warning("Щоденна перевірка Instagram: %s", e)
             finally:

@@ -420,3 +420,38 @@ class IgWatchTest(FlowBase):
             self.app.scheduler.maybe_ig_watch(now + 3600)       # тієї ж доби — не повторює
         self.assertEqual(len(calls), 1)
         self.assertTrue(any("знову приймає довгі відео" in s[1] for s in self.app.bot.tg.sent if s[0] == "text"))
+
+
+class IgManualTest(FlowBase):
+    def test_manual_instagram_flow(self):
+        from unittest import mock
+        from app.core import media
+        self.cfg["dry_run"] = False
+        self.cfg["platforms"]["instagram"]["manual"] = True
+
+        class Ok2:
+            def publish(self, path, meta):
+                return {"id": "y", "url": "https://yt/y"}
+
+        class NeverIG:
+            def publish(self, path, meta):
+                raise AssertionError("API Instagram не має викликатись у ручному режимі")
+        self.app.platforms = {"youtube": Ok2(), "instagram": NeverIG()}
+        self.make_short("a")
+        self.app.scheduler.scan()
+        it = self.app.db.items("status='queued'")[0]
+        with mock.patch.object(media, "instagram_copy", lambda path, cfg, **kw: path):
+            self.app.publisher.run(it["id"])
+        item = self.app.db.get_item(it["id"])
+        self.assertEqual(item["status"], "posted")
+        self.assertEqual(item["results"]["instagram"]["status"], "manual")
+        tg = self.app.bot.tg
+        self.assertTrue(any(s[0] == "video" and "Для Instagram" in s[1] for s in tg.sent))
+        self.assertTrue(any(s[0] == "text" and s[1].startswith("<code>") for s in tg.sent))
+        self.assertIn("📱 надіслано вам у чат", self.app.bot.caption(item))
+        self.assertEqual(self.app.scheduler.failed_items(), [])            # не «невдалий»
+        self.app.bot.handle({"update_id": 1, "callback_query": {"id": "c", "data": f"igdone:{it['id']}",
+                             "message": {"message_id": 1, "chat": {"id": 42}}}})
+        item = self.app.db.get_item(it["id"])
+        self.assertEqual(item["results"]["instagram"]["status"], "ok")
+        self.assertIsNone(self.app.db.get(f"igman:{it['id']}"))

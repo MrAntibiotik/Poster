@@ -34,9 +34,10 @@ from .callbacks import CallbacksMixin
 from .commands import CommandsMixin
 from .panel import PanelMixin
 from .versions import VersionsMixin
+from .igmanual import IgManualMixin
 
 
-class Bot(BaseMixin, ChatMixin, CardsMixin, QueueMixin, DialogMixin, FailedMixin, InfoMixin, CallbacksMixin, CommandsMixin, PanelMixin, VersionsMixin):
+class Bot(BaseMixin, ChatMixin, CardsMixin, QueueMixin, DialogMixin, FailedMixin, InfoMixin, CallbacksMixin, CommandsMixin, PanelMixin, VersionsMixin, IgManualMixin):
     pass
 
 

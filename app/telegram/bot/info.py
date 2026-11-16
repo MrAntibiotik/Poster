@@ -128,7 +128,7 @@ class InfoMixin:
         return None
 
     def has_details(self, item: dict) -> bool:
-        return any(r.get("status") != "ok" or r.get("tried") for r in item["results"].values())
+        return any(r.get("status") not in ("ok", "manual", "skipped") or r.get("tried") for r in item["results"].values())
 
     def update_now(self, force: bool = False) -> tuple[str, dict | None]:
         """Оновлення одразу, без очікування. Якщо саме йде публікація — питаємо (якщо не force)."""

@@ -117,7 +117,7 @@ class StateMixin:
         posted = [{"id": i["id"], "name": Path(i["mp4"]).stem,
                    "when": local_dt(cfg, i["posted_at"]).strftime("%d.%m %H:%M") if i["posted_at"] else "",
                    "links": {p: r.get("url") for p, r in i["results"].items() if r.get("status") == "ok"},
-                   "errors": {p: r.get("error") for p, r in i["results"].items() if r.get("status") != "ok"},
+                   "errors": {p: r.get("error") for p, r in i["results"].items() if r.get("status") not in ("ok", "manual", "skipped")},
                    "details": any(r.get("status") != "ok" or r.get("tried") for r in i["results"].values())}
                   for i in db.items("status='posted'", order="posted_at DESC")[:10]]
         owners = [int(x) for x in re.findall(r"-?\d+", cfg["secrets"]["TELEGRAM_CHAT_ID"] or "")]

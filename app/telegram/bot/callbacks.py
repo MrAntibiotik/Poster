@@ -124,6 +124,10 @@ class CallbacksMixin:
             except TelegramError as e:
                 log.debug("analytics edit: %s", e)
             return
+        if action in ("igdone", "igskip"):
+            if self.role(chat) != "admin":
+                return answer("⛔ Лише для адміністратора", True)
+            return self.instagram_manual_done(chat, target, action == "igdone", answer)
         if action in ("hold", "unhold"):
             if self.role(chat) != "admin":
                 return answer("⛔ Лише для адміністратора", True)

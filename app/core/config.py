@@ -121,6 +121,8 @@ DEFAULTS: dict = {
         "instagram": {"enabled": True, "share_to_feed": True,
                       # діагностичний режим (тимчасово): одна спроба, без повторних завантажень і перебору копій
                       "single_attempt": True,
+                      # вручну (напівавтомат): відео й підпис — вам у Telegram, публікуєте з телефона
+                      "manual": False,
                       "max_upload_mb": 100},  # важчі файли Instagram часто не приймає — шлемо копію 60 к/с ≤10 Мбіт/с
         "facebook": {"enabled": True},
         "tiktok": {

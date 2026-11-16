@@ -138,7 +138,7 @@ class CardsMixin:
         if st in ("posted", "failed"):
             targets = [p for p in PLATFORMS if p in self.app.platforms and p not in item["disabled"]] or \
                 list(item["results"])
-            ok = [p for p in targets if (item["results"].get(p) or {}).get("status") == "ok"]
+            ok = [p for p in targets if (item["results"].get(p) or {}).get("status") in ("ok", "manual", "skipped")]
             if not ok:
                 head = "❌ <b>Не опубліковано</b>"
             elif len(ok) < len([p for p in targets if p in item["results"]]):
@@ -224,6 +224,12 @@ class CardsMixin:
                 if publishing and p in targets:
                     lines.append(f"{icon} {NAMES[p]} — " + ("⏸" if self.db.get("stopped") == "1" else "⏳"))
                 continue
+            if r.get("status") == "manual":
+                lines.append(f"{icon} {NAMES[p]} — 📱 надіслано вам у чат: опублікуйте з телефона й натисніть «✅»")
+                continue
+            if r.get("status") == "skipped":
+                lines.append(f"{icon} {NAMES[p]} — ⏭ пропущено")
+                continue
             if r.get("status") == "ok":
                 lock = {"SELF_ONLY": " 🔒", "private": " 🔒", "unlisted": " 🔗"}.get(r.get("privacy"), "")
                 name = f'<a href="{esc(r["url"])}">{NAMES[p]}</a>' if r.get("url") else NAMES[p]
@@ -295,7 +301,7 @@ class CardsMixin:
 
     def failed_errors(self, item: dict) -> dict:
         return {p: r for p, r in item["results"].items()
-                if r.get("status") != "ok" and p in self.app.platforms and p not in item["disabled"]}
+                if r.get("status") not in ("ok", "manual", "skipped") and p in self.app.platforms and p not in item["disabled"]}
 
     def retry_keyboard(self, item_id: int) -> dict:
         return {"inline_keyboard": [
