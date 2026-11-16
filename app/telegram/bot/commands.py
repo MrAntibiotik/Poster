@@ -241,6 +241,21 @@ class CommandsMixin:
                         res = plat.raw_v1_test(_P(self.cfg["paths"]["data"]) / "previews", report=show_raw, version=ver,
                                                kind=kind)
                         text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
+                    elif args and args[0].lower() in ("kind", "тип"):
+                        from pathlib import Path as _P
+                        head = text + "\n\n🧩 <b>Різні типи публікації, відео 59 с (без публікації, до ~50 хв)</b>"
+                        done = []
+
+                        def show_kind(line, _h=head):
+                            done.append(line)
+                            try:
+                                self.tg.edit_text(chat, (wait or {})["message_id"], _h + "\n" + "\n".join(
+                                    f"• {esc(x)}" for x in done) + "\n⏳ далі…")
+                            except Exception:  # noqa: BLE001
+                                pass
+                        sec = next((int(a) for a in args[1:] if a.isdigit() and 3 <= int(a) <= 90), 59)
+                        res = plat.test_kinds(_P(self.cfg["paths"]["data"]) / "previews", sec, report=show_kind)
+                        text = head.replace("59 с", f"{sec} с") + "\n" + "\n".join(f"• {esc(x)}" for x in res)
                     elif args and args[0].lower() in ("len", "довжина"):
                         from pathlib import Path as _P
                         head = text + "\n\n📏 <b>Яку довжину Instagram зараз приймає (без публікації)</b>"
@@ -267,7 +282,8 @@ class CommandsMixin:
                         text += "\n\n🧪 <b>Тестове відео (без публікації)</b>\n" + "\n".join(f"• {esc(x)}" for x in test)
                     else:
                         text += ("\n\nТест відео без публікації: <code>/igcheck test</code>; "
-                                 "серія тестів на шортсі: <code>/igcheck test 41</code>; межа довжини: <code>/igcheck len</code>")
+                                 "серія тестів на шортсі: <code>/igcheck test 41</code>; межа довжини: <code>/igcheck len</code>; "
+                                 "Reels / історія / допис: <code>/igcheck kind</code>")
                 except Exception as e:  # noqa: BLE001
                     text = f"⚠️ Перевірка не вдалась: {esc(str(e))}"
                 self.task_done(chat, wait, text)

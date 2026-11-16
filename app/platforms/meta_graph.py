@@ -771,13 +771,19 @@ class Instagram(_MetaBase):
         r = self._g().get(self.ig_id, fields="username")
         return f"@{r.get('username')}"
 
-    def test_upload(self, clip: Path, label: str) -> tuple[bool | None, str]:
+    def test_upload(self, clip: Path, label: str, params: dict | None = None,
+                    wait_min: int = 20) -> tuple[bool | None, str]:
         """Один тест без публікації: контейнер → rupload → обробка. (True/False/None — пройшло / ні / невідомо, текст)."""
         g = self._g()
         size = clip.stat().st_size / 1048576
         t0 = time.time()
-        c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable", caption="test",
-                   share_to_feed="false")
+        try:
+            c = g.post(f"{self.ig_id}/media", upload_type="resumable",
+                       **(params or {"media_type": "REELS", "caption": "test", "share_to_feed": "false"}))
+        except RateLimited:
+            raise
+        except PublishError as e:
+            return False, f"{label}: ❌ контейнер не створено — {short_error(e)[:120]}"
         cid = c["id"]
         uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
         err = None
@@ -788,7 +794,7 @@ class Instagram(_MetaBase):
         t1 = time.time()
         note = f"; попри {err}" if err else ""
         code = None
-        for delay in (5, 10, 20, 30, 40, 60, 60, 60) + ((60,) * 14 if err else ()):   # після 400 — до ~20 хв
+        for delay in (5, 10, 20, 30, 40, 60, 60, 60) + ((60,) * max(0, wait_min - 6) if err else ()):   # після 400 — до wait_min хв
             st = g.get(cid, fields="status_code,status")
             code = st.get("status_code")
             if code == "FINISHED":
@@ -802,6 +808,43 @@ class Instagram(_MetaBase):
         if err:
             return False, f"{label} ({size:.1f} МБ): ❌ {err}; контейнер так і не обробився ({code}, чекали {(time.time() - t1) / 60:.0f} хв)"
         return None, f"{label} ({size:.1f} МБ): ⏳ обробка не завершилась ({code})"
+
+    KINDS = (
+        ("Reels у стрічці й на вкладці Reels (як публікує програма)",
+         {"media_type": "REELS", "caption": "test", "share_to_feed": "true"}),
+        ("Reels лише на вкладці Reels", {"media_type": "REELS", "caption": "test", "share_to_feed": "false"}),
+        ("Історія (Stories)", {"media_type": "STORIES"}),
+        ("Пробний Reels (trial, лише не-підписникам)",
+         {"media_type": "REELS", "caption": "test", "trial_params": json.dumps({"graduation_strategy": "MANUAL"})}),
+        ("Старий тип «відео-допис» (VIDEO)", {"media_type": "VIDEO", "caption": "test"}),
+    )
+
+    def test_kinds(self, workdir: Path, seconds: int = 59, report=lambda line: None) -> list[str]:
+        """Те саме довге відео — різними типами публікації (без публікації): чи обмеження лише для Reels."""
+        from app.core import media as _media
+        workdir.mkdir(parents=True, exist_ok=True)
+        clip = workdir / f"ig_kind_{seconds}.mp4"
+        r = _media.run_hidden([self.cfg.get("ffmpeg", "ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
+                               "-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=30", "-f", "lavfi",
+                               "-i", "sine=frequency=440:sample_rate=48000", "-t", str(seconds), "-c:v", "libx264",
+                               "-preset", "veryfast", "-pix_fmt", "yuv420p", "-maxrate", "6M", "-bufsize", "12M",
+                               "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(clip)], timeout=300)
+        if r.returncode != 0:
+            return ["не вдалося підготувати тестовий ролик"]
+        out = []
+        try:
+            for label, params in self.KINDS:
+                try:
+                    _, line = self.test_upload(clip, f"{label}, {seconds} с", params, wait_min=10)
+                except RateLimited:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    line = f"{label}: помилка тесту — {short_error(e)[:120]}"
+                out.append(line)
+                report(line)
+        finally:
+            clip.unlink(missing_ok=True)
+        return out
 
     def test_suite(self, original: str, workdir: Path, report=lambda line: None) -> list[str]:
         """Серія тестів без публікації на справжньому шортсі — кожен міняє одну річ, щоб знайти, що не подобається."""
