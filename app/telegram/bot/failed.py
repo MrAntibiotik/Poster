@@ -56,6 +56,7 @@ class FailedMixin:
             return self.refresh(item_id)
         if action == "rf":
             self.db.set(f"ignored:{item_id}", None)
+            self.db.set(f"held:{item_id}", None)
             if self.db.get("stopped") == "1":
                 return answer("⛔ Публікації зупинено — спершу «✅ Відновити публікації»", True)
             answer("🔁 Повторюю публікацію…")
@@ -75,6 +76,10 @@ class FailedMixin:
             return self._ask_time(chat, item_id, dialog=False)
         if action == "ri":
             self.db.set(f"ignored:{item_id}", "1")
+            self.db.set(f"held:{item_id}", None)
+            if item["status"] == "publishing":   # перерваний / на паузі — більше не продовжуємо
+                ok = any((r or {}).get("status") == "ok" for r in item["results"].values())
+                self.db.update_item(item_id, status="posted" if ok else "failed")
             self.db.x("DELETE FROM slots WHERE state='retry' AND item_id=?", (item_id,))
             answer("Гаразд, більше не нагадуватиму")
             self._close_msg(chat, msg_id, "✖️ Проігноровано", item_id)

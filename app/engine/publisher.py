@@ -29,6 +29,21 @@ class Publisher:
         with self._lock:
             return item_id in self.active
 
+    def hold(self, item_id: int) -> str:
+        """«⏸ Пауза» для одного шортса: зупинити його (якщо йде) або прибрати з черги — далі йде наступний."""
+        self.app.db.set(f"held:{item_id}", 1)
+        with self._lock:
+            if item_id in self.waiting:
+                self.waiting.remove(item_id)
+                self.active.discard(item_id)
+                return "queued"
+            return "running" if self.running == item_id else "idle"
+
+    def release(self, item_id: int) -> None:
+        """«▶️ Продовжити»: шортс знову стає в чергу публікацій (в кінець)."""
+        self.app.db.set(f"held:{item_id}", None)
+        self.start(item_id)
+
     def position(self, item_id: int) -> int | None:
         """0 — публікується зараз; 1, 2… — місце в черзі публікацій; None — не в роботі."""
         with self._lock:
@@ -45,6 +60,9 @@ class Publisher:
                                   "щоб продовжити.")
             return
         self.app.db.set(f"stop_told:{item_id}", None)
+        if self.app.db.get(f"held:{item_id}"):
+            log.info("#%s на паузі — не публікую, доки не натиснуть «▶️ Продовжити»", item_id)
+            return
         with self._lock:
             if item_id in self.active:
                 return
@@ -199,13 +217,13 @@ class Publisher:
         pause = int(app.cfg["retry"]["pause_seconds"])
         last = None
         try:
-            plat.should_stop = lambda: app.db.get("stopped") == "1"
+            plat.should_stop = lambda _i=item["id"]: app.db.get("stopped") == "1" or bool(app.db.get(f"held:{_i}"))
             plat.report = lambda phase, _i=item["id"]: self._report(_i, phase)
         except AttributeError:
             pass
         self._report(item["id"], "завантажую")
         for i in range(1, attempts + 1):
-            if app.db.get("stopped") == "1":
+            if app.db.get("stopped") == "1" or app.db.get(f"held:{item['id']}"):
                 return None
             try:
                 if app.cfg.get("dry_run"):

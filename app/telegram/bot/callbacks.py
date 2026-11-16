@@ -124,6 +124,22 @@ class CallbacksMixin:
             except TelegramError as e:
                 log.debug("analytics edit: %s", e)
             return
+        if action in ("hold", "unhold"):
+            if self.role(chat) != "admin":
+                return answer("⛔ Лише для адміністратора", True)
+            item = self.db.get_item(target)
+            if not item or item["status"] != "publishing":
+                return answer("Цей шортс уже не публікується", True)
+            if action == "hold":
+                where = self.app.publisher.hold(target)
+                answer("⏸ На паузі — " + ("зупиняю за кілька секунд, далі наступний" if where == "running"
+                                          else "прибрано з черги, далі наступний"), True)
+            else:
+                if self.db.get("stopped") == "1":
+                    return answer("⛔ Публікації зупинено — спершу «✅ Відновити публікації»", True)
+                self.app.publisher.release(target)
+                answer("▶️ Повернуто в чергу публікацій")
+            return self.refresh(target)
         if action == "ver":
             return self.version_callback(chat, cq["message"]["message_id"], target, rest, answer)
         if action == "upd":

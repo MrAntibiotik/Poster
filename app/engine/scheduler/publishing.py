@@ -16,6 +16,8 @@ from .common import (
 class PublishingMixin:
     def resume_publishing(self) -> None:
         for item in self.db.items("status='publishing'"):
+            if self.db.get(f"held:{item['id']}"):
+                continue   # «⏸ Пауза» на цьому шортсі — чекає «▶️ Продовжити»
             if not self.app.publisher.is_active(item["id"]):
                 log.info("Відновлюю перервану публікацію #%s", item["id"])
                 self.app.publisher.start(item["id"])

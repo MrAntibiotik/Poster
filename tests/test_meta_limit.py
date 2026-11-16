@@ -258,7 +258,9 @@ class StuckPublishingButtonsTest(FlowBase):
         self.assertIn(f"rf:{it['id']}", json.dumps(self.app.bot.keyboard(item)))
         self.assertIn("Публікацію перервано", self.app.bot.caption(item))
         self.app.publisher.active.add(it["id"])
-        self.assertIsNone(self.app.bot.keyboard(item))          # справді публікується — без кнопок
+        kb = json.dumps(self.app.bot.keyboard(item))             # справді публікується — лише «⏸ Пауза»
+        self.assertIn(f"hold:{it['id']}", kb)
+        self.assertNotIn("rf:", kb)
         self.app.publisher.active.discard(it["id"])
 
 
@@ -333,3 +335,60 @@ class PublishQueueTest(FlowBase):
         self.assertEqual(state["max"], 1)                       # ніколи двоє одночасно
         self.assertEqual(state["order"], ["a", "b", "c"])        # у порядку натискання
         self.assertTrue(all(app.db.get_item(i)["status"] == "posted" for i in ids))
+
+
+class HoldTest(FlowBase):
+    def test_pause_one_short_next_goes(self):
+        import threading
+        self.cfg["dry_run"] = False
+        app = self.app
+        gate = threading.Event()
+        order = []
+
+        class Slow:
+            should_stop = staticmethod(lambda: False)
+
+            def publish(self, path, meta):
+                order.append(Path(path).stem)
+                for _ in range(100):                   # «обробка», слухаємо «⏸»
+                    if self.should_stop():
+                        from app.platforms import Stopped
+                        raise Stopped("пауза")
+                    if gate.wait(0.02):
+                        break
+                return {"id": "x", "url": "u"}
+        app.platforms = {"instagram": Slow()}
+        app.publisher.sync = False
+        for n in ("a", "b"):
+            self.make_short(n)
+        app.scheduler.scan()
+        a, b = [i["id"] for i in app.db.items("status='queued'", order="id")][:2]
+        app.publisher.start(a)
+        app.publisher.start(b)
+        time.sleep(0.2)
+        self.assertEqual(app.publisher.position(a), 0)
+        app.bot._bg = lambda fn, *x: fn(*x)
+        app.bot.handle({"update_id": 1, "callback_query": {"id": "c", "data": f"hold:{a}", "message": {
+            "message_id": 1, "chat": {"id": 42}}}})
+        for _ in range(100):
+            if app.publisher.position(b) == 0:
+                break
+            time.sleep(0.05)
+        self.assertEqual(app.publisher.position(b), 0)          # пішов наступний
+        self.assertIn("На паузі", app.bot.caption(app.db.get_item(a)))
+        app.scheduler.resume_publishing()
+        self.assertFalse(app.publisher.is_active(a))            # сам не продовжується
+        gate.set()
+        for _ in range(100):
+            if not app.publisher.active:
+                break
+            time.sleep(0.05)
+        self.assertEqual(app.db.get_item(b)["status"], "posted")
+        app.bot.handle({"update_id": 2, "callback_query": {"id": "c", "data": f"unhold:{a}", "message": {
+            "message_id": 1, "chat": {"id": 42}}}})
+        for _ in range(100):
+            if app.db.get_item(a)["status"] == "posted":
+                break
+            time.sleep(0.05)
+        self.assertEqual(app.db.get_item(a)["status"], "posted")
+        self.assertEqual(order[:2], ["a", "b"])

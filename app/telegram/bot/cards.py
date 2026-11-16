@@ -126,6 +126,9 @@ class CardsMixin:
                 return (f"⏳ <b>У черзі на публікацію</b> ({pos}-й) — шортси публікуються по одному"
                         + self._results(item, publishing=True))
             if not self.app.publisher.is_active(item["id"]):
+                if self.db.get(f"held:{item['id']}"):
+                    return ("⏸ <b>На паузі</b> — інші шортси публікуються далі; «▶️ Продовжити», щоб поставити в чергу"
+                            + self._results(item, publishing=True))
                 if self.db.get("stopped") == "1":
                     return ("⛔ <b>Публікацію зупинено</b> — решта платформ після «✅ Відновити публікації»"
                             + self._results(item, publishing=True))
@@ -302,6 +305,11 @@ class CardsMixin:
             [{"text": "✖️ Ігнорувати", "callback_data": f"ri:{item_id}"}]]}
 
     def keyboard(self, item: dict) -> dict | None:
+        if item["status"] == "publishing" and self.app.publisher.is_active(item["id"]):
+            return {"inline_keyboard": [[{"text": "⏸ Пауза — далі наступне", "callback_data": f"hold:{item['id']}"}]]}
+        if item["status"] == "publishing" and self.db.get(f"held:{item['id']}"):
+            return {"inline_keyboard": [[{"text": "▶️ Продовжити", "callback_data": f"unhold:{item['id']}"}],
+                                        [{"text": "✖️ Ігнорувати", "callback_data": f"ri:{item['id']}"}]]}
         if item["status"] == "publishing" and not self.app.publisher.is_active(item["id"]):
             # зупинена / перервана публікація: кнопки повтору мають бути завжди
             kb = self.retry_keyboard(item["id"])
