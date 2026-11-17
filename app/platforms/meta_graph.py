@@ -876,7 +876,8 @@ class Instagram(_MetaBase):
             clip.unlink(missing_ok=True)
         return out
 
-    def test_sizes(self, workdir: Path, mbits=(1, 3, 6), seconds: int = 59, report=lambda line: None) -> list[str]:
+    def test_sizes(self, workdir: Path, mbits=(1, 2, 3, 4, 6, 8), seconds: int = 59,
+                   report=lambda line: None, stop_on_fail: bool = True) -> list[str]:
         """Те саме 59-секундне відео різного розміру (бітрейту), без публікації: чи межа — у розмірі файлу."""
         from app.core import media as _media
         workdir.mkdir(parents=True, exist_ok=True)
@@ -893,13 +894,20 @@ class Instagram(_MetaBase):
             if r.returncode != 0:
                 line = f"{mb} Мбіт/с: не вдалося підготувати"
             else:
+                ok = None
                 try:
-                    _, line = self.test_upload(clip, f"{seconds} с, {mb} Мбіт/с", wait_min=8)
+                    ok, line = self.test_upload(clip, f"{seconds} с, {mb} Мбіт/с", wait_min=8)
                 except RateLimited:
                     raise
                 except Exception as e:  # noqa: BLE001
                     line = f"{mb} Мбіт/с: помилка тесту — {short_error(e)[:120]}"
                 clip.unlink(missing_ok=True)
+                if ok is False and stop_on_fail:   # межу знайдено — більші файли не вантажимо даремно
+                    out.append(line)
+                    report(line)
+                    out.append("Більші розміри не перевіряю: межа між попереднім ✅ і цим ❌")
+                    report(out[-1])
+                    return out
             out.append(line)
             report(line)
         return out
