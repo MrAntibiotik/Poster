@@ -135,6 +135,23 @@ class FindMovedTest(CutterLinkTest):
         self.assertEqual(len(self.app.db.queue()), 1)          # без дубля
 
 
+    def test_missing_item_whose_file_is_already_another_item(self):
+        # файл уже в базі під новим номером (взято як нове відео) — старий «зниклий» запис не ламає пошук
+        self.make_short("a")
+        config.FAKE_NOW = self.ts(11, "08:00")
+        self.app.scheduler.scan()
+        it = self.app.db.queue()[0]
+        new_path = Path(it["mp4"])
+        self.app.db.update_item(it["id"], mp4=str(self.tmp / "gone" / "a.mp4"), status="missing")
+        other = self.app.db.add_item(str(new_path), str(new_path.with_suffix(".json")), "WoT")
+        self.app.db.set("recover_ts", 0)
+        self.app.db.set("recover_sig", None)
+        n = cutter_link.recover_missing(self.app)
+        self.assertEqual(n, 0)
+        self.assertEqual(self.app.db.get_item(it["id"])["status"], "cancelled")
+        self.assertIn(f"#{other}", self.app.db.get_item(it["id"])["note"])
+
+
 class VideosContentTest(CutterLinkTest):
     """Різак переніс усе в Відео\\Контент і не повідомив Poster (немає cutter.json): знаходимо й не прибираємо."""
 

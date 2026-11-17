@@ -271,6 +271,8 @@ class ScanMixin:
                     if idx is None:
                         idx = cutter_link.build_index(self.app)
                     new = cutter_link.locate(mp4, idx)
+                    if new and cutter_link.path_owner(self.db, new, item["id"]):
+                        new = None   # цей файл уже стоїть у базі під іншим номером — не переносимо на нього
                 except Exception as e:  # noqa: BLE001
                     log.debug("пошук перенесеного: %s", e)
                     new = None

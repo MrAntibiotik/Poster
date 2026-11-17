@@ -258,6 +258,8 @@ class Publisher:
                         try:
                             from app.channels import cutter_link
                             new = cutter_link.locate(item["mp4"], cutter_link.build_index(app))
+                            if new and cutter_link.path_owner(app.db, new, item["id"]):
+                                new = None   # файл уже належить іншому запису — не беремо (буде дубль)
                         except Exception:  # noqa: BLE001
                             pass
                         if not new:

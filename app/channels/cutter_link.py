@@ -185,6 +185,12 @@ def locate(path, idx: dict[str, list[Path]]) -> Path | None:
     return next(iter(uniq.values())) if len(uniq) == 1 else None
 
 
+def path_owner(db, path, exclude_id: int) -> int | None:
+    """Інший запис у базі, що вже має цей файл (шлях унікальний) — тоді старий запис не «переносимо» на нього."""
+    row = db.one("SELECT id FROM items WHERE mp4=? AND id<>?", (str(path), exclude_id))
+    return row["id"] if row else None
+
+
 def recover_missing(app, days: int = 7) -> int:
     """Відео, що «зникли» (перенесені Різаком чи вручну), — знайти за назвою й повернути в чергу."""
     import time as _t
@@ -208,6 +214,11 @@ def recover_missing(app, days: int = 7) -> int:
     for it in items:
         new = locate(it["mp4"], idx)
         if not new:
+            continue
+        owner = path_owner(db, new, it["id"])
+        if owner:   # цей файл уже в базі під іншим номером (програма взяла його як нове відео) — старий запис зайвий
+            db.update_item(it["id"], status="cancelled", note=f"файл уже в #{owner}")
+            log.info("#%s: файл %s уже є як #%s — старий запис прибрано", it["id"], new.name, owner)
             continue
         js = new.with_suffix(".json")
         db.update_item(it["id"], mp4=str(new), json=str(js), status="queued", note=None, slot_at=None)

@@ -191,7 +191,10 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
             return 0
         except Exception as e:  # noqa: BLE001
             errors += 1
-            if errors <= 3 or errors % 20 == 0:
+            if _telegram_hiccup(e):   # Telegram тимчасово недоступний (502/429/таймаут) — пауза й далі, без трасування
+                if errors == 1 or errors % 20 == 0:
+                    log.warning("Telegram тимчасово не відповідає (%s) — чекаю й пробую знову", str(e)[:120])
+            elif errors <= 3 or errors % 20 == 0:
                 log.exception("Помилка в головному циклі: %s", e)
             else:
                 log.warning("Помилка в головному циклі (%s-й раз поспіль): %s", errors, e)
@@ -199,6 +202,16 @@ def run_service(cfg: dict, wait_lock: int = 0) -> int:
                 time.sleep(1)
                 if app.db.get("control") == "stop":
                     break
+
+
+def _telegram_hiccup(e: Exception) -> bool:
+    """Тимчасовий збій Telegram (не наш баг): Bad Gateway, Too Many Requests, таймаут, обрив з'єднання."""
+    import requests
+    if isinstance(e, (requests.ConnectionError, requests.Timeout)):
+        return True
+    t = str(e)
+    return any(x in t for x in ("Bad Gateway", "Too Many Requests", "Gateway Timeout", "Service Unavailable",
+                                "Internal Server Error", "Read timed out", "Connection aborted"))
 
 
 def cmd_check(cfg: dict) -> int:
