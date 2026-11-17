@@ -241,6 +241,21 @@ class CommandsMixin:
                         res = plat.raw_v1_test(_P(self.cfg["paths"]["data"]) / "previews", report=show_raw, version=ver,
                                                kind=kind)
                         text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
+                    elif args and args[0].lower() in ("size", "розмір"):
+                        from pathlib import Path as _P
+                        head = text + "\n\n📦 <b>Відео 59 с різного розміру (без публікації, до ~30 хв)</b>"
+                        done = []
+
+                        def show_size(line, _h=head):
+                            done.append(line)
+                            try:
+                                self.tg.edit_text(chat, (wait or {})["message_id"], _h + "\n" + "\n".join(
+                                    f"• {esc(x)}" for x in done) + "\n⏳ далі…")
+                            except Exception:  # noqa: BLE001
+                                pass
+                        rates = tuple(int(a) for a in args[1:] if a.isdigit() and 1 <= int(a) <= 20)[:4] or (1, 3, 6)
+                        res = plat.test_sizes(_P(self.cfg["paths"]["data"]) / "previews", rates, report=show_size)
+                        text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
                     elif args and args[0].lower() in ("kind", "тип"):
                         from pathlib import Path as _P
                         head = text + "\n\n🧩 <b>Різні типи публікації, відео 59 с (без публікації, до ~50 хв)</b>"
@@ -283,7 +298,7 @@ class CommandsMixin:
                     else:
                         text += ("\n\nТест відео без публікації: <code>/igcheck test</code>; "
                                  "серія тестів на шортсі: <code>/igcheck test 41</code>; межа довжини: <code>/igcheck len</code>; "
-                                 "Reels / історія / допис: <code>/igcheck kind</code>")
+                                 "Reels / історія / допис: <code>/igcheck kind</code>; розмір файлу: <code>/igcheck size</code>")
                 except Exception as e:  # noqa: BLE001
                     text = f"⚠️ Перевірка не вдалась: {esc(str(e))}"
                 self.task_done(chat, wait, text)

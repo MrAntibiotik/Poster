@@ -354,8 +354,13 @@ class Publisher:
                                                   "background": True})
                 if hasattr(app.bot, "drop_failed_card"):
                     app.bot.drop_failed_card(it["id"])
-            elif now - int(r.get("since") or now) > 23 * 3600:   # контейнер живе 24 год
-                err = "Instagram не обробив відео за 23 год — контейнер закінчився. Повторіть публікацію."
+            elif now - int(r.get("since") or now) > 60 * int((app.cfg["platforms"].get("instagram") or {})
+                                                              .get("background_max_min", 60)):
+                # справжня обробка — секунди/хвилини; «In Progress» годинами = контейнер завис (файл не зібрався
+                # після rupload 400). Не тримаємо чергу Instagram — помилка з кнопками «Повторити» / «Надіслати мені»
+                mins = (now - int(r.get("since") or now)) // 60
+                err = (f"Instagram так і не обробив відео ({mins} хв «In Progress») — контейнер завис. "
+                       "Повторіть або опублікуйте з телефона («📱 Надіслати мені для Instagram»).")
                 self._save_ig(it, {"status": "error", "attempts": 1, "error": err})
                 db.event(it["id"], "platform_error", {"platform": "instagram", "error": err})
                 if hasattr(app.bot, "notify_failed"):

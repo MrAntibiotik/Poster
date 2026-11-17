@@ -108,13 +108,17 @@ class IgBackgroundTest(FlowBase):
         self.assertEqual(r["status"], "error")
         self.assertIn("ERROR", r["error"])
 
-    def test_gives_up_after_23_hours(self):
-        a, = self.publish("a")
-        for _ in range(100):
+    def test_stuck_container_gives_up_after_an_hour_and_frees_queue(self):
+        a, b = self.publish("a", "b")
+        for _ in range(4):
             self.later(15)
+        self.assertEqual(self.res(a)["status"], "processing")
+        self.later(15)
         r = self.res(a)
         self.assertEqual(r["status"], "error")
-        self.assertIn("23 год", r["error"])
+        self.assertIn("контейнер завис", r["error"])
+        self.assertEqual(self.ig.uploads, ["C1", "C2"])        # черга Instagram пішла далі — #b вантажиться
+        self.assertEqual(self.res(b)["status"], "processing")
 
     def test_survives_restart(self):
         a, = self.publish("a")

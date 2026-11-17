@@ -876,6 +876,34 @@ class Instagram(_MetaBase):
             clip.unlink(missing_ok=True)
         return out
 
+    def test_sizes(self, workdir: Path, mbits=(1, 3, 6), seconds: int = 59, report=lambda line: None) -> list[str]:
+        """Те саме 59-секундне відео різного розміру (бітрейту), без публікації: чи межа — у розмірі файлу."""
+        from app.core import media as _media
+        workdir.mkdir(parents=True, exist_ok=True)
+        out = []
+        for mb in mbits:
+            clip = workdir / f"ig_size_{mb}m.mp4"
+            r = _media.run_hidden([self.cfg.get("ffmpeg", "ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
+                                   "-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=30",
+                                   "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                                   "-vf", "noise=alls=40:allf=t", "-t", str(seconds),
+                                   "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                                   "-b:v", f"{mb}M", "-minrate", f"{mb}M", "-maxrate", f"{mb}M", "-bufsize", f"{mb * 2}M",
+                                   "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(clip)], timeout=600)
+            if r.returncode != 0:
+                line = f"{mb} Мбіт/с: не вдалося підготувати"
+            else:
+                try:
+                    _, line = self.test_upload(clip, f"{seconds} с, {mb} Мбіт/с", wait_min=8)
+                except RateLimited:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    line = f"{mb} Мбіт/с: помилка тесту — {short_error(e)[:120]}"
+                clip.unlink(missing_ok=True)
+            out.append(line)
+            report(line)
+        return out
+
     def test_suite(self, original: str, workdir: Path, report=lambda line: None) -> list[str]:
         """Серія тестів без публікації на справжньому шортсі — кожен міняє одну річ, щоб знайти, що не подобається."""
         from app.core import media as _media
