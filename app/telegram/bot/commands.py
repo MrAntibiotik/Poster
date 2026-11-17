@@ -241,6 +241,25 @@ class CommandsMixin:
                         res = plat.raw_v1_test(_P(self.cfg["paths"]["data"]) / "previews", report=show_raw, version=ver,
                                                kind=kind)
                         text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
+                    elif args and args[0].lower() in ("res", "якість"):
+                        from pathlib import Path as _P
+                        src, label = None, "згенероване складне відео"
+                        if len(args) > 1 and args[1].lstrip("#").isdigit():
+                            it = self.db.get_item(int(args[1].lstrip("#")))
+                            if it and _P(it["mp4"]).is_file():
+                                src, label = it["mp4"], f"шортс #{it['id']}"
+                        head = text + f"\n\n🖼 <b>{esc(label)}, 59 с: 1080p / 720p / 540p (без публікації)</b>"
+                        done = []
+
+                        def show_res(line, _h=head):
+                            done.append(line)
+                            try:
+                                self.tg.edit_text(chat, (wait or {})["message_id"], _h + "\n" + "\n".join(
+                                    f"• {esc(x)}" for x in done) + "\n⏳ далі…")
+                            except Exception:  # noqa: BLE001
+                                pass
+                        res = plat.test_resolutions(_P(self.cfg["paths"]["data"]) / "previews", src, report=show_res)
+                        text = head + "\n" + "\n".join(f"• {esc(x)}" for x in res)
                     elif args and args[0].lower() in ("size", "розмір"):
                         from pathlib import Path as _P
                         head = text + "\n\n📦 <b>Відео 59 с, щоразу важче — до першої відмови (без публікації)</b>"
@@ -298,7 +317,8 @@ class CommandsMixin:
                     else:
                         text += ("\n\nТест відео без публікації: <code>/igcheck test</code>; "
                                  "серія тестів на шортсі: <code>/igcheck test 41</code>; межа довжини: <code>/igcheck len</code>; "
-                                 "Reels / історія / допис: <code>/igcheck kind</code>; розмір файлу: <code>/igcheck size</code>")
+                                 "Reels / історія / допис: <code>/igcheck kind</code>; розмір файлу: <code>/igcheck size</code>; "
+                                 "роздільність: <code>/igcheck res</code> або <code>/igcheck res 55</code>")
                 except Exception as e:  # noqa: BLE001
                     text = f"⚠️ Перевірка не вдалась: {esc(str(e))}"
                 self.task_done(chat, wait, text)

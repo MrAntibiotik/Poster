@@ -820,7 +820,7 @@ class Instagram(_MetaBase):
         try:
             g.upload_binary(uri, str(clip))
         except PublishError as e:   # як у робочих версіях: після 400 не здаємось, а дивимось, чи контейнер обробляється
-            err = f"rupload {short_error(e)[:60]}"
+            err = f"rupload {short_error(e)[:60]} через {time.time() - t0:.0f} с"
         t1 = time.time()
         note = f"; попри {err}" if err else ""
         code = None
@@ -908,6 +908,43 @@ class Instagram(_MetaBase):
                     out.append("Більші розміри не перевіряю: межа між попереднім ✅ і цим ❌")
                     report(out[-1])
                     return out
+            out.append(line)
+            report(line)
+        return out
+
+    RES_VARIANTS = (("1080×1920", 1080, 1920), ("720×1280", 720, 1280), ("540×960", 540, 960))
+
+    def test_resolutions(self, workdir: Path, original: str | None = None, seconds: int = 59,
+                         report=lambda line: None) -> list[str]:
+        """Те саме відео 59 с у 1080p / 720p / 540p (30 к/с), без публікації: чи Instagram встигає обробити
+        менше пікселів. original — справжній шортс (інакше згенерована «складна» картинка)."""
+        from app.core import media as _media
+        workdir.mkdir(parents=True, exist_ok=True)
+        out = []
+        for label, w, h in self.RES_VARIANTS:
+            clip = workdir / f"ig_res_{h}.mp4"
+            src = (["-i", original, "-t", str(seconds)] if original else
+                   ["-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=30", "-f", "lavfi",
+                    "-i", "sine=frequency=440:sample_rate=48000", "-t", str(seconds)])
+            vf = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+            if not original:
+                vf = "noise=alls=40:allf=t," + vf
+            mb = max(1.0, 3.0 * w * h / (1080 * 1920))   # той самий «бітрейт на піксель»
+            r = _media.run_hidden([self.cfg.get("ffmpeg", "ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", *src,
+                                   "-vf", vf, "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high",
+                                   "-pix_fmt", "yuv420p", "-b:v", f"{mb:.1f}M", "-maxrate", f"{mb:.1f}M",
+                                   "-bufsize", f"{mb * 2:.1f}M", "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
+                                   "-movflags", "+faststart", str(clip)], timeout=900)
+            if r.returncode != 0:
+                line = f"{label}: не вдалося підготувати"
+            else:
+                try:
+                    _, line = self.test_upload(clip, f"{label}, {seconds} с", wait_min=6)
+                except RateLimited:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    line = f"{label}: помилка тесту — {short_error(e)[:120]}"
+                clip.unlink(missing_ok=True)
             out.append(line)
             report(line)
         return out
