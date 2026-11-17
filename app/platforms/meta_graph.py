@@ -1071,19 +1071,22 @@ class Instagram(_MetaBase):
         return out
 
     def long_video_ok(self, workdir: Path, seconds: int = 59) -> tuple[bool | None, str]:
-        """Чи Instagram зараз приймає довге відео (згенероване, без публікації). Для щоденної перевірки."""
+        """Чи Instagram зараз приймає довге відео (згенероване, без публікації). Для щоденної перевірки.
+        Складна картинка (рух + шум, 1080×1920, ~3 Мбіт/с), як справжні шортси: чорний кадр проходить завжди,
+        тож по ньому не можна судити."""
         from app.core import media as _media
         workdir.mkdir(parents=True, exist_ok=True)
         clip = workdir / f"ig_watch_{seconds}.mp4"
         r = _media.run_hidden([self.cfg.get("ffmpeg", "ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
-                               "-f", "lavfi", "-i", "color=black:s=1080x1920:r=30", "-f", "lavfi",
-                               "-i", "sine=frequency=440:sample_rate=48000", "-t", str(seconds), "-c:v", "libx264",
-                               "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-                               "-movflags", "+faststart", str(clip)], timeout=300)
+                               "-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=30", "-f", "lavfi",
+                               "-i", "sine=frequency=440:sample_rate=48000", "-vf", "noise=alls=40:allf=t",
+                               "-t", str(seconds), "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high",
+                               "-pix_fmt", "yuv420p", "-b:v", "3M", "-maxrate", "3M", "-bufsize", "6M",
+                               "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(clip)], timeout=600)
         if r.returncode != 0:
             return None, "не вдалося підготувати тестовий ролик"
         try:
-            return self.test_upload(clip, f"{seconds} с")
+            return self.test_upload(clip, f"{seconds} с, складне відео ~22 МБ", wait_min=8)
         finally:
             clip.unlink(missing_ok=True)
 

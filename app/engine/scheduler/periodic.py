@@ -105,6 +105,9 @@ class PeriodicMixin:
             return
         if not (sec.get("IG_USER_ID") and (sec.get("META_PAGE_TOKEN") or sec.get("META_IG_TOKEN"))):
             return
+        if self.db.get("igwatch_kind") != "complex":   # старі перевірки були на чорному кадрі — перевірити заново
+            self.db.set("igwatch_ts", 0)
+            self.db.set("igwatch_kind", "complex")
         if now - int(self.db.get("igwatch_ts") or 0) < 24 * 3600 or getattr(self, "_igwatch_busy", False):
             return
         if local_dt(self.cfg, now).hour < 11:   # удень, не вночі (і не під час ранкових слотів)
@@ -120,8 +123,8 @@ class PeriodicMixin:
                 log.info("Щоденна перевірка Instagram (довге відео, без публікації): %s", line)
                 self.db.set("igwatch_last", f"{line}")
                 if ok:
-                    self.app.bot.send("✅ <b>Instagram знову приймає довгі відео</b> через API (тест 59 с без публікації "
-                                      "пройшов).\nУвімкніть: «🔌 Платформи» → Instagram ✅ (а в панелі вимкніть «📱 Instagram вручну»). "
+                    self.app.bot.send("✅ <b>Instagram знову приймає довгі відео</b> через API (тест: складне відео 59 с, "
+                                      "~22 МБ, без публікації — пройшов).\nУвімкніть: «🔌 Платформи» → Instagram ✅ (а в панелі вимкніть «📱 Instagram вручну»). "
                                       "Шортси, що не пішли в Instagram, — «⚠️ Невдалі» → «🔁 Повторити» (по одному).", html_mode=True, keep="igwatch")
             except Exception as e:  # noqa: BLE001
                 log.warning("Щоденна перевірка Instagram: %s", e)
