@@ -361,11 +361,15 @@ class Publisher:
                 mins = (now - int(r.get("since") or now)) // 60
                 err = (f"Instagram так і не обробив відео ({mins} хв «In Progress») — контейнер завис. "
                        "Повторіть або опублікуйте з телефона («📱 Надіслати мені для Instagram»).")
+                log.warning("#%s instagram: контейнер %s завис (%s хв «In Progress») — більше не чекаю",
+                            it["id"], r.get("container"), mins)
                 self._save_ig(it, {"status": "error", "attempts": 1, "error": err})
                 db.event(it["id"], "platform_error", {"platform": "instagram", "error": err})
                 if hasattr(app.bot, "notify_failed"):
                     app.bot.notify_failed(it["id"])
             else:   # рідше, що довше: 2, 3, 5, 10, далі раз на 15 хв (кожен запит — квота Meta)
+                log.info("#%s instagram: контейнер %s ще обробляється (%s хв) — перевірю пізніше",
+                         it["id"], r.get("container"), (now - int(r.get("since") or now)) // 60)
                 step = (120, 180, 300, 600)[checks - 1] if checks <= 4 else 900
                 self._save_ig(it, {**r, "checks": checks, "next_at": now + step})
         if self.ig_processing() or db.get("stopped") == "1":
