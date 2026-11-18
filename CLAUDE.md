@@ -27,4 +27,6 @@
   Тому перед пушем: `python -m pyflakes app tests`, `python -m unittest discover -s tests -q`.
 - Реліз: підняти `VERSION` у `config.py`, запис зверху в `CHANGELOG.md`, `python tools/make_releases.py`, коміт, пуш у `main`.
 - Ніколи не комітити `.env`, `config.json`, `tokens/`, `client_secret.json`, токени. Токени користувач вводить лише в панелі.
+- Токени не мають потрапляти в журнал: `setup_logging` ховає їх (`redact`, `SECRET_PATTERNS` у `app/core/config.py`),
+  сторонні бібліотеки (oauthlib, requests) — лише WARNING. Новий тип ключа — додати шаблон.
 - Дані каналів: `channels/main`, `channels/en` (див. `app/core/layout.py`).

@@ -298,24 +298,73 @@ def enabled_platforms(cfg: dict) -> list[str]:
     return [p for p in PLATFORMS if cfg["platforms"].get(p, {}).get("enabled")]
 
 
+# Токени й ключі ніколи не потрапляють у журнал (log.txt, «📄 Журнал» у Telegram, панель)
+SECRET_PATTERNS = [
+    (re.compile(r"ya29\.[\w\-.]+"), "ya29.***"),                                  # Google access token
+    (re.compile(r"1//[\w\-]{10,}"), "1//***"),                                     # Google refresh token
+    (re.compile(r"\b(EAA|IGAA|IGQV)[A-Za-z0-9]{20,}"), r"\1***"),                  # Meta / Instagram
+    (re.compile(r"\b\d{8,10}:[\w\-]{30,}"), "***:***"),                              # Telegram bot token
+    (re.compile(r"(?i)\b(Basic|Bearer|OAuth)\s+[A-Za-z0-9+/=._\-]{12,}"), r"\1 ***"),
+    (re.compile(r"(?i)\b(access_token|refresh_token|id_token|client_secret|code_verifier|"
+                r"app_secret|password)(['\"]?\s*[:=]\s*['\"]?)[^'\"&\s,}]+"), r"\1\2***"),
+    (re.compile(r"([?&]code=)[^&\s]+"), r"\1***"),                                     # одноразовий код OAuth
+    (re.compile(r"GOCSPX-[\w\-]+"), "GOCSPX-***"),                                   # Google client secret
+]
+
+
+def redact(text: str) -> str:
+    for rx, rep in SECRET_PATTERNS:
+        text = rx.sub(rep, text)
+    return text
+
+
+class _RedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record))
+
+
+def _scrub_old_logs(log_path: Path) -> None:
+    """Один раз: прибрати токени з уже записаних журналів (до версії, що їх ховає)."""
+    mark = log_path.with_name(log_path.name + ".clean1")
+    if mark.exists():
+        return
+    for f in [log_path, *log_path.parent.glob(log_path.name + ".*")]:
+        if f == mark or not f.is_file():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+            clean = redact(text)
+            if clean != text:
+                f.write_text(clean, encoding="utf-8")
+        except OSError:
+            pass
+    try:
+        mark.write_text("журнали очищено від токенів\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def setup_logging(cfg: dict, verbose: bool = False) -> None:
     log_path = Path(cfg["paths"]["log"])
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    _scrub_old_logs(log_path)
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     for h in list(root.handlers):
         root.removeHandler(h)
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    fmt = _RedactingFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     fh = RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5, encoding="utf-8")
     fh.setFormatter(fmt)
-    fh.setLevel(logging.DEBUG)
+    fh.setLevel(logging.DEBUG if verbose else logging.INFO)   # службові дрібниці (запити панелі тощо) — лише з -v
     root.addHandler(fh)
     if sys.stderr is not None:  # під pythonw консолі немає
         sh = logging.StreamHandler()
         sh.setFormatter(fmt)
         sh.setLevel(logging.DEBUG if verbose else logging.INFO)
         root.addHandler(sh)
-    for noisy in ("urllib3", "googleapiclient", "google_auth_httplib2", "google.auth"):
+    # сторонні бібліотеки на DEBUG друкують заголовки й тіла запитів (з токенами) — лише попередження
+    for noisy in ("urllib3", "googleapiclient", "google_auth_httplib2", "google.auth", "google_auth_oauthlib",
+                  "requests_oauthlib", "oauthlib", "requests", "httplib2"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
