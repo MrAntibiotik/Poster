@@ -106,6 +106,7 @@ class PanelControlHttpTest(unittest.TestCase):
         return self.panel.db.add_item(str(mp4), str(js), "WoT"), mp4
 
     def test_video_endpoint_with_range(self):
+        self.panel.cfg["panel"] = {"require_password": True}
         item_id, mp4 = self._item()
         self.assertEqual(self.req("GET", f"/api/video?id={item_id}")[0], 401)
         self.login()

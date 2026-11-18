@@ -85,7 +85,18 @@ class PanelTest(unittest.TestCase):
         self.assertIn(b"/api/state", js)
         self.assertEqual(self.req("GET", "/static/../config.json")[0], 404)
 
+    def test_no_password_by_default(self):
+        # типово пароля немає: панель і так лише з цього ПК; захист від чужих сайтів (Host, X-Poster) лишається
+        self.panel.cfg.pop("panel", None)
+        sess = self.req("GET", "/api/session")[1]
+        self.assertTrue(sess["authed"])
+        self.assertFalse(sess["password"])
+        self.assertEqual(self.req("GET", "/api/state")[0], 200)
+        self.assertEqual(self.req("GET", "/", host="evil.example:80")[0], 403)
+        self.assertEqual(self.req("POST", "/api/action", {"name": "stop"}, header=False)[0], 403)
+
     def test_auth_and_protection(self):
+        self.panel.cfg["panel"] = {"require_password": True}
         sess = self.req("GET", "/api/session")[1]
         self.assertEqual((sess["authed"], sess["has_password"]), (False, False))
         self.assertTrue(sess["version"])

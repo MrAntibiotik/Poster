@@ -471,14 +471,14 @@
   </section>
 
   <section data-page="sec" class="hidden">
-    <div class="card"><h2>🔐 Пароль панелі</h2>
+    <div class="card" data-pw-only><h2>🔐 Пароль панелі</h2>
       <div class="two"><div><label class="f">Поточний пароль</label><input id="oldPw" type="password" autocomplete="current-password"></div>
         <div><label class="f">Новий пароль</label><input id="newPw" type="password" autocomplete="new-password"></div></div>
       <div class="row" style="margin-top:10px"><button class="btn primary" id="chPw">Змінити пароль</button></div>
       <p class="muted small">Забули пароль? Закрийте панель і виконайте <code>python poster.py panel-reset</code> у папці програми.</p></div>
     <div class="card"><h2>Сеанс</h2>
       <p class="muted small">Панель доступна лише з цього комп'ютера (127.0.0.1). Токени зберігаються у файлі .env поруч із програмою — не завантажуйте його на GitHub.</p>
-      <div class="row"><button class="btn" id="logout">Вийти</button><button class="btn danger" id="shutdown">Закрити панель</button></div></div>
+      <div class="row"><button class="btn" id="logout" data-pw-only>Вийти</button><button class="btn danger" id="shutdown">Закрити панель</button></div></div>
   </section>
 </main>
 </div>

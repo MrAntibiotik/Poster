@@ -58,6 +58,10 @@ def make_handler(panel: Panel):
             return c["poster_session"].value if "poster_session" in c else None
 
         def authed(self) -> bool:
+            # Без пароля (типово): панель і так відкривається лише з цього ПК (127.0.0.1, перевірка Host,
+            # заголовок X-Poster від сторонніх сайтів). Пароль — лише якщо panel.require_password = true
+            if not (panel.cfg.get("panel") or {}).get("require_password", False):
+                return True
             return panel.valid_session(self.session())
 
         def host_ok(self) -> bool:
@@ -84,7 +88,8 @@ def make_handler(panel: Panel):
                                                               "script-src 'self' 'unsafe-inline'; img-src 'self' data:"})
             if self.path == "/api/session":
                 from app.core.config import VERSION
-                return self.json({"authed": self.authed(), "has_password": panel.has_password(), "version": VERSION})
+                return self.json({"authed": self.authed(), "has_password": panel.has_password(), "version": VERSION,
+                                  "password": bool((panel.cfg.get("panel") or {}).get("require_password", False))})
             if self.path == "/api/state":
                 if not self.authed():
                     return self.json({"error": "auth"}, 401)

@@ -30,6 +30,7 @@ async function run(fn, btn, slow){
 async function boot(){
   const s = await api("/api/session");
   if (s.version) $("#ver").textContent = "версія " + s.version;
+  if (!s.password) document.querySelectorAll("[data-pw-only]").forEach(e => e.classList.add("hidden"));
   if (s.authed) return showApp();
   showAuth(s.has_password);
 }
