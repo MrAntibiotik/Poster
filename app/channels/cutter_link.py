@@ -193,10 +193,10 @@ def path_owner(db, path, exclude_id: int) -> int | None:
 
 def recover_missing(app, days: int = 7) -> int:
     """Відео, що «зникли» (перенесені Різаком чи вручну), — знайти за назвою й повернути в чергу."""
-    import time as _t
+    from app.core.config import now_ts
     db = app.db
     items = [it for it in db.items("status='missing'")
-             if (it.get("added_at") or 0) > _t.time() - days * 86400 and not Path(it["mp4"]).exists()]
+             if (it.get("added_at") or 0) > now_ts() - days * 86400 and not Path(it["mp4"]).exists()]
     if not items:
         return 0
     roots = search_roots(app)
