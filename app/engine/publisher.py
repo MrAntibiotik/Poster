@@ -345,8 +345,13 @@ class Publisher:
         items = db.items(IG_PENDING_SQL, order="id")
         for it in items:
             r = (it["results"] or {}).get("instagram") or {}
-            if r.get("status") != "processing" or now < int(r.get("next_at") or 0) or self.is_active(it["id"]):
+            due = int(r.get("next_at") or 0)
+            if r.get("status") == "processing" and not r.get("method_name"):   # запис старої версії — теж 20 хв тиші
+                due = max(due, int(r.get("since") or 0)
+                          + 60 * int((app.cfg["platforms"].get("instagram") or {}).get("wait_min", 20)))
+            if r.get("status") != "processing" or now < due or self.is_active(it["id"]):
                 continue
+            r = {**r, "method_name": r.get("method_name") or self._ig_method_name(plat, r)}
             why = ""
             try:   # ОДИН запит: контейнер готовий → публікуємо; ні → наступний спосіб
                 got = plat.finish_container(r["container"])
@@ -398,6 +403,12 @@ class Publisher:
                 log.info("#%s instagram: Instagram звільнився — публікую", it["id"])
                 self.start(it["id"])
                 return   # по одному: наступний — коли й цей закінчиться
+
+    @staticmethod
+    def _ig_method_name(plat, r: dict) -> str:
+        methods = getattr(plat, "METHODS", ())
+        m = int(r.get("method") or 0)
+        return methods[m][0] if m < len(methods) else "перший спосіб"
 
     def _save_ig(self, item: dict, res: dict) -> None:
         results = dict(self.app.db.get_item(item["id"])["results"])

@@ -7,7 +7,7 @@ from datetime import datetime, time as dtime, timedelta
 
 from app.core.config import NAMES, PLATFORMS, SHORT, fmt_slot, local_dt, now_ts
 from app.core.meta import read_json, write_json
-from app.platforms import RateLimited
+from app.platforms import RateLimited, TokenExpired
 
 log = logging.getLogger("reports")
 esc = html.escape
@@ -186,9 +186,10 @@ def send_stats(app, item: dict) -> None:
             views[p] = st.get("views")
             if st.get("likes") is not None:
                 likes[p] = st["likes"]
-        except RateLimited as e:
-            log.info("Перегляди #%s відкладено: %s", item["id"], e)
-            return   # stats_sent лишається 0 — спробуємо пізніше
+        except (RateLimited, TokenExpired) as e:
+            # ліміт або токен треба оновити — не смикаємо платформу, спробуємо пізніше (stats_sent лишається 0)
+            log.info("Перегляди #%s відкладено: %s", item["id"], str(e)[:120])
+            return
         except Exception as e:  # noqa: BLE001
             log.warning("Перегляди #%s %s: %s", item["id"], p, e)
             views[p] = f"помилка: {str(e)[:80]}"
@@ -303,9 +304,12 @@ def collect(app, days: int = 8) -> dict:
                 continue
             try:
                 st = app.platforms[key].get_stats(res) or {}
-            except RateLimited as e:
+            except (RateLimited, TokenExpired) as e:
+                if key not in limited:     # одне попередження замість десятка — решту відео не чіпаємо
+                    log.warning("Статистика %s: %s", key, str(e)[:200])
                 limited.add(key)           # решту відео цієї платформи — наступного разу
-                out["errors"][key] = str(e)[:150]
+                out["errors"][key] = ("потрібно знову підключити акаунт" if isinstance(e, TokenExpired)
+                                      else str(e)[:150])
                 st = {}
             except Exception as e:  # noqa: BLE001
                 if is_gone(e):
