@@ -267,6 +267,17 @@ class Graph:
 
 
 class _MetaBase(Platform):
+    # Статистику (перегляди, лайки, підписники) в Instagram/Facebook НЕ запитуємо взагалі: зайві запити до Meta
+    # шкодять публікаціям. Аналітика — лише з YouTube.
+    def get_views(self, result: dict) -> int | None:
+        return None
+
+    def get_stats(self, result: dict) -> dict:
+        return {}
+
+    def account_stats(self) -> dict:
+        return {}
+
     reauth_cmd = "python poster.py auth meta"
 
     @property
@@ -719,8 +730,6 @@ class Instagram(_MetaBase):
         reason = st.get("status") or st.get("status_code") or ""
         return f" | стан контейнера: {reason}{ig_hint(reason)}" if reason else ""
 
-    _metric: str | None = None   # яка метрика переглядів спрацювала — щоб не витрачати 3 запити щоразу
-
     def finish_container(self, cid: str) -> dict | None:
         """Фонове завершення: контейнер готовий — публікуємо ({"id", "url"}); ще обробляється — None;
         ERROR/EXPIRED — PublishError. Файл повторно НЕ вантажимо."""
@@ -740,62 +749,6 @@ class Instagram(_MetaBase):
         except Exception as e:  # noqa: BLE001
             log.warning("Instagram permalink: %s", e)
         return out
-
-    def get_views(self, result: dict) -> int | None:
-        g = self._g()
-        order = ("views", "plays", "reach")
-        if Instagram._metric:
-            order = (Instagram._metric,) + tuple(m for m in order if m != Instagram._metric)
-        for metric in order:
-            try:
-                data = g.get(f"{result['id']}/insights", low=True, metric=metric).get("data") or []
-            except RateLimited:
-                raise
-            except PublishError:
-                continue
-            if data:
-                Instagram._metric = metric
-                d = data[0]
-                vals = d.get("values") or []
-                if vals:
-                    return int(vals[0].get("value") or 0)
-                if d.get("total_value"):
-                    return int(d["total_value"].get("value") or 0)
-        return None
-
-    def find_manual(self, after: float, taken: set) -> dict | None:
-        """Reels, опублікований вручну з телефона (без номера медіа): найраніший після `after`, ще не привʼязаний."""
-        from datetime import datetime
-        r = self._g().get(f"{self.ig_id}/media", low=True, limit=25,
-                          fields="id,permalink,timestamp,media_product_type")
-        best = None
-        for m in r.get("data") or []:
-            if m.get("id") in taken or m.get("media_product_type") not in (None, "REELS"):
-                continue
-            try:
-                ts = datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z").timestamp()
-            except (KeyError, ValueError):
-                continue
-            if ts >= after and (best is None or ts < best[0]):
-                best = (ts, m)
-        return best and {"id": best[1]["id"], "url": best[1].get("permalink") or ""}
-
-    def get_stats(self, result: dict) -> dict:
-        if not result.get("id"):   # опубліковано вручну й ще не знайдено в акаунті — статистики немає
-            return {}
-        out = {"views": self.get_views(result)}
-        try:
-            r = self._g().get(result["id"], low=True, fields="like_count,comments_count")
-            out.update(likes=r.get("like_count"), comments=r.get("comments_count"))
-        except RateLimited:
-            raise
-        except PublishError as e:
-            log.debug("IG likes: %s", e)
-        return out
-
-    def account_stats(self) -> dict:
-        r = self._g().get(self.ig_id, low=True, fields="followers_count,media_count")
-        return {"followers": r.get("followers_count"), "videos": r.get("media_count")}
 
     def check(self) -> str:
         r = self._g().get(self.ig_id, fields="username")
@@ -1254,32 +1207,6 @@ class Facebook(_MetaBase):
             time.sleep(30 if usage_pct() < 80 else 120)  # кожен запит — з годинної квоти Meta
         out["note"] = "Facebook ще обробляє відео — з'явиться на сторінці трохи пізніше"
         return out
-
-    def get_views(self, result: dict) -> int | None:
-        data = self.graph().get(f"{result['id']}/video_insights", low=True).get("data") or []
-        by_name = {d.get("name"): d for d in data}
-        for name in ("fb_reels_total_plays", "blue_reels_play_count", "post_video_views", "total_video_views"):
-            d = by_name.get(name)
-            if d and d.get("values"):
-                return int(d["values"][0].get("value") or 0)
-        return None
-
-    def get_stats(self, result: dict) -> dict:
-        out = {"views": self.get_views(result)}
-        try:
-            r = self.graph().get(result["id"], low=True,
-                                 fields="likes.summary(true).limit(0),comments.summary(true).limit(0)")
-            out.update(likes=((r.get("likes") or {}).get("summary") or {}).get("total_count"),
-                       comments=((r.get("comments") or {}).get("summary") or {}).get("total_count"))
-        except RateLimited:
-            raise
-        except PublishError as e:
-            log.debug("FB likes: %s", e)
-        return out
-
-    def account_stats(self) -> dict:
-        r = self.graph().get(self.page_id, low=True, fields="followers_count,fan_count")
-        return {"followers": r.get("followers_count") or r.get("fan_count")}
 
     def check(self) -> str:
         r = self.graph().get(self.page_id, fields="name")

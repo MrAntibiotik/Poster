@@ -115,7 +115,6 @@ class StatsLimitTest(FlowBase):
     def test_collect_reuses_fresh_and_stops_on_limit(self):
         from app.insights.reports import collect
         self.cfg["dry_run"] = False
-        self.cfg["stats"] = {"meta_analytics": True}   # тест саме про статистику Meta
 
         class P:
             calls = 0
@@ -129,17 +128,17 @@ class StatsLimitTest(FlowBase):
 
             def account_stats(self):
                 return {"followers": 10}
-        self.app.platforms = {"instagram": P()}
+        self.app.platforms = {"youtube": P()}
         now = self.ts(11, "12:00")
         from app.core import config
         config.FAKE_NOW = now
         for n in range(3):
             iid = self.app.db.x("INSERT INTO items(mp4, json, status, posted_at, results, added_at, qpos) VALUES (?,?,?,?,?,?,?)",
                                 (f"/x/{n}.mp4", f"/x/{n}.json", "posted", now - 3600,
-                                 json.dumps({"instagram": {"status": "ok", "id": str(n)}}), now - 7200, n))
+                                 json.dumps({"youtube": {"status": "ok", "id": str(n)}}), now - 7200, n))
         out = collect(self.app)
         self.assertEqual(P.calls, 1)                    # після першого «ліміт» решту відео не чіпаємо
-        self.assertIn("instagram", out["errors"])
+        self.assertIn("youtube", out["errors"])
         collect(self.app)
         self.assertEqual(self.app.db.one("SELECT COUNT(*) AS n FROM account_stats")["n"], 1)   # підписники — з бази
         self.assertTrue(iid)
@@ -181,7 +180,6 @@ class GoneStatsTest(FlowBase):
         from app.insights.reports import collect
         from app.core import config
         self.cfg["dry_run"] = False
-        self.cfg["stats"] = {"meta_analytics": True}   # тест саме про статистику Meta
 
         class P:
             calls = 0
@@ -192,12 +190,12 @@ class GoneStatsTest(FlowBase):
 
             def account_stats(self):
                 return {}
-        self.app.platforms = {"facebook": P()}
+        self.app.platforms = {"youtube": P()}
         now = self.ts(11, "12:00")
         config.FAKE_NOW = now
         self.app.db.x("INSERT INTO items(mp4, json, status, posted_at, results, added_at, qpos) VALUES (?,?,?,?,?,?,?)",
                       ("/x/a.mp4", "/x/a.json", "posted", now - 3600,
-                       json.dumps({"facebook": {"status": "ok", "id": "9"}}), now - 7200, 1))
+                       json.dumps({"youtube": {"status": "ok", "id": "9"}}), now - 7200, 1))
         collect(self.app)
         config.FAKE_NOW = now + 8 * 3600
         collect(self.app)

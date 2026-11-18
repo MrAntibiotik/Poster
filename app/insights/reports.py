@@ -166,54 +166,19 @@ def is_gone(e: Exception) -> bool:
     return "(100/33)" in s or "does not exist" in s or "videoNotFound" in s or "HTTP 404" in s
 
 
-def link_manual(app, item: dict) -> dict:
-    """Instagram, опублікований вручну: знайти цей Reels в акаунті (номер медіа + посилання), щоб рахувати перегляди."""
-    r = (item.get("results") or {}).get("instagram") or {}
-    plat = app.platforms.get("instagram")
-    if r.get("status") != "ok" or r.get("id") or not plat or not hasattr(plat, "find_manual"):
-        return item
-    db = app.db
-    if db.get(f"iglinkfail:{item['id']}") or now_ts() - int(db.get(f"iglink_ts:{item['id']}") or 0) < LINK_EVERY:
-        return item
-    db.set(f"iglink_ts:{item['id']}", now_ts())
-    since = r.get("sent_at") or item.get("posted_at") or r.get("published_at") or 0
-    taken = {((it.get("results") or {}).get("instagram") or {}).get("id")
-             for it in db.items("status='posted' AND posted_at>=?", (since - 7 * 86400,))}
-    found = plat.find_manual(since - 600, taken - {None})
-    if not found:
-        if now_ts() - (r.get("published_at") or since) > 3 * 86400:
-            db.set(f"iglinkfail:{item['id']}", 1)   # за 3 доби не знайшли — більше не шукаємо
-        return item
-    results = dict(item["results"])
-    results["instagram"] = {**r, **found}
-    db.update_item(item["id"], results=results)
-    log.info("#%s instagram: знайдено ручну публікацію %s", item["id"], found["url"])
-    return {**item, "results": results}
-
-
 def send_stats(app, item: dict) -> None:
     """Перегляди через 24 год: повідомлення в Telegram + запис у json."""
     from app.core.meta import load_meta
 
     db = app.db
-    try:
-        if meta_stats_on(app):
-            item = link_manual(app, item)
-    except RateLimited as e:
-        log.info("Перегляди #%s відкладено: %s", item["id"], e)
-        return
-    except Exception as e:  # noqa: BLE001
-        log.info("Пошук ручної публікації #%s в Instagram: %s", item["id"], e)
     views: dict[str, int | None | str] = {}
     likes: dict[str, int] = {}
     for p in PLATFORMS:
         r = item["results"].get(p) or {}
         if r.get("status") != "ok" or p not in app.platforms:
             continue
-        if p in META and not meta_stats_on(app):
-            if meta_analytics(app):
-                return   # Instagram зараз публікує — статистику за добу знімемо трохи пізніше (stats_sent лишається 0)
-            continue     # статистику Instagram/Facebook вимкнено
+        if p in META:
+            continue     # статистику Instagram/Facebook не запитуємо (лише YouTube)
         try:
             fresh = db.one("SELECT views, likes FROM post_stats WHERE item_id=? AND platform=? AND ts>? "
                            "ORDER BY ts DESC LIMIT 1", (item["id"], p, now_ts() - 3 * 3600))
@@ -269,35 +234,8 @@ DAY = 24 * 3600
 # Instagram / Facebook не можна турбувати зайвими запитами (інакше проблеми з публікаціями) — свіже береться з бази
 POST_FRESH = 12 * 3600     # статистика відео, знята менше ніж N тому, береться з бази
 ACCOUNT_FRESH = 12 * 3600  # те саме для підписників акаунта
-LINK_EVERY = 6 * 3600      # пошук ручної публікації Instagram — не частіше
-META = ("instagram", "facebook")
-META_FRESH = 24 * 3600     # Instagram/Facebook: перегляди й лайки відео — не частіше ніж раз на добу
-META_MAX_AGE = 30 * DAY    # старші відео в Instagram/Facebook більше не опитуємо (лишається остання цифра з бази)
+META = ("instagram", "facebook")   # статистику з Meta не запитуємо взагалі — аналітика лише з YouTube
 
-
-def meta_analytics(app) -> bool:
-    """Аналітика Instagram/Facebook увімкнена в налаштуваннях (типово — ні: лише YouTube)."""
-    return bool((app.cfg.get("stats") or {}).get("meta_analytics", False))
-
-
-def meta_stats_on(app) -> bool:
-    """Чи можна зараз питати в Instagram/Facebook статистику: увімкнено в налаштуваннях і ніщо не публікується
-    в Instagram (під час завантаження й обробки Meta не турбуємо)."""
-    if not meta_analytics(app):
-        return False
-    try:
-        from app.platforms import meta_graph
-        if meta_graph.Instagram.current:
-            return False
-    except Exception:  # noqa: BLE001
-        pass
-    pub = getattr(app, "publisher", None)
-    try:
-        if pub and (pub.running is not None or pub.ig_processing()):
-            return False
-    except Exception:  # noqa: BLE001
-        pass
-    return True
 
 
 def fmt_n(n) -> str:
@@ -324,12 +262,11 @@ def collect(app, days: int = 8) -> dict:
     db, now = app.db, now_ts()
     out = {"ts": now, "accounts": {}, "posts": [], "errors": {}}
     dry = bool(app.cfg.get("dry_run"))
-    meta_ok = meta_stats_on(app)
     for key, plat in app.platforms.items():
-        if dry or (key in META and not meta_analytics(app)):
-            continue   # аналітика Instagram/Facebook вимкнена — їх узагалі немає в звітах
+        if dry or key in META:
+            continue   # Instagram/Facebook — без аналітики (лише YouTube)
         prev = db.one("SELECT * FROM account_stats WHERE platform=? AND ts>? ORDER BY ts DESC LIMIT 1",
-                      (key, 0 if key in META and not meta_ok else now - ACCOUNT_FRESH))
+                      (key, now - ACCOUNT_FRESH))
         if prev:   # свіжий знімок уже є — не витрачаємо запити (у Meta годинний ліміт на весь додаток)
             out["accounts"][key] = {k: prev[k] for k in ("followers", "views", "likes") if prev[k] is not None}
             continue
@@ -342,33 +279,22 @@ def collect(app, days: int = 8) -> dict:
             log.warning("Статистика акаунта %s: %s", key, e)
             out["errors"][key] = str(e)[:150]
     from app.insights.analytics import snapshot_due
-    limited: set[str] = set() if meta_ok else set(META)   # Meta зараз не турбуємо — лише з бази
+    limited: set[str] = set()
     for item in db.items("status='posted' AND posted_at>=?", (now - 400 * DAY,), order="posted_at DESC"):
         recent = item["posted_at"] >= now - days * DAY
-        if recent and "instagram" not in limited:
-            try:
-                item = link_manual(app, item)
-            except RateLimited:
-                limited.add("instagram")
-            except Exception as e:  # noqa: BLE001
-                log.info("Пошук ручної публікації #%s в Instagram: %s", item["id"], e)
         title = _title(item)
         for key, res in item["results"].items():
             if res.get("status") != "ok" or key not in app.platforms or dry:
                 continue
-            if key in META and not meta_analytics(app):
-                continue
-            if not recent and (not snapshot_due(db, item, key, now)
-                               or (key in META and now - (item["posted_at"] or now) > META_MAX_AGE)):
-                continue  # старі відео: знімок щотижня / щомісяця; Instagram/Facebook — лише перший місяць
+            if key in META:
+                continue   # Instagram/Facebook — без аналітики
+            if not recent and not snapshot_due(db, item, key, now):
+                continue  # старі відео: знімок щотижня / щомісяця — для аналітики за 3–12 міс.
             if db.get(f"statsgone:{item['id']}:{key}"):
                 continue   # відео на платформі вже немає (видалене) — не питаємо щоразу
             fresh = db.one("SELECT views, likes, comments FROM post_stats WHERE item_id=? AND platform=? AND ts>? "
                            "ORDER BY ts DESC LIMIT 1",
-                           (item["id"], key, now - (META_FRESH if key in META else POST_FRESH)))
-            if not fresh and key in limited:   # не питаємо — показуємо останню відому цифру
-                fresh = db.one("SELECT views, likes, comments FROM post_stats WHERE item_id=? AND platform=? "
-                               "ORDER BY ts DESC LIMIT 1", (item["id"], key))
+                           (item["id"], key, now - POST_FRESH))
             if fresh or key in limited:   # свіже вже є (або платформа обмежила запити) — беремо з бази
                 st = dict(fresh) if fresh else {}
                 if recent:

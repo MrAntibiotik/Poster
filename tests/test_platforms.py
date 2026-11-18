@@ -146,9 +146,11 @@ class InstagramTest(Base):
         with self.assertRaises(TokenExpired):
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
 
-    def test_views(self):
-        self.http(meta_graph, [("GET", "/M1/insights", Resp({"data": [{"name": "views", "values": [{"value": 777}]}]}))])
-        self.assertEqual(meta_graph.Instagram(self.cfg).get_views({"id": "M1"}), 777)
+    def test_no_stats_requests(self):
+        f = self.http(meta_graph, [])   # статистику з Meta не запитуємо взагалі
+        ig = meta_graph.Instagram(self.cfg)
+        self.assertEqual((ig.get_views({"id": "M1"}), ig.get_stats({"id": "M1"}), ig.account_stats()), (None, {}, {}))
+        self.assertEqual(f.calls, [])
 
 
 class InstagramSpecTest(Base):
@@ -333,26 +335,6 @@ for _name in [n for n in vars(InstagramSpecTest) if n.startswith("test_")]:
 
 
 class StatsTest(Base):
-    def test_instagram_stats(self):
-        self.http(meta_graph, [
-            ("GET", "/M1/insights", Resp({"data": [{"name": "views", "values": [{"value": 1500}]}]})),
-            ("GET", "/M1", Resp({"like_count": 120, "comments_count": 7})),
-            ("GET", "/IG1", Resp({"followers_count": 2048, "media_count": 31})),
-        ])
-        ig = meta_graph.Instagram(self.cfg)
-        self.assertEqual(ig.get_stats({"id": "M1"}), {"views": 1500, "likes": 120, "comments": 7})
-        self.assertEqual(ig.account_stats()["followers"], 2048)
-
-    def test_facebook_stats(self):
-        self.http(meta_graph, [
-            ("GET", "/V1/video_insights", Resp({"data": [{"name": "fb_reels_total_plays", "values": [{"value": 77}]}]})),
-            ("GET", "/V1", Resp({"likes": {"summary": {"total_count": 9}}, "comments": {"summary": {"total_count": 2}}})),
-            ("GET", "/P1", Resp({"followers_count": 350})),
-        ])
-        fb = meta_graph.Facebook(self.cfg)
-        self.assertEqual(fb.get_stats({"id": "V1"}), {"views": 77, "likes": 9, "comments": 2})
-        self.assertEqual(fb.account_stats(), {"followers": 350})
-
     def test_tiktok_stats(self):
         d = self.tmp / "tokens"
         d.mkdir(exist_ok=True)
@@ -390,10 +372,11 @@ class FacebookTest(Base):
         self.assertEqual((finish["upload_phase"], finish["video_state"], finish["description"]),
                          ("finish", "PUBLISHED", "FB #wot"))
 
-    def test_views(self):
-        self.http(meta_graph, [("GET", "/V1/video_insights", Resp({"data": [
-            {"name": "blue_reels_play_count", "values": [{"value": 55}]}]}))])
-        self.assertEqual(meta_graph.Facebook(self.cfg).get_views({"id": "V1"}), 55)
+    def test_no_stats_requests(self):
+        f = self.http(meta_graph, [])
+        fb = meta_graph.Facebook(self.cfg)
+        self.assertEqual((fb.get_views({"id": "V1"}), fb.get_stats({"id": "V1"}), fb.account_stats()), (None, {}, {}))
+        self.assertEqual(f.calls, [])
 
 
 class TikTokTest(Base):
