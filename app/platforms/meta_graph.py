@@ -730,6 +730,50 @@ class Instagram(_MetaBase):
         reason = st.get("status") or st.get("status_code") or ""
         return f" | стан контейнера: {reason}{ig_hint(reason)}" if reason else ""
 
+    # Способи завантаження — по черзі, лише якщо попередній не пройшов за wait_min (типово 20 хв). Між ними
+    # ми Instagram НЕ опитуємо: завантажили → чекаємо мовчки → один запит «готово?» → публікуємо або наступний спосіб.
+    METHODS = (("копія під вимоги Reels", ""), ("легка копія 30 к/с", "safe30"), ("копія 720p", "safe720"))
+
+    def upload_only(self, video_path: str, meta, method: int = 0) -> dict:
+        """Контейнер + одне завантаження файлу, БЕЗ опитування статусу. {"container", "method", "method_name", …}.
+        «rupload 400» не помилка: файл часто все одно доходить — це покаже перевірка через wait_min."""
+        from app.core import media as _media
+        if not Instagram._upload_lock.acquire(timeout=3600):
+            raise PublishError("Instagram: інше відео ще завантажується")
+        Instagram.current = video_path
+        try:
+            self._check_stop()
+            name, mode = self.METHODS[min(method, len(self.METHODS) - 1)]
+            self.report(f"готую файл для Instagram: {name}")
+            path = _media.instagram_copy(video_path, self.cfg, mode=mode)
+            try:
+                _media.file_check(path)
+            except Exception as e:  # noqa: BLE001
+                raise PublishError(f"Instagram: файл не готовий — {e}") from e
+            self._check_stop()
+            g = self._g()
+            c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable",
+                       caption=meta.instagram_text[:2200],
+                       share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
+            cid = c["id"]
+            uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
+            size = os.path.getsize(path) / 1048576
+            self.report(f"завантажую в Instagram ({name}, {size:.0f} МБ)")
+            log.info("Instagram: контейнер %s, %s — завантажую %s (%.1f МБ)", cid, name, path, size)
+            note = ""
+            try:
+                g.upload_binary(uri, path)
+            except RateLimited:
+                raise
+            except PublishError as e:
+                note = short_error(e)[:120]
+                log.info("Instagram rupload: %s — це ще не відмова, перевірю результат пізніше", note)
+            return {"container": cid, "method": method, "method_name": name, "upload_note": note,
+                    "file_mb": round(size, 1)}
+        finally:
+            Instagram.current = None
+            Instagram._upload_lock.release()
+
     def finish_container(self, cid: str) -> dict | None:
         """Фонове завершення: контейнер готовий — публікуємо ({"id", "url"}); ще обробляється — None;
         ERROR/EXPIRED — PublishError. Файл повторно НЕ вантажимо."""

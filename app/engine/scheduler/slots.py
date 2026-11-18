@@ -123,7 +123,7 @@ class SlotsMixin:
             if bool(self.db.get(f"ignored:{item['id']}")) != ignored:
                 continue
             errs = {p: r for p, r in item["results"].items()
-                    if r.get("status") not in ("ok", "manual", "skipped", "processing", "ig_wait") and p in self.app.platforms and p not in item["disabled"]}
+                    if r.get("status") not in ("ok", "manual", "skipped", "processing", "ig_wait", "ig_next") and p in self.app.platforms and p not in item["disabled"]}
             if item["status"] == "failed" or errs:
                 out.append({**item, "errors": errs})
         return out

@@ -15,10 +15,11 @@ log = logging.getLogger("publisher")
 
 # Instagram ще не опубліковано, але це не помилка: надіслано вам / пропущено / Instagram обробляє у фоні /
 # чекає, поки Instagram закінчить попереднє відео. Такі платформи не повторюються і не рахуються невдалими.
-PENDING = ("manual", "skipped", "processing", "ig_wait")
-DONE = ("ok",) + PENDING
+PENDING = ("manual", "skipped", "processing", "ig_wait", "ig_next")
+DONE = tuple(x for x in ("ok",) + PENDING if x != "ig_next")   # ig_next — Instagram ще треба завантажити (інший спосіб)
 IG_PENDING_SQL = ("status IN ('posted','publishing','failed') AND "
-                  "(results LIKE '%\"processing\"%' OR results LIKE '%\"ig_wait\"%')")
+                  "(results LIKE '%\"processing\"%' OR results LIKE '%\"ig_wait\"%' OR results LIKE '%\"ig_next\"%')")
+IG_BUSY = ("processing", "ig_next")   # Instagram зайнятий цим шортсом — інші чекають (строго одне відео за раз)
 
 
 class Publisher:
@@ -273,6 +274,19 @@ class Publisher:
                     if i == 1:
                         log.info("#%s %s: завантажую оригінал без змін: %s (%.1f МБ)", item["id"], key,
                                  item["mp4"], Path(item["mp4"]).stat().st_size / 1024 / 1024)
+                    if key == "instagram" and hasattr(plat, "upload_only"):
+                        # завантажили — і мовчки чекаємо wait_min; один запит «готово?» робить finish_instagram
+                        prev = item["results"].get("instagram") or {}
+                        m = int(prev.get("method") or 0) if prev.get("status") == "ig_next" else 0
+                        up = plat.upload_only(item["mp4"], meta, m)
+                        now = now_ts()
+                        wait = 60 * int((app.cfg["platforms"].get("instagram") or {}).get("wait_min", 20))
+                        log.info("#%s instagram: завантажено (%s) — перевірю один раз через %s хв, до того Instagram "
+                                 "не турбую", item["id"], up.get("method_name"), wait // 60)
+                        app.db.set(f"pubtry:{item['id']}:{key}", None)
+                        return {"status": "processing", **up, "since": now, "next_at": now + wait,
+                                "tried": list(prev.get("tried") or []) + [up.get("method_name")],
+                                "note": f"Instagram обробляє ({up.get('method_name')}) — перевірю через {wait // 60} хв"}
                     r = plat.publish(item["mp4"], meta)
                 log.info("#%s %s: опубліковано %s", item["id"], key, r.get("url"))
                 if hasattr(app.bot, "resolve"):
@@ -316,7 +330,7 @@ class Publisher:
     def ig_processing(self, exclude: int | None = None) -> int | None:
         """Шортс, чиє відео Instagram зараз обробляє у фоні (або None)."""
         for it in self.app.db.items(IG_PENDING_SQL, order="id"):
-            if it["id"] != exclude and ((it["results"] or {}).get("instagram") or {}).get("status") == "processing":
+            if it["id"] != exclude and ((it["results"] or {}).get("instagram") or {}).get("status") in IG_BUSY:
                 return it["id"]
         return None
 
@@ -333,45 +347,47 @@ class Publisher:
             r = (it["results"] or {}).get("instagram") or {}
             if r.get("status") != "processing" or now < int(r.get("next_at") or 0) or self.is_active(it["id"]):
                 continue
-            checks = int(r.get("checks") or 0) + 1
-            try:
+            why = ""
+            try:   # ОДИН запит: контейнер готовий → публікуємо; ні → наступний спосіб
                 got = plat.finish_container(r["container"])
             except RateLimited as e:
                 self._save_ig(it, {**r, "next_at": max(e.retry_at, now + 300)})
                 return
             except Exception as e:  # noqa: BLE001
-                log.warning("#%s instagram: фонова обробка не вдалася: %s", it["id"], e)
-                self._save_ig(it, {"status": "error", "attempts": 1, "error": str(e)[:500]})
-                db.event(it["id"], "platform_error", {"platform": "instagram", "error": str(e)[:2000]})
-                if hasattr(app.bot, "notify_failed"):
-                    app.bot.notify_failed(it["id"])
-                continue
+                got, why = None, str(e)[:300]
             if got:
-                log.info("#%s instagram: опубліковано після фонової обробки %s", it["id"], got.get("url"))
-                self._save_ig(it, {"status": "ok", "attempts": 1, "published_at": now_ts(), **got,
-                                   "note": f"Instagram обробляв {max(1, (now - int(r.get('since') or now)) // 60)} хв"})
+                log.info("#%s instagram: опубліковано (%s) %s", it["id"], r.get("method_name"), got.get("url"))
+                self._save_ig(it, {"status": "ok", "attempts": len(r.get("tried") or [1]), "published_at": now_ts(),
+                                   **got, "note": r.get("method_name") or ""})
                 db.event(it["id"], "published", {"ok": ["instagram"], "urls": {"instagram": got.get("url")},
                                                   "background": True})
                 if hasattr(app.bot, "drop_failed_card"):
                     app.bot.drop_failed_card(it["id"])
-            elif now - int(r.get("since") or now) > 60 * int((app.cfg["platforms"].get("instagram") or {})
-                                                              .get("background_max_min", 60)):
-                # справжня обробка — секунди/хвилини; «In Progress» годинами = контейнер завис (файл не зібрався
-                # після rupload 400). Не тримаємо чергу Instagram — помилка з кнопками «Повторити» / «Надіслати мені»
-                mins = (now - int(r.get("since") or now)) // 60
-                err = (f"Instagram так і не обробив відео ({mins} хв «In Progress») — контейнер завис. "
-                       "Повторіть або опублікуйте з телефона («📱 Надіслати мені для Instagram»).")
-                log.warning("#%s instagram: контейнер %s завис (%s хв «In Progress») — більше не чекаю",
-                            it["id"], r.get("container"), mins)
-                self._save_ig(it, {"status": "error", "attempts": 1, "error": err})
-                db.event(it["id"], "platform_error", {"platform": "instagram", "error": err})
-                if hasattr(app.bot, "notify_failed"):
-                    app.bot.notify_failed(it["id"])
-            else:   # рідше, що довше: 2, 3, 5, 10, далі раз на 15 хв (кожен запит — квота Meta)
-                log.info("#%s instagram: контейнер %s ще обробляється (%s хв) — перевірю пізніше",
-                         it["id"], r.get("container"), (now - int(r.get("since") or now)) // 60)
-                step = (120, 180, 300, 600)[checks - 1] if checks <= 4 else 900
-                self._save_ig(it, {**r, "checks": checks, "next_at": now + step})
+                continue
+            why = why or f"за {(now - int(r.get('since') or now)) // 60} хв не оброблено"
+            nxt = int(r.get("method") or 0) + 1
+            methods = getattr(plat, "METHODS", ())
+            if nxt < len(methods):
+                log.warning("#%s instagram: %s не пройшла (%s) — пробую наступний спосіб: %s",
+                            it["id"], r.get("method_name"), why, methods[nxt][0])
+                self._save_ig(it, {"status": "ig_next", "method": nxt, "tried": r.get("tried") or [],
+                                   "note": f"{r.get('method_name')}: {why}; далі — {methods[nxt][0]}"})
+                db.event(it["id"], "ig_next_method", {"failed": r.get("method_name"), "why": why})
+                self.start(it["id"])     # той самий шортс, наступний спосіб; інші в Instagram — після нього
+                return
+            err = (f"Instagram не прийняв відео жодним способом ({', '.join(r.get('tried') or [])}). "
+                   f"Останнє: {why}. Опублікуйте з телефона («📱 Надіслати мені для Instagram») або повторіть пізніше.")
+            log.warning("#%s instagram: %s", it["id"], err)
+            self._save_ig(it, {"status": "error", "attempts": len(r.get("tried") or []), "error": err})
+            db.event(it["id"], "platform_error", {"platform": "instagram", "error": err})
+            if hasattr(app.bot, "notify_failed"):
+                app.bot.notify_failed(it["id"])
+        if db.get("stopped") == "1":
+            return
+        for it in db.items(IG_PENDING_SQL, order="id"):   # «наступний спосіб», який не стартував (перезапуск / Стоп)
+            if ((it["results"] or {}).get("instagram") or {}).get("status") == "ig_next" and not self.is_active(it["id"]):
+                self.start(it["id"])
+                return
         if self.ig_processing() or db.get("stopped") == "1":
             return
         for it in db.items(IG_PENDING_SQL, order="id"):

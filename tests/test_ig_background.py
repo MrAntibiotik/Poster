@@ -1,4 +1,5 @@
-"""Довга обробка Instagram: черга не стоїть, Instagram — по одному відео, без дублів."""
+"""Instagram: завантажили → мовчки чекаємо 20 хв → ОДИН запит «готово?» → публікуємо або наступний спосіб.
+Черга не стоїть, в Instagram — одне відео за раз, без дублів і паралельних запитів."""
 from __future__ import annotations
 
 import sys
@@ -8,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core import config  # noqa: E402
-from app.platforms import PublishError, StillProcessing  # noqa: E402
+from app.platforms import PublishError  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 
@@ -21,32 +22,32 @@ class Ok:
         return {"id": f"y{self.n}", "url": f"https://yt/{self.n}"}
 
 
-class SlowIG:
-    """publish: файл дійшов, але Instagram обробляє довго → StillProcessing. finish_container — за сценарієм."""
+class IG:
+    METHODS = (("копія під вимоги Reels", ""), ("легка копія 30 к/с", "safe30"), ("копія 720p", "safe720"))
 
     def __init__(self):
-        self.uploads, self.finished, self.ready, self.fail = [], [], set(), set()
+        self.uploads, self.checks, self.ready, self.fail = [], [], set(), set()
 
-    def publish(self, path, meta):
+    def upload_only(self, path, meta, method=0):
         cid = f"C{len(self.uploads) + 1}"
-        self.uploads.append(cid)
-        raise StillProcessing("Instagram ще обробляє", cid)
+        self.uploads.append((cid, method))
+        return {"container": cid, "method": method, "method_name": self.METHODS[method][0], "upload_note": ""}
 
     def finish_container(self, cid):
+        self.checks.append(cid)
         if cid in self.fail:
             raise PublishError("Instagram відхилив відео під час обробки: ERROR")
         if cid in self.ready:
-            self.finished.append(cid)
             return {"id": "M" + cid, "url": f"https://ig/{cid}"}
         return None
 
 
-class IgBackgroundTest(FlowBase):
+class IgWaitTest(FlowBase):
     def setUp(self):
         super().setUp()
         self.cfg["dry_run"] = False
         self.cfg["platforms"]["instagram"]["single_attempt"] = True
-        self.yt, self.ig = Ok(), SlowIG()
+        self.yt, self.ig = Ok(), IG()
         self.app.platforms = {"youtube": self.yt, "instagram": self.ig}
         self.now = self.ts(11, "12:00")
         config.FAKE_NOW = self.now
@@ -64,75 +65,75 @@ class IgBackgroundTest(FlowBase):
         return self.app.db.get_item(item_id)["results"].get("instagram") or {}
 
     def later(self, minutes):
-        self.now += minutes * 60
-        config.FAKE_NOW = self.now
-        self.app.publisher.finish_instagram(self.now)
+        for _ in range(minutes):          # планувальник «тікає» щохвилини
+            self.now += 60
+            config.FAKE_NOW = self.now
+            self.app.publisher.finish_instagram(self.now)
 
-    def test_queue_goes_on_and_instagram_one_at_a_time(self):
-        a, b = self.publish("a", "b")
-        # YouTube обох — одразу; Instagram: #a обробляється, #b чекає, другий файл в Instagram не вантажили
-        self.assertEqual(self.yt.n, 2)
-        self.assertEqual(self.ig.uploads, ["C1"])
+    def test_silent_wait_then_one_check(self):
+        a, = self.publish("a")
         self.assertEqual(self.res(a)["status"], "processing")
-        self.assertEqual(self.res(b)["status"], "ig_wait")
-        self.assertEqual(self.app.db.get_item(a)["status"], "posted")
-        self.assertEqual(self.app.db.get_item(b)["status"], "posted")
-        self.later(3)                          # ще обробляється
-        self.assertEqual(self.res(a)["status"], "processing")
-        self.assertEqual(self.ig.uploads, ["C1"])
+        self.later(19)
+        self.assertEqual(self.ig.checks, [])                  # 19 хв — жодного запиту
         self.ig.ready.add("C1")
-        self.later(5)                          # готово → публікуємо той самий контейнер, без нового завантаження
+        self.later(1)
+        self.assertEqual(self.ig.checks, ["C1"])              # рівно один
         self.assertEqual(self.res(a)["status"], "ok")
         self.assertEqual(self.res(a)["url"], "https://ig/C1")
-        self.assertEqual(self.ig.finished, ["C1"])
-        # Instagram звільнився → #b вантажиться в Instagram (YouTube #b вдруге НЕ публікується)
-        self.assertEqual(self.ig.uploads, ["C1", "C2"])
-        self.assertEqual(self.yt.n, 2)
+
+    def test_next_method_after_20_min(self):
+        a, = self.publish("a")
+        self.later(20)                                        # не готово → наступний спосіб (новий контейнер)
+        self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 1)])
+        self.assertEqual(self.res(a)["status"], "processing")
+        self.assertEqual(self.yt.n, 1)                        # YouTube вдруге не публікується
+        self.ig.fail.add("C2")
+        self.later(20)                                        # ERROR → третій спосіб
+        self.assertEqual(self.ig.uploads[-1], ("C3", 2))
+        self.later(20)                                        # і він не пройшов → ❌, більше не пробуємо
+        r = self.res(a)
+        self.assertEqual(r["status"], "error")
+        self.assertIn("жодним способом", r["error"])
+        self.assertEqual(len(self.ig.uploads), 3)
+        self.assertEqual(self.ig.checks, ["C1", "C2", "C3"])  # по одному запиту на спосіб
+
+    def test_one_at_a_time_queue_goes_on(self):
+        a, b = self.publish("a", "b")
+        self.assertEqual(self.yt.n, 2)                        # YouTube обох — одразу
+        self.assertEqual(self.ig.uploads, [("C1", 0)])        # Instagram — лише перший
+        self.assertEqual(self.res(b)["status"], "ig_wait")
+        self.ig.ready.add("C1")
+        self.later(20)
+        self.assertEqual(self.res(a)["status"], "ok")
+        self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 0)])   # тепер #b, з першого способу
         self.assertEqual(self.res(b)["status"], "processing")
-        self.ig.ready.add("C2")
-        self.later(5)
-        self.assertEqual(self.res(b)["status"], "ok")
-        self.assertEqual(self.ig.finished, ["C1", "C2"])
+
+    def test_next_method_blocks_others(self):
+        a, b = self.publish("a", "b")
+        self.later(20)                                        # #a → наступний спосіб; #b досі чекає
+        self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 1)])
+        self.assertEqual(self.res(b)["status"], "ig_wait")
 
     def test_retry_while_processing_does_not_reupload(self):
         a, = self.publish("a")
-        self.app.publisher.start(a)            # «🔁 Повторити» / автоповтор, поки Instagram обробляє
-        self.assertEqual(self.ig.uploads, ["C1"])
+        self.app.publisher.start(a)
+        self.assertEqual(len(self.ig.uploads), 1)
         self.assertEqual(self.yt.n, 1)
-
-    def test_processing_error_becomes_failure(self):
-        a, = self.publish("a")
-        self.ig.fail.add("C1")
-        self.later(3)
-        r = self.res(a)
-        self.assertEqual(r["status"], "error")
-        self.assertIn("ERROR", r["error"])
-
-    def test_stuck_container_gives_up_after_an_hour_and_frees_queue(self):
-        a, b = self.publish("a", "b")
-        for _ in range(4):
-            self.later(15)
-        self.assertEqual(self.res(a)["status"], "processing")
-        self.later(15)
-        r = self.res(a)
-        self.assertEqual(r["status"], "error")
-        self.assertIn("контейнер завис", r["error"])
-        self.assertEqual(self.ig.uploads, ["C1", "C2"])        # черга Instagram пішла далі — #b вантажиться
-        self.assertEqual(self.res(b)["status"], "processing")
 
     def test_survives_restart(self):
         a, = self.publish("a")
-        self.app = self._app()                 # «перезапуск»: новий процес, та сама база
+        self.app = self._app()
         self.app.platforms = {"youtube": self.yt, "instagram": self.ig}
         self.ig.ready.add("C1")
-        self.later(3)
+        self.later(20)
         self.assertEqual(self.res(a)["status"], "ok")
-        self.assertEqual(self.ig.uploads, ["C1"])
+        self.assertEqual(len(self.ig.uploads), 1)
 
     def test_card_text(self):
         a, b = self.publish("a", "b")
         cap = self.app.bot.caption(self.app.db.get_item(a))
-        self.assertIn("Instagram ще обробляє", cap)
+        self.assertIn("перевірю через 20 хв", cap)
+        self.assertIn("до того не турбую", cap)
         cap = self.app.bot.caption(self.app.db.get_item(b))
         self.assertIn(f"чекає, поки Instagram обробить #{a}", cap)
 

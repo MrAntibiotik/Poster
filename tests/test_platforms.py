@@ -536,6 +536,18 @@ class InstagramDiagnosticTest(Base):
         self.addCleanup(lambda: setattr(meta_graph, "time", orig))
         return sleeps
 
+    def test_upload_only_two_requests_no_polling(self):
+        # завантажити й мовчати: контейнер + файл, жодного опитування статусу (навіть після rupload 400)
+        routes = self.routes(self.fail400())
+        f = self.http(meta_graph, routes)
+        self.media.instagram_copy = lambda path, cfg, **kw: str(self.copy)
+        up = meta_graph.Instagram(self.cfg).upload_only(str(self.video), META, 0)
+        self.assertEqual(up["container"], "C1")
+        self.assertIn("400", up["upload_note"])
+        self.assertEqual(len([c for c in f.calls if c[0] == "POST" and c[1].endswith("/IG1/media")]), 1)
+        self.assertEqual(len([c for c in f.calls if c[0] == "POST" and "rupload" in c[1]]), 1)
+        self.assertFalse([c for c in f.calls if c[0] == "GET"])
+
     def test_long_processing_goes_to_background(self):
         # обробка довша за INLINE_WAIT — не помилка: StillProcessing з тим самим контейнером, без нового завантаження
         routes = self.routes(self.fail400())
