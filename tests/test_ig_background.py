@@ -23,7 +23,7 @@ class Ok:
 
 
 class IG:
-    METHODS = (("копія під вимоги Reels", ""), ("легка копія 30 к/с", "safe30"), ("копія 720p", "safe720"))
+    METHODS = (("копія під вимоги Reels", ""), ("легка копія 30 к/с", "safe30"))
 
     def __init__(self):
         self.uploads, self.checks, self.ready, self.fail = [], [], set(), set()
@@ -88,14 +88,12 @@ class IgWaitTest(FlowBase):
         self.assertEqual(self.res(a)["status"], "processing")
         self.assertEqual(self.yt.n, 1)                        # YouTube вдруге не публікується
         self.ig.fail.add("C2")
-        self.later(20)                                        # ERROR → третій спосіб
-        self.assertEqual(self.ig.uploads[-1], ("C3", 2))
-        self.later(20)                                        # і він не пройшов → ❌, більше не пробуємо
+        self.later(20)                                        # ERROR, а способів більше немає → ❌
         r = self.res(a)
         self.assertEqual(r["status"], "error")
         self.assertIn("жодним способом", r["error"])
-        self.assertEqual(len(self.ig.uploads), 3)
-        self.assertEqual(self.ig.checks, ["C1", "C2", "C3"])  # по одному запиту на спосіб
+        self.assertEqual(len(self.ig.uploads), 2)
+        self.assertEqual(self.ig.checks, ["C1", "C2"])        # по одному запиту на спосіб
 
     def test_one_at_a_time_queue_goes_on(self):
         a, b = self.publish("a", "b")

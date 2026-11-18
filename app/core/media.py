@@ -178,18 +178,17 @@ IG_TARGET_MB = 45   # rupload відкидав копії 85–89 МБ (Processi
 
 def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> str:
     """mode: '' — копія під вимоги; 'safe60' — сувора копія з тією ж частотою кадрів (≤10 Мбіт/с);
-    'safe30' (= lite) — сувора копія 30 к/с, 6 Мбіт/с; 'safe720' — те саме, але 720×1280 (Instagram менше обробляти)."""
+    'safe30' (= lite) — сувора копія 30 к/с, 6 Мбіт/с. Завжди 1080 по ширині (720p — надто погана якість)."""
     mode = mode or ("safe30" if lite else "")
-    lite = mode in ("safe30", "safe720")
-    strict = mode in ("safe60", "safe30", "safe720")
-    width = 720 if mode == "safe720" else 1080
+    lite = mode == "safe30"
+    strict = mode in ("safe60", "safe30")
     """Копія під вимоги Instagram Reels: H.264 High, yuv420p, ≤1080 по ширині (для 9:16 — 1080×1920),
     та сама частота кадрів, до 20 Мбіт/с, AAC 128 кбіт/с 48 кГц, faststart. Оригінал не змінюється."""
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
     target = float((cfg.get("platforms") or {}).get("instagram", {}).get("copy_target_mb") or IG_TARGET_MB)
     key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2|t{IG_MAX_SECONDS}".encode()).hexdigest()[:10]
-    out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl', 'safe720': 'ig720'}.get(mode, 'ig') }.mp4"
+    out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl'}.get(mode, 'ig') }.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
     p = ig_probe(path, cfg["ffprobe"])
@@ -198,8 +197,7 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
         fps = 30
     fps_args = ["-r", "30", "-vsync", "cfr"] if lite or not 23 <= fps <= 60.5 else ["-vsync", "cfr"]
     g = int(round(min(max(fps, 23), 60) * 2))
-    vf = (f"scale='if(gt(iw,ih),min(iw,{width * 16 // 9}),min(iw,{width}))':-2:flags=lanczos,setsar=1,"
-          "format=yuv420p")
+    vf = "scale='if(gt(iw,ih),min(iw,1920),min(iw,1080))':-2:flags=lanczos,setsar=1,format=yuv420p"
     if is_hdr(p) and cfg.get("_ig_tonemap", True):   # HDR → SDR (Instagram HDR-Reels через API не приймає)
         vf = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,"
               "zscale=t=bt709:m=bt709:r=tv," + vf)
