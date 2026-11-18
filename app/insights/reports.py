@@ -211,7 +211,7 @@ def send_stats(app, item: dict) -> None:
         if r.get("status") != "ok" or p not in app.platforms:
             continue
         if p in META and not meta_stats_on(app):
-            if (app.cfg.get("stats") or {}).get("meta", True):
+            if meta_analytics(app):
                 return   # Instagram зараз публікує — статистику за добу знімемо трохи пізніше (stats_sent лишається 0)
             continue     # статистику Instagram/Facebook вимкнено
         try:
@@ -275,10 +275,15 @@ META_FRESH = 24 * 3600     # Instagram/Facebook: перегляди й лайк�
 META_MAX_AGE = 30 * DAY    # старші відео в Instagram/Facebook більше не опитуємо (лишається остання цифра з бази)
 
 
+def meta_analytics(app) -> bool:
+    """Аналітика Instagram/Facebook увімкнена в налаштуваннях (типово — ні: лише YouTube)."""
+    return bool((app.cfg.get("stats") or {}).get("meta_analytics", False))
+
+
 def meta_stats_on(app) -> bool:
-    """Чи можна зараз питати в Instagram/Facebook статистику: не вимкнено в налаштуваннях і ніщо не публікується
+    """Чи можна зараз питати в Instagram/Facebook статистику: увімкнено в налаштуваннях і ніщо не публікується
     в Instagram (під час завантаження й обробки Meta не турбуємо)."""
-    if not (app.cfg.get("stats") or {}).get("meta", True):
+    if not meta_analytics(app):
         return False
     try:
         from app.platforms import meta_graph
@@ -321,8 +326,8 @@ def collect(app, days: int = 8) -> dict:
     dry = bool(app.cfg.get("dry_run"))
     meta_ok = meta_stats_on(app)
     for key, plat in app.platforms.items():
-        if dry:
-            continue
+        if dry or (key in META and not meta_analytics(app)):
+            continue   # аналітика Instagram/Facebook вимкнена — їх узагалі немає в звітах
         prev = db.one("SELECT * FROM account_stats WHERE platform=? AND ts>? ORDER BY ts DESC LIMIT 1",
                       (key, 0 if key in META and not meta_ok else now - ACCOUNT_FRESH))
         if prev:   # свіжий знімок уже є — не витрачаємо запити (у Meta годинний ліміт на весь додаток)
@@ -350,6 +355,8 @@ def collect(app, days: int = 8) -> dict:
         title = _title(item)
         for key, res in item["results"].items():
             if res.get("status") != "ok" or key not in app.platforms or dry:
+                continue
+            if key in META and not meta_analytics(app):
                 continue
             if not recent and (not snapshot_due(db, item, key, now)
                                or (key in META and now - (item["posted_at"] or now) > META_MAX_AGE)):

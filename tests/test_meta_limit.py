@@ -115,6 +115,7 @@ class StatsLimitTest(FlowBase):
     def test_collect_reuses_fresh_and_stops_on_limit(self):
         from app.insights.reports import collect
         self.cfg["dry_run"] = False
+        self.cfg["stats"] = {"meta_analytics": True}   # тест саме про статистику Meta
 
         class P:
             calls = 0
@@ -180,6 +181,7 @@ class GoneStatsTest(FlowBase):
         from app.insights.reports import collect
         from app.core import config
         self.cfg["dry_run"] = False
+        self.cfg["stats"] = {"meta_analytics": True}   # тест саме про статистику Meta
 
         class P:
             calls = 0
@@ -476,3 +478,23 @@ class IgSendButtonTest(FlowBase):
         self.assertEqual(item["results"]["instagram"]["status"], "manual")
         self.assertTrue(any(s[0] == "video" and "Для Instagram" in s[1] for s in self.app.bot.tg.sent))
         self.assertNotIn("igsend", json.dumps(self.app.bot.retry_keyboard(it["id"])))
+
+
+class MetaAnalyticsOffTest(FlowBase):
+    def test_off_by_default_no_meta_requests(self):
+        from app.insights.reports import collect
+        self.cfg["dry_run"] = False
+        calls = []
+
+        class P:
+            def account_stats(self):
+                calls.append("acc")
+                return {"followers": 1}
+
+            def get_stats(self, r):
+                calls.append("post")
+                return {"views": 5}
+        self.app.platforms = {"instagram": P(), "facebook": P()}
+        out = collect(self.app)
+        self.assertEqual(calls, [])
+        self.assertEqual(out["accounts"], {})
