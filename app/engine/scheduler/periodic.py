@@ -108,7 +108,8 @@ class PeriodicMixin:
         if self.db.get("igwatch_kind") != "complex":   # старі перевірки були на чорному кадрі — перевірити заново
             self.db.set("igwatch_ts", 0)
             self.db.set("igwatch_kind", "complex")
-        if now - int(self.db.get("igwatch_ts") or 0) < 24 * 3600 or getattr(self, "_igwatch_busy", False):
+        # раз на 2 доби: кожна перевірка створює контейнер в Instagram — зайвий раз не турбуємо
+        if now - int(self.db.get("igwatch_ts") or 0) < 48 * 3600 or getattr(self, "_igwatch_busy", False):
             return
         if local_dt(self.cfg, now).hour < 11:   # удень, не вночі (і не під час ранкових слотів)
             return
@@ -139,11 +140,15 @@ class PeriodicMixin:
             return
         dt = local_dt(self.cfg, now)
         day = dt.strftime("%Y-%m-%d")
-        if self._health_started:
+        if not self._health_started:
+            self._health_started = True
+            # після перезапуску (оновлення!) — лише якщо давно не перевіряли: Meta не турбуємо зайвими запитами
+            if now - int(self.db.get("health_ts") or 0) < 12 * 3600:
+                return
+        else:
             if dt.strftime("%H:%M") < self.cfg["reports"]["health_check_time"] or self.db.get("health_day") == day:
                 return
             self.db.set("health_day", day)
-        self._health_started = True
 
         if getattr(self.app.publisher, "sync", False):
             self.health_check()

@@ -173,8 +173,9 @@ def link_manual(app, item: dict) -> dict:
     if r.get("status") != "ok" or r.get("id") or not plat or not hasattr(plat, "find_manual"):
         return item
     db = app.db
-    if db.get(f"iglinkfail:{item['id']}"):
+    if db.get(f"iglinkfail:{item['id']}") or now_ts() - int(db.get(f"iglink_ts:{item['id']}") or 0) < LINK_EVERY:
         return item
+    db.set(f"iglink_ts:{item['id']}", now_ts())
     since = r.get("sent_at") or item.get("posted_at") or r.get("published_at") or 0
     taken = {((it.get("results") or {}).get("instagram") or {}).get("id")
              for it in db.items("status='posted' AND posted_at>=?", (since - 7 * 86400,))}
@@ -209,7 +210,9 @@ def send_stats(app, item: dict) -> None:
         if r.get("status") != "ok" or p not in app.platforms:
             continue
         try:
-            st = {} if app.cfg.get("dry_run") else (app.platforms[p].get_stats(r) or {})
+            fresh = db.one("SELECT views, likes FROM post_stats WHERE item_id=? AND platform=? AND ts>? "
+                           "ORDER BY ts DESC LIMIT 1", (item["id"], p, now_ts() - 3 * 3600))
+            st = dict(fresh) if fresh else {} if app.cfg.get("dry_run") else (app.platforms[p].get_stats(r) or {})
             views[p] = st.get("views")
             if st.get("likes") is not None:
                 likes[p] = st["likes"]
@@ -258,8 +261,10 @@ def send_stats(app, item: dict) -> None:
 # Аналітика: підписники, перегляди, лайки по кожній платформі
 # ======================================================================
 DAY = 24 * 3600
-POST_FRESH = 6 * 3600      # статистика відео, знята менше ніж N тому, береться з бази (економія лімітів API)
-ACCOUNT_FRESH = 3600       # те саме для підписників акаунта
+# Instagram / Facebook не можна турбувати зайвими запитами (інакше проблеми з публікаціями) — свіже береться з бази
+POST_FRESH = 12 * 3600     # статистика відео, знята менше ніж N тому, береться з бази
+ACCOUNT_FRESH = 12 * 3600  # те саме для підписників акаунта
+LINK_EVERY = 6 * 3600      # пошук ручної публікації Instagram — не частіше
 
 
 def fmt_n(n) -> str:
