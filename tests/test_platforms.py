@@ -732,3 +732,22 @@ class InstagramTestVideoTest(InstagramDiagnosticTest):
         self.assertIn("обробка ✅", text)
         self.assertIn("не публікуємо", text)
         self.assertFalse([c for c in f.calls if "media_publish" in c[1]])    # нічого не опубліковано
+
+
+class YouTubeReauthReminderTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp())
+        from app.platforms.youtube import YouTube
+        self.yt = YouTube.__new__(YouTube)
+        self.yt.tokens_dir = self.tmp
+        self.yt.pcfg = {}
+
+    def test_reminder_on_day_six(self):
+        self.assertIsNone(self.yt.token_warning())                     # не знаємо, коли підключали — мовчимо
+        self.yt.authorized_file.write_text(str(int(time.time()) - 2 * 86400), encoding="utf-8")
+        self.assertIsNone(self.yt.token_warning())                     # 2-й день — рано
+        self.yt.authorized_file.write_text(str(int(time.time()) - 6 * 86400), encoding="utf-8")
+        self.assertIn("Авторизувати YouTube", self.yt.token_warning())
+        self.yt.pcfg = {"weekly_reauth_reminder": False}
+        self.assertIsNone(self.yt.token_warning())

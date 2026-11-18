@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 from .base import Platform, PublishError, TokenExpired
 
@@ -29,6 +30,28 @@ class YouTube(Platform):
         return self.tokens_dir / "youtube_token.json"
 
     # ---------- авторизація ----------
+    @property
+    def authorized_file(self):
+        return self.tokens_dir / "youtube_authorized_at.txt"
+
+    REAUTH_DAYS = 7   # проєкт Google у режимі «Testing»: Google відкликає доступ через 7 днів
+
+    def token_warning(self) -> str | None:
+        """Нагадування за день до того, як Google відкличе доступ (режим «Testing» — 7 днів).
+        Вимкнути (якщо проєкт Google опубліковано): platforms.youtube.weekly_reauth_reminder = false."""
+        if not self.pcfg.get("weekly_reauth_reminder", True):
+            return None
+        try:
+            since = int(self.authorized_file.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return None
+        left = self.REAUTH_DAYS * 86400 - (time.time() - since)
+        if left > 36 * 3600:
+            return None
+        when = time.strftime("%d.%m %H:%M", time.localtime(since + self.REAUTH_DAYS * 86400))
+        return ("⏳ YouTube скоро відключиться — Google відкликає доступ через 7 днів після підключення "
+                f"(приблизно {when}). Підключіть знову: панель → YouTube → «🔑 Авторизувати YouTube».")
+
     def authorize(self, on_url=None, timeout_s: int | None = None) -> None:
         """Вхід у Google. on_url(посилання) — показати посилання (якщо браузер сам не відкрився, напр. панель
         запущена у фоні); timeout_s — не чекати вічно."""
@@ -69,6 +92,7 @@ class YouTube(Platform):
             gflow.webbrowser = orig
         self.tokens_dir.mkdir(parents=True, exist_ok=True)
         self.token_file.write_text(creds.to_json(), encoding="utf-8")
+        self.authorized_file.write_text(str(int(time.time())), encoding="utf-8")   # для нагадування на 6-й день
         print(f"Токен YouTube збережено: {self.token_file}")
 
     def _creds(self):
