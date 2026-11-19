@@ -15,6 +15,7 @@ from app.core.config import now_ts
 from app.core.meta import PostMeta
 from app.core.meta import apply_always_hashtags
 from app.core.meta import load_meta
+from app.insights.containers import wait_text as ig_wait_text
 from app.telegram.api import TelegramError
 from pathlib import Path
 from .common import (
@@ -230,15 +231,8 @@ class CardsMixin:
             if r.get("status") == "skipped":
                 lines.append(f"{icon} {NAMES[p]} — ⏭ пропущено")
                 continue
-            if r.get("status") == "processing" and not r.get("method_name"):
-                mins = max(0, (now_ts() - int(r.get("since") or now_ts())) // 60)
-                lines.append(f"{icon} {NAMES[p]} — ⏳ Instagram ще обробляє відео ({mins} хв) — опублікую, щойно буде готово")
-                continue
             if r.get("status") == "processing":
-                left = max(0, (int(r.get("next_at") or 0) - now_ts() + 59) // 60)
-                how = f" ({r['method_name']})" if r.get("method_name") else ""
-                lines.append(f"{icon} {NAMES[p]} — ⏳ завантажено{how}, Instagram обробляє — перевірю"
-                             + (f" через {left} хв" if left else " зараз") + ", до того не турбую")
+                lines.append(f"{icon} {NAMES[p]} — {esc(ig_wait_text(r, now_ts()))}")
                 continue
             if r.get("status") == "ig_next":
                 lines.append(f"{icon} {NAMES[p]} — 🔄 пробую інший спосіб: {esc(r.get('note') or '')}")
@@ -345,6 +339,11 @@ class CardsMixin:
             return kb
         if item["status"] in ("failed", "posted"):
             det = [{"text": "🧾 Деталі", "callback_data": f"err:{item['id']}"}] if self.has_details(item) else []
+            ig = (item.get("results") or {}).get("instagram") or {}
+            if ig.get("status") == "processing" and ig.get("delay_told"):
+                # Meta довго обробляє: можна не чекати — тоді контейнер більше не відстежуємо (без дубля)
+                rows = [[{"text": "📱 Не чекати — надіслати мені для Instagram", "callback_data": f"igsend:{item['id']}"}]]
+                return {"inline_keyboard": rows + ([det] if det else [])}
             if self.failed_errors(item) or item["status"] == "failed":
                 if not self.db.get(f"ignored:{item['id']}"):
                     kb = self.retry_keyboard(item["id"])

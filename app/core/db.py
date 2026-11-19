@@ -112,7 +112,11 @@ CREATE TABLE IF NOT EXISTS history (
     upload_body  TEXT,
     container_id TEXT,
     container_status TEXT,
-    container_status_text TEXT
+    container_status_text TEXT,
+    category     TEXT,
+    polls        TEXT,
+    trace        TEXT,
+    audio        TEXT
 );
 CREATE INDEX IF NOT EXISTS history_idx ON history(item_id, platform, ts);
 
@@ -147,7 +151,9 @@ class DB:
                                     # історія публікацій: де саме зламалось і що відповів Instagram
                                     ("history", "stage", "TEXT"), ("history", "upload_body", "TEXT"),
                                     ("history", "container_id", "TEXT"), ("history", "container_status", "TEXT"),
-                                    ("history", "container_status_text", "TEXT")):
+                                    ("history", "container_status_text", "TEXT"),
+                                    ("history", "category", "TEXT"), ("history", "polls", "TEXT"),
+                                    ("history", "trace", "TEXT"), ("history", "audio", "TEXT")):
                 cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
                 if col not in cols:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")

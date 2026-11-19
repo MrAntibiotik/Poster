@@ -336,14 +336,16 @@ class Publisher:
                     "note": "Instagram через API не прийняв — надіслано вам у Telegram"}
         return {"status": "error", "attempts": attempts, "error": str(last)[:2000]}
 
-    def _hist(self, it: dict, plat, result: str, since=None, **kw) -> None:
-        """Запис фонової події Instagram в історію — зі станом контейнера (status_code / status) і етапом —
-        і підсумок у журнал контейнерів."""
+    def _hist(self, it: dict, plat, result: str, since=None, polls=None, **kw) -> None:
+        """Запис фонової події Instagram в історію — зі станом контейнера (status_code / status), етапом і ВСІЄЮ
+        історією перевірок — і підсумок у журнал контейнерів."""
         from app.insights import containers, history
         cd = history.container_details(plat)
-        history.record(self.app, it, "instagram", result, since, **{**cd, **kw})
         r = (it.get("results") or {}).get("instagram") or {}
         rec = dict(r.get("ig_report") or {})
+        all_polls = list(rec.get("polls") or []) + list(polls or r.get("polls") or [])
+        history.record(self.app, it, "instagram", result, since, polls=all_polls or None,
+                       method=r.get("method_name"), **{**cd, **kw})
         rec.update({"container": cd.get("container_id") or r.get("container") or rec.get("container"),
                     "item_id": it["id"],
                     "status_code": cd.get("container_status") or rec.get("status_code"),
@@ -353,6 +355,7 @@ class Publisher:
                                 "next_method": "не оброблено — наступний спосіб", "error": "помилка"}.get(result, result)})
         rec["error"] = containers.error_message(None, rec.get("status_code"), rec.get("status"),
                                                 kw.get("error")) or rec.get("error")
+        rec["polls"] = all_polls or None
         if rec.get("container"):
             try:
                 containers.report(self.app.cfg, rec)
@@ -573,7 +576,7 @@ class Publisher:
         if state in ("published", "already"):
             log.info("#%s instagram: %s %s", it["id"], "опубліковано" if state == "published"
                      else "контейнер уже був опублікований (без повтору)", res.get("url"))
-            self._hist(it, plat, "ok_background", since, url=res.get("url") or None, processing_s=age)
+            self._hist(it, plat, "ok_background", since, polls=polls, url=res.get("url") or None, processing_s=age)
             self._save_ig(it, {"status": "ok", "attempts": len(r.get("tried") or []) or 1, "published_at": now_ts(),
                                "id": res.get("id"), "url": res.get("url") or "", "container": cid, "polls": polls,
                                "note": r.get("method_name") or ""})
@@ -584,7 +587,8 @@ class Publisher:
             return "ok"
         if state in ("error", "expired"):
             why = f"{res.get('status_code')}: {res.get('status')}"
-            self._hist(it, plat, "next_method" if state == "error" else "error", since, error=why, processing_s=age)
+            self._hist(it, plat, "next_method" if state == "error" else "error", since, polls=polls, error=why,
+                       processing_s=age)
             self._save_ig(it, self._ig_after_failure(it, plat, {**r, "polls": polls}, state, why))
             return "failed"
         # waiting / unknown — той самий контейнер, нового НЕ створюємо

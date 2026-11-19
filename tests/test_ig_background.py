@@ -260,5 +260,21 @@ class SilentFlowTest(IgFlowBase):
         self.assertEqual(self.res(a)["status"], "ok")
 
 
+class DiagnosticsFlowTest(IgFlowBase):
+    def test_history_keeps_every_status_check_and_status_shows_container(self):
+        a, = self.publish("a")
+        self.later(20)
+        text = self.app.status_text()
+        self.assertIn("контейнер C1", text)                                 # «🕐 Статус»: що й скільки чекає
+        self.ig.status["C1"] = "FINISHED"
+        self.later(30)
+        import json
+        row = self.app.db.one("SELECT * FROM history WHERE item_id=? AND result='ok_background'", (a,))
+        polls = json.loads(row["polls"])
+        self.assertGreaterEqual(len(polls), 4)                             # усі перевірки, а не лише остання
+        self.assertEqual(polls[-1][1], "FINISHED")
+        self.assertEqual(row["category"], None)                               # опубліковано — проблеми немає
+
+
 if __name__ == "__main__":
     unittest.main()

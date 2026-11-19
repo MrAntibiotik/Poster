@@ -416,7 +416,16 @@ class Instagram(_MetaBase):
                 "error": containers.error_message(up.get("body"), code, status,
                                                   error or (fail or {}).get("info") if fail else error),
                 "processing_s": (st.get("обробка") or {}).get("seconds"), "method": d.get("variant"),
-                "outcome": outcome}
+                "outcome": outcome,
+                # повна діагностика: звук, коли створено контейнер, КОЖНА перевірка статусу, трасування Meta
+                "audio": (f"{p.get('acodec')} {p.get('akbps')} кбіт/с {p.get('arate')} Гц {p.get('channels')} кан."
+                          if p.get("acodec") else None),
+                "vfr": p.get("vfr"), "pix_fmt": p.get("pix_fmt"),
+                "container_created": d.get("container_created"), "upload_s": up.get("seconds"),
+                "upload_body": up.get("body"), "trace": up.get("trace") or None,
+                "polls": [list(x) for x in polls] or None,
+                "stages": [[s["stage"], s["ok"], s["seconds"], (s.get("info") or "")[:300]]
+                           for s in d.get("stages") or []] or None}
 
     # ---------------- Єдиний шлях публікації Reels (звичайний, «тихий» і фоновий) ----------------
     # Один активний контейнер — одне очікування. Новий контейнер (наступний спосіб) — ЛИШЕ після підтвердженої

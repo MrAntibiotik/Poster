@@ -210,5 +210,49 @@ class TestVideoTest(IgBase):
         self.assertEqual(self.count(f)["publishes"], 0)
 
 
+class DiagnosticsTest(IgBase):
+    def test_full_container_record(self):
+        up = Resp(None, 400, BODY400)
+        up.headers = {"x-fb-trace-id": "TRACE1", "x-fb-debug": "DBG1", "Authorization": "OAuth SECRET"}
+        f = self.http(meta_graph, self.routes([{"status_code": "IN_PROGRESS", "status": "In Progress"}] * 3
+                                              + [{"status_code": "ERROR", "status": "Error: code 2207026"}], upload=up))
+        ig = meta_graph.Instagram(self.cfg)
+        with self.assertRaises(ContainerFailed):
+            ig.publish(str(self.video), META)
+        from app.insights import containers
+        rec = containers.last(self.cfg, 1)[0]
+        self.assertEqual(rec["trace"], {"x-fb-trace-id": "TRACE1", "x-fb-debug": "DBG1"})   # без токенів
+        self.assertEqual([x[1] for x in rec["polls"]], ["IN_PROGRESS"] * 3 + ["ERROR"])     # уся історія
+        self.assertTrue(all(len(str(x[0])) >= 19 for x in rec["polls"]))                   # з часом кожної перевірки
+        self.assertTrue(rec["container_created"])
+        self.assertEqual(rec["upload_http"], 400)
+        self.assertIn("ProcessingFailedError", rec["error"])
+        self.assertTrue(rec["category"].startswith("2. завантаження"))
+        text = containers.fmt(rec)
+        self.assertIn("Status checks:", text)
+        self.assertIn("x-fb-trace-id=TRACE1", text)
+        self.assertNotIn("SECRET", str(rec))
+        self.assertEqual(self.count(f)["containers"], 1)
+
+    def test_categories(self):
+        from app.insights import containers as c
+        self.assertEqual(c.category({"outcome": "опубліковано"}), "")
+        self.assertTrue(c.category({"error": "Instagram: тривалість 16.0 хв — більше за 15 хв"}).startswith("1."))
+        self.assertTrue(c.category({"container": "C", "status_code": "ERROR",
+                                    "error": "Error: code 2207026"}).startswith("1."))
+        self.assertTrue(c.category({"container": "C", "upload_http": 400, "status_code": "IN_PROGRESS"}).startswith("2."))
+        self.assertTrue(c.category({"container": "C", "upload_http": 200, "status_code": "IN_PROGRESS",
+                                    "outcome": "обробляється"}).startswith("3."))
+        self.assertTrue(c.category({"container": "C", "error": "media_publish: (#9007)"}).startswith("4."))
+
+    def test_wait_text(self):
+        from app.insights import containers as c
+        t = c.wait_text({"container": "C9", "since": 0, "next_at": 600, "last_status": "IN_PROGRESS",
+                         "method_name": "копія під вимоги Reels"}, 3600)
+        self.assertIn("контейнер C9", t)
+        self.assertIn("60 хв", t)
+        self.assertIn("IN_PROGRESS", t)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -158,6 +158,13 @@ class App:
                            (now,))[:5]:
             busy = True
             out.append(f"• 🔁 повтор #{r['item_id']} — {fmt_when(self.cfg, r['slot_at'], now)}")
+        from app.insights.containers import wait_text
+        for it in self.db.items("status IN ('posted','publishing','failed') AND results LIKE '%\"processing\"%'",
+                                order="id"):
+            r = (it["results"] or {}).get("instagram") or {}
+            if r.get("status") == "processing" and r.get("container"):   # контейнери, які Meta ще обробляє
+                busy = True
+                out.append(f"• #{it['id']} {esc(Path(it['mp4']).stem)} — {esc(wait_text(r, now))}")
         if not busy:
             out.append("✅ Нічого не публікується")
         if until:

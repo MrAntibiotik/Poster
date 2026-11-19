@@ -16,7 +16,7 @@ log = logging.getLogger("history")
 COLUMNS = ("id", "ts", "item_id", "platform", "result", "file", "title", "duration", "width", "height", "fps",
            "vkbps", "size_mb", "sent_file", "sent_mb", "method", "upload_http", "upload_s", "processing_s",
            "total_s", "url", "error", "version", "stage", "upload_body", "container_id", "container_status",
-           "container_status_text")
+           "container_status_text", "category", "polls", "trace", "audio")
 
 STAGES = {"файл": "файл", "контейнер": "створення контейнера", "rupload": "rupload (завантаження)",
           "обробка": "обробка в Instagram", "публікація": "media_publish", "media_publish": "media_publish"}
@@ -93,6 +93,12 @@ def ig_details(plat) -> dict:
     if polls:
         out["container_status"] = polls[-1][1]
         out["container_status_text"] = polls[-1][2]
+        out["polls"] = [list(x) for x in polls]
+    if up.get("trace"):
+        out["trace"] = up["trace"]
+    p = d.get("probe_raw") or {}
+    if p.get("acodec"):
+        out["audio"] = f"{p['acodec']} {p.get('akbps')} кбіт/с {p.get('arate')} Гц {p.get('channels')} кан."
     if d.get("variant"):
         out["method"] = d["variant"]
     return out
@@ -118,7 +124,14 @@ def record(app, item: dict, platform: str, result: str, started: float | None = 
             row["total_s"] = round(now_ts() - started, 1)
         for k, v in fields.items():
             if v is not None and k in COLUMNS:
+                if k in ("polls", "trace"):
+                    v = json.dumps(v, ensure_ascii=False)[:20000]     # уся історія перевірок статусу
                 row[k] = str(v)[:4000] if k in ("error", "upload_body", "container_status_text") else v
+        if platform == "instagram" and "category" not in row:
+            from app.insights import containers
+            row["category"] = containers.category({
+                "outcome": RESULTS.get(result, result), "error": row.get("error"), "status_code": row.get("container_status"),
+                "upload_http": row.get("upload_http"), "container": row.get("container_id")}) or None
         cols = [c for c in COLUMNS if c in row and c != "id"]
         app.db.x(f"INSERT INTO history({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                  tuple(row[c] for c in cols))
@@ -165,7 +178,8 @@ def to_csv(app) -> bytes:
                 "ширина", "висота", "к/с", "відео, кбіт/с", "розмір, МБ", "надіслано файл", "надіслано, МБ",
                 "спосіб", "HTTP завантаження", "завантаження, с", "обробка, с", "усього, с", "посилання", "помилка",
                 "версія", "етап, де зламалось", "відповідь завантаження (debug_info)", "контейнер",
-                "status_code контейнера", "status контейнера"])
+                "status_code контейнера", "status контейнера", "де проблема", "усі перевірки статусу",
+                "трасування Meta (x-fb-trace-id / x-fb-debug)", "звук"])
     for r in rows:
         w.writerow([r["id"], local_dt(app.cfg, r["ts"]).strftime("%Y-%m-%d %H:%M"), r["item_id"],
                     NAMES.get(r["platform"], r["platform"]), r["result"], RESULTS.get(r["result"], ""),
@@ -173,7 +187,7 @@ def to_csv(app) -> bytes:
                     r["size_mb"], r["sent_file"], r["sent_mb"], r["method"], r["upload_http"], r["upload_s"],
                     r["processing_s"], r["total_s"], r["url"], r["error"], r["version"], r.get("stage"),
                     r.get("upload_body"), r.get("container_id"), r.get("container_status"),
-                    r.get("container_status_text")])
+                    r.get("container_status_text"), r.get("category"), r.get("polls"), r.get("trace"), r.get("audio")])
     return ("﻿" + buf.getvalue()).encode("utf-8")
 
 
