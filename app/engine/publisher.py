@@ -335,7 +335,36 @@ class Publisher:
                     self.sleep(pause)
         app.db.set(f"pubtry:{item['id']}:{key}", None)
         app.db.event(item["id"], "platform_error", {"platform": key, "error": str(last)[:2000]})
+        if key == "instagram" and self._ig_to_phone(item, meta, str(last)):
+            return {"status": "manual", "sent_at": now_ts(), "error": str(last)[:500],
+                    "note": "Instagram через API не прийняв — надіслано вам у Telegram"}
         return {"status": "error", "attempts": attempts, "error": str(last)[:2000]}
+
+    def _ig_to_phone_item(self, it: dict, why: str) -> bool:
+        """Те саме з фону: підпис беремо з json шортса."""
+        try:
+            meta = apply_always_hashtags(load_meta(it["json"], it["title_override"]), self.app.cfg)
+        except Exception:  # noqa: BLE001
+            return False
+        if not self._ig_to_phone(it, meta, why):
+            return False
+        self._save_ig(it, {"status": "manual", "sent_at": now_ts(), "error": why[:500],
+                           "note": "Instagram через API не прийняв — надіслано вам у Telegram"})
+        return True
+
+    def _ig_to_phone(self, item: dict, meta, why: str) -> bool:
+        """Instagram через API не прийняв — одразу повне відео вам у Telegram (platforms.instagram.fallback_manual)."""
+        app = self.app
+        if not (app.cfg["platforms"].get("instagram") or {}).get("fallback_manual", True) \
+                or not hasattr(app.bot, "instagram_manual") or app.cfg.get("dry_run"):
+            return False
+        try:
+            app.bot.instagram_manual(item["id"], meta)
+        except Exception as e:  # noqa: BLE001
+            log.warning("#%s Instagram вручну: не вдалося надіслати в Telegram: %s", item["id"], e)
+            return False
+        log.info("#%s instagram: через API не прийняв (%s) — відео надіслано вам у Telegram", item["id"], why[:120])
+        return True
 
     def _ig_too_long(self, item: dict, igc: dict) -> int:
         """Тривалість (с), якщо відео довше за platforms.instagram.auto_max_seconds (інакше 0)."""
@@ -403,6 +432,8 @@ class Publisher:
             err = (f"Instagram не прийняв відео жодним способом ({', '.join(r.get('tried') or [])}). "
                    f"Останнє: {why}. Опублікуйте з телефона («📱 Надіслати мені для Instagram») або повторіть пізніше.")
             log.warning("#%s instagram: %s", it["id"], err)
+            if self._ig_to_phone_item(it, err):
+                continue
             self._save_ig(it, {"status": "error", "attempts": len(r.get("tried") or []), "error": err})
             db.event(it["id"], "platform_error", {"platform": "instagram", "error": err})
             if hasattr(app.bot, "notify_failed"):
@@ -455,6 +486,8 @@ class Publisher:
             err = (f"Instagram так і не обробив відео ({mins} хв «In Progress») — контейнер завис. "
                    "Повторіть або опублікуйте з телефона («📱 Надіслати мені для Instagram»).")
             log.warning("#%s instagram: контейнер %s завис (%s хв) — більше не чекаю", it["id"], r.get("container"), mins)
+            if self._ig_to_phone_item(it, err):
+                return "error"
             self._save_ig(it, {"status": "error", "attempts": 1, "error": err})
             db.event(it["id"], "platform_error", {"platform": "instagram", "error": err})
             if hasattr(app.bot, "notify_failed"):

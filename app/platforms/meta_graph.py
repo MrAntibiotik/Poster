@@ -22,7 +22,9 @@ TOKEN_ERROR_CODES = {102, 190, 463, 467}
 RATE_LIMIT_CODES = {4, 17, 32, 613} | set(range(80001, 80015))
 LIMIT_FILE = Path(tempfile.gettempdir()) / "poster-meta-limit.json"   # спільний для всіх каналів (один додаток Meta)
 POLL_DELAYS = (10, 20, 40, 80)   # перевірки стану контейнера: затримка наростає, далі — раз на 80 с
-AFTER_400_WAIT = 10 * 60  # після «rupload 400» контейнер часто таки обробляється (як у робочих версіях 11–14.11)
+# Після «rupload 400» справжні шортси Instagram НЕ обробляє ніколи (#50×3, #54–#56, #63 — години «In Progress»),
+# а ті, що проходять, дають rupload 200. Тому після 400 — лише коротка перевірка (~3 хв), далі відмова
+# (Publisher надішле відео вам у Telegram), без години очікування й без блокування черги Instagram.
 INLINE_WAIT = 10 * 60     # стільки чекаємо обробки, тримаючи чергу; далі — у фоні (StillProcessing)
 CONTAINER_TTL = 23 * 3600  # контейнер Instagram живе 24 год — після цього чекати марно
 STATS_MAX_USAGE = 60      # статистику не знімаємо, якщо використано ≥ N% годинної квоти — бережемо для публікацій
@@ -577,10 +579,6 @@ class Instagram(_MetaBase):
             code = st.get("status_code")
             polls.append([int(time.time() - start), code, (st.get("status") or "")[:120]])
             self.report("Instagram обробляє відео")   # «живий»: остання перевірка щойно
-            if code == "IN_PROGRESS" and upload_error and deadline < start + AFTER_400_WAIT:
-                log.info("Instagram: попри помилку завантаження відео обробляється — чекаю до %s хв",
-                         AFTER_400_WAIT // 60)
-                deadline = start + AFTER_400_WAIT
             if code == "FINISHED":
                 if upload_error:
                     log.info("Instagram: попри помилку завантаження контейнер готовий — публікую")
@@ -592,7 +590,7 @@ class Instagram(_MetaBase):
                 reason = f"{st.get('status')}{ig_hint(st.get('status'))}"
                 raise PublishError(f"{upload_error} | стан контейнера: {reason}" if upload_error
                                    else f"Instagram відхилив відео: {reason}")
-            if time.time() > deadline and code == "IN_PROGRESS":
+            if time.time() > deadline and code == "IN_PROGRESS" and not upload_error:
                 # обробляється довго — не здаємось і не тримаємо чергу: далі чекаємо у фоні той самий контейнер
                 self._stage("обробка", True, time.time() - start, f"IN_PROGRESS після {len(polls)} перевірок — далі у фоні")
                 log.info("Instagram: контейнер %s обробляється понад %d хв — дочекаюсь у фоні й опублікую",

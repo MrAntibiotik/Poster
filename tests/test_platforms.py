@@ -217,12 +217,12 @@ class InstagramSpecTest(Base):
         self.assertEqual(len([c for c in f.calls if "rupload" in c[1] and c[0] == "POST"]), 1)
         self.assertNotIn("note", r)
 
-    def test_spurious_400_long_processing_waits(self):
-        """400 від rupload, а контейнер довго «In Progress» — чекаємо далі, а не здаємось через 3 хв."""
+    def test_400_quick_finish_still_publishes(self):
+        """400 від rupload, але контейнер готовий за ~2 хв (в межах короткої перевірки) — публікуємо."""
         self.media.ig_probe = lambda path, ffprobe="ffprobe": {}
         self.media.ig_problems = lambda p: []
         routes = self.routes(self.fail())
-        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 7
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 3
                      + [Resp({"status_code": "FINISHED"})])
         f = self.http(meta_graph, routes)
         clock = [1000.0]
@@ -233,7 +233,7 @@ class InstagramSpecTest(Base):
             r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         finally:
             meta_graph.time = orig
-        self.assertEqual(r["id"], "M1")  # 7 перевірок (10, 20, 40, 80… с) ≈ 6 хв обробки — дочекались
+        self.assertEqual(r["id"], "M1")  # 10 + 20 + 40 с — дочекались у межах ~3 хв
         self.assertEqual(len([c for c in f.calls if "rupload" in c[1] and c[0] == "POST"]), 1)  # той самий файл удруге не шлемо
 
     def test_processing_failed_retries_with_copy(self):
@@ -548,9 +548,20 @@ class InstagramDiagnosticTest(Base):
         self.assertEqual(len([c for c in f.calls if c[0] == "POST" and "rupload" in c[1]]), 1)
         self.assertFalse([c for c in f.calls if c[0] == "GET"])
 
-    def test_long_processing_goes_to_background(self):
-        # обробка довша за INLINE_WAIT — не помилка: StillProcessing з тим самим контейнером, без нового завантаження
+    def test_400_stuck_gives_up_quickly(self):
+        # після rupload 400 справжні шортси не обробляються — коротка перевірка й відмова, без фону
         routes = self.routes(self.fail400())
+        routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 50)
+        f = self.http(meta_graph, routes)
+        self.fake_time()
+        with self.assertRaises(meta_graph.PublishError) as cm:
+            meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertNotIsInstance(cm.exception, meta_graph.StillProcessing)
+        self.assertLessEqual(len([c for c in f.calls if c[0] == "GET" and c[1].endswith("/C1")]), 8)   # ~3 хв, не година
+
+    def test_long_processing_goes_to_background(self):
+        # rupload ✅, а обробка довша за INLINE_WAIT — StillProcessing з тим самим контейнером, без нового завантаження
+        routes = self.routes(Resp({"success": True}))
         routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 50)
         f = self.http(meta_graph, routes)
         self.fake_time()
@@ -660,15 +671,16 @@ class InstagramChunk206Test(InstagramDiagnosticTest):
         self.assertEqual(len(ups), 4)                                     # усі частини, а не лише перша
         self.assertEqual(b"".join(u[2]["data"] for u in ups), b"x" * 2048)
 
-    def test_incomplete_on_server_still_waits(self):
+    def test_incomplete_on_server_gives_up(self):
         self.cfg["platforms"]["instagram"]["upload_chunk_mb"] = 512 / 1048576
         routes = self.routes([Resp({"success": True}, 206)] * 3 + [Resp({"success": True}, 200)])
         routes[3] = ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS"})] * 50)
         f = self.http(meta_graph, routes)
         f.rupload_status = {"offset": 512}
         self.fake_time()
-        with self.assertRaises(meta_graph.StillProcessing):   # обробляється довго — далі у фоні, не помилка
+        with self.assertRaises(meta_graph.PublishError) as cm:   # файл дійшов не повністю — відмова, не фон
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertNotIsInstance(cm.exception, meta_graph.StillProcessing)
         self.assertTrue([c for c in f.calls if c[0] == "GET" and c[1].endswith("/C1") and "rupload" not in c[1]])
 
 

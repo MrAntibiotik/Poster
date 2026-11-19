@@ -202,6 +202,21 @@ class IgPollTest(IgWaitTest):
             a, = self.publish("a")
         self.assertEqual(self.res(a)["status"], "ok")
 
+    def test_rejected_goes_to_telegram_and_queue_moves(self):
+        sent = []
+        self.app.bot.instagram_manual = lambda item_id, meta: sent.append(item_id)
+
+        def reject(path, meta):
+            self.ig.uploads.append(("X", "publish"))
+            raise PublishError("Graph API HTTP 400: ProcessingFailedError | стан контейнера: In Progress")
+        self.ig.publish = reject
+        a, = self.publish("a")
+        self.assertEqual(sent, [a])
+        r = self.res(a)
+        self.assertEqual(r["status"], "manual")
+        self.assertIn("надіслано вам у Telegram", r["note"])
+        self.assertEqual(len(self.ig.uploads), 1)              # без повторних завантажень
+
     # тести тихого способу тут не потрібні
     test_silent_wait_then_one_check = test_next_method_after_20_min = test_next_method_blocks_others = None
     test_one_at_a_time_queue_goes_on = test_card_text = test_survives_restart = None
