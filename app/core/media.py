@@ -187,7 +187,7 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
     target = float((cfg.get("platforms") or {}).get("instagram", {}).get("copy_target_mb") or IG_TARGET_MB)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2|t{IG_MAX_SECONDS}".encode()).hexdigest()[:10]
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr3|t{IG_MAX_SECONDS}".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl'}.get(mode, 'ig') }.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
@@ -214,7 +214,8 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
             "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", *rate, "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
             # завжди позначки SDR BT.709: без них (або з BT.2020/PQ від джерела) Instagram відкидає відео
             "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-tag:v", "avc1",
+            # звук ≤128 кбіт/с (вимога Instagram): з «128k» кодер AAC давав 130–131 — тому 112k
+            "-c:a", "aac", "-b:a", "112k", "-ar", "48000", "-ac", "2", "-tag:v", "avc1",
             "-movflags", "+faststart", str(out)]
     log.info("Готую копію для Instagram (%s): %s%s", mode or "під вимоги", path,
              " — HDR → SDR" if is_hdr(p) else "")
