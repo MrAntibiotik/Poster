@@ -14,6 +14,10 @@ from app.platforms import PublishError  # noqa: E402
 from tests.test_flow import FlowBase  # noqa: E402
 
 
+BODY = ('{"debug_info":{"retriable":false,"type":"ProcessingFailedError",'
+        '"message":"Request processing failed"}}')
+
+
 class Ok:
     def publish(self, path, meta):
         return {"id": "y1", "url": "https://yt/1"}
@@ -34,8 +38,12 @@ class IGBad:
     diag = None
 
     def publish(self, path, meta):
-        self.diag = {"file": "x_ig.mp4", "size_mb": 44, "rupload": {"http": 400},
-                     "stages": [{"stage": "rupload", "ok": False, "seconds": 35}]}
+        self.diag = {"file": "x_ig.mp4", "size_mb": 44, "container": "C9",
+                     "rupload": {"http": 400, "body": BODY},
+                     "polls": [[10, "IN_PROGRESS", "In Progress"], [30, "IN_PROGRESS", "Media is still being processed."]],
+                     "stages": [{"stage": "контейнер", "ok": True, "seconds": 1},
+                                {"stage": "rupload", "ok": False, "seconds": 35},
+                                {"stage": "обробка", "ok": False, "seconds": 180}]}
         raise PublishError("Graph API HTTP 400: ProcessingFailedError")
 
 
@@ -75,6 +83,12 @@ class HistoryTest(FlowBase):
         self.assertEqual(r["instagram"]["result"], "manual_rejected")
         self.assertEqual(r["instagram"]["upload_http"], 400)
         self.assertIn("ProcessingFailed", r["instagram"]["error"])
+        ig = r["instagram"]
+        self.assertEqual(ig["stage"], "rupload (завантаження)")            # де зламалось
+        self.assertEqual(ig["upload_body"], BODY)                           # повний debug_info
+        self.assertEqual((ig["container_id"], ig["container_status"]), ("C9", "IN_PROGRESS"))
+        self.assertEqual(ig["container_status_text"], "Media is still being processed.")
+        self.assertEqual((ig["duration"], ig["size_mb"]), (50.0, 140))
 
         c = self.publish("c", 59.0)
         self.assertEqual(self.rows(c)["instagram"]["result"], "manual_long")
@@ -82,10 +96,22 @@ class HistoryTest(FlowBase):
         csv_text = history.to_csv(self.app).decode("utf-8-sig")
         self.assertIn("manual_rejected", csv_text)
         self.assertIn("52.0", csv_text)
+        self.assertIn("Request processing failed", csv_text)
         s = history.summary(self.app)
         self.assertIn("46–55 с: 1 з 2 пройшло", s)
         self.assertIn("HTTP 200: 1 з 1", s)
         self.assertIn("HTTP 400: 0 з 1", s)
+        self.assertIn("rupload (завантаження) — 1", s)
+        self.assertIn("IN_PROGRESS — 1", s)
+
+
+class ContainerDetailsTest(unittest.TestCase):
+    def test_media_publish_stage(self):
+        plat = type("P", (), {"last_container": {"container_id": "C1", "container_status": "FINISHED",
+                                                 "container_status_text": "Finished", "stage": "media_publish"}})()
+        d = history.container_details(plat)
+        self.assertEqual(d["stage"], "media_publish")
+        self.assertEqual(d["container_status"], "FINISHED")
 
 
 if __name__ == "__main__":

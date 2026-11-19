@@ -365,6 +365,11 @@ class Publisher:
                     "note": "Instagram через API не прийняв — надіслано вам у Telegram"}
         return {"status": "error", "attempts": attempts, "error": str(last)[:2000]}
 
+    def _hist(self, it: dict, plat, result: str, since=None, **kw) -> None:
+        """Запис фонової події Instagram в історію — зі станом контейнера (status_code / status) і етапом."""
+        from app.insights import history
+        history.record(self.app, it, "instagram", result, since, **{**history.container_details(plat), **kw})
+
     def _ig_to_phone_item(self, it: dict, why: str) -> bool:
         """Те саме з фону: підпис беремо з json шортса."""
         from app.insights import history
@@ -437,9 +442,8 @@ class Publisher:
                 return
             except Exception as e:  # noqa: BLE001
                 got, why = None, str(e)[:300]
-            from app.insights import history
             if got:
-                history.record(app, it, "instagram", "ok_background", r.get("since"), url=got.get("url"),
+                self._hist(it, plat, "ok_background", r.get("since"), url=got.get("url"),
                                method=r.get("method_name"), processing_s=now - int(r.get("since") or now))
                 log.info("#%s instagram: опубліковано (%s) %s", it["id"], r.get("method_name"), got.get("url"))
                 self._save_ig(it, {"status": "ok", "attempts": len(r.get("tried") or [1]), "published_at": now_ts(),
@@ -450,7 +454,7 @@ class Publisher:
                     app.bot.drop_failed_card(it["id"])
                 continue
             why = why or f"за {(now - int(r.get('since') or now)) // 60} хв не оброблено"
-            history.record(app, it, "instagram", "next_method", r.get("since"), method=r.get("method_name"),
+            self._hist(it, plat, "next_method", r.get("since"), method=r.get("method_name"),
                            error=why, processing_s=now - int(r.get("since") or now))
             nxt = int(r.get("method") or 0) + 1
             methods = getattr(plat, "METHODS", ())
@@ -500,17 +504,15 @@ class Publisher:
             return "limit"
         except Exception as e:  # noqa: BLE001
             log.warning("#%s instagram: фонова обробка не вдалася: %s", it["id"], e)
-            from app.insights import history
-            history.record(app, it, "instagram", "error", r.get("since"), error=str(e))
+            self._hist(it, plat, "error", r.get("since"), error=str(e))
             self._save_ig(it, {"status": "error", "attempts": 1, "error": str(e)[:500]})
             db.event(it["id"], "platform_error", {"platform": "instagram", "error": str(e)[:2000]})
             if hasattr(app.bot, "notify_failed"):
                 app.bot.notify_failed(it["id"])
             return "error"
         mins = (now - int(r.get("since") or now)) // 60
-        from app.insights import history
         if got:
-            history.record(app, it, "instagram", "ok_background", r.get("since"), url=got.get("url"),
+            self._hist(it, plat, "ok_background", r.get("since"), url=got.get("url"),
                            processing_s=now - int(r.get("since") or now))
             log.info("#%s instagram: опубліковано після фонової обробки %s", it["id"], got.get("url"))
             self._save_ig(it, {"status": "ok", "attempts": 1, "published_at": now_ts(), **got,
@@ -524,7 +526,7 @@ class Publisher:
             err = (f"Instagram так і не обробив відео ({mins} хв «In Progress») — контейнер завис. "
                    "Повторіть або опублікуйте з телефона («📱 Надіслати мені для Instagram»).")
             log.warning("#%s instagram: контейнер %s завис (%s хв) — більше не чекаю", it["id"], r.get("container"), mins)
-            history.record(app, it, "instagram", "stuck", r.get("since"), error=err,
+            self._hist(it, plat, "stuck", r.get("since"), error=err,
                            processing_s=now - int(r.get("since") or now))
             if self._ig_to_phone_item(it, err):
                 return "error"

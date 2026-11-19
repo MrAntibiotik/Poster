@@ -252,7 +252,7 @@ class Graph:
         hdr = getattr(last, "headers", None) or {}
         self.last_upload.update(
             seconds=round(sec, 1), http=getattr(last, "status_code", None), mbps=round(size * 8 / sec / 1e6, 1),
-            body=(getattr(last, "text", "") or "")[:400], sent=offset if chunk else size,
+            body=(getattr(last, "text", "") or "")[:4000], sent=offset if chunk else size,   # повний debug_info
             trace={k: hdr.get(k) for k in ("x-fb-trace-id", "x-fb-rev", "x-fb-debug") if hdr.get(k)})
         return self._check(last)
 
@@ -771,7 +771,8 @@ class Instagram(_MetaBase):
                 note = short_error(e)[:120]
                 log.info("Instagram rupload: %s — це ще не відмова, перевірю результат пізніше", note)
             up = getattr(g, "last_upload", {}) or {}
-            self.diag["rupload"] = {"http": up.get("http")}
+            self.diag["rupload"] = {"http": up.get("http"), "body": up.get("body")}
+            self.diag["container"] = cid
             self.diag["stages"].append({"stage": "rupload", "ok": not note, "seconds": round(time.time() - t0, 1)})
             return {"container": cid, "method": method, "method_name": name, "upload_note": note,
                     "file_mb": round(size, 1)}
@@ -785,13 +786,21 @@ class Instagram(_MetaBase):
         g = self._g()
         st = g.get(cid, fields="status_code,status")
         code = st.get("status_code")
+        # для історії публікацій: що саме відповів Instagram і на якому етапі
+        self.last_container = {"container_id": cid, "container_status": code,
+                               "container_status_text": (st.get("status") or "")[:1000], "stage": "обробка"}
         if code in ("ERROR", "EXPIRED"):
             raise PublishError(f"Instagram відхилив відео під час обробки: {st.get('status')}{ig_hint(st.get('status'))}")
         if code == "PUBLISHED":
             raise PublishError("контейнер уже опубліковано раніше — перевірте профіль Instagram")
         if code != "FINISHED":
             return None
-        mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
+        self.last_container["stage"] = "media_publish"
+        try:
+            mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
+        except PublishError as e:
+            raise PublishError(f"media_publish: {e}") from e
+        self.last_container["stage"] = ""
         out = {"id": mid, "url": ""}
         try:
             out["url"] = g.get(mid, fields="permalink").get("permalink", "")

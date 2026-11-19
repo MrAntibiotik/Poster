@@ -107,7 +107,12 @@ CREATE TABLE IF NOT EXISTS history (
     total_s      REAL,
     url          TEXT,
     error        TEXT,
-    version      TEXT
+    version      TEXT,
+    stage        TEXT,
+    upload_body  TEXT,
+    container_id TEXT,
+    container_status TEXT,
+    container_status_text TEXT
 );
 CREATE INDEX IF NOT EXISTS history_idx ON history(item_id, platform, ts);
 
@@ -138,7 +143,11 @@ class DB:
             self.conn.execute("CREATE INDEX IF NOT EXISTS items_fp ON items(fp)")
             # нові колонки в старих базах: тип відео (short / highlight) і «доріжка» слоту
             for table, col, ddl in (("items", "kind", "TEXT NOT NULL DEFAULT 'short'"),
-                                    ("slots", "lane", "TEXT NOT NULL DEFAULT 'short'")):
+                                    ("slots", "lane", "TEXT NOT NULL DEFAULT 'short'"),
+                                    # історія публікацій: де саме зламалось і що відповів Instagram
+                                    ("history", "stage", "TEXT"), ("history", "upload_body", "TEXT"),
+                                    ("history", "container_id", "TEXT"), ("history", "container_status", "TEXT"),
+                                    ("history", "container_status_text", "TEXT")):
                 cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
                 if col not in cols:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")

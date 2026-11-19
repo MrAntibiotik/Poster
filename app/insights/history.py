@@ -15,7 +15,11 @@ log = logging.getLogger("history")
 
 COLUMNS = ("id", "ts", "item_id", "platform", "result", "file", "title", "duration", "width", "height", "fps",
            "vkbps", "size_mb", "sent_file", "sent_mb", "method", "upload_http", "upload_s", "processing_s",
-           "total_s", "url", "error", "version")
+           "total_s", "url", "error", "version", "stage", "upload_body", "container_id", "container_status",
+           "container_status_text")
+
+STAGES = {"файл": "файл", "контейнер": "створення контейнера", "rupload": "rupload (завантаження)",
+          "обробка": "обробка в Instagram", "публікація": "media_publish", "media_publish": "media_publish"}
 
 RESULTS = {   # що означає result
     "ok": "опубліковано",
@@ -65,7 +69,8 @@ def _title(item: dict) -> str:
 
 
 def ig_details(plat) -> dict:
-    """Що відбувалося в Instagram (з діагностики останньої спроби): файл, спосіб, HTTP завантаження, час."""
+    """Що відбувалося в Instagram (з діагностики останньої спроби): файл, спосіб, HTTP і повна відповідь
+    завантаження (debug_info), стан контейнера (status_code / status), на якому етапі зламалось."""
     d = getattr(plat, "diag", None) or {}
     out = {}
     if d.get("file"):
@@ -78,9 +83,29 @@ def ig_details(plat) -> dict:
             out["upload_http"] = up.get("http") or (200 if st.get("ok") else None)
         if st.get("stage") == "обробка":
             out["processing_s"] = st.get("seconds")
+        if not st.get("ok") and "stage" not in out:
+            out["stage"] = STAGES.get(st.get("stage"), st.get("stage"))
+    if up.get("body"):
+        out["upload_body"] = up["body"]
+    if d.get("container"):
+        out["container_id"] = d["container"]
+    polls = d.get("polls") or []
+    if polls:
+        out["container_status"] = polls[-1][1]
+        out["container_status_text"] = polls[-1][2]
     if d.get("variant"):
         out["method"] = d["variant"]
     return out
+
+
+def container_details(plat) -> dict:
+    """Стан контейнера з останньої фонової перевірки (finish_container)."""
+    c = dict(getattr(plat, "last_container", None) or {})
+    if c.get("stage"):
+        c["stage"] = STAGES.get(c["stage"], c["stage"])
+    else:
+        c.pop("stage", None)
+    return c
 
 
 def record(app, item: dict, platform: str, result: str, started: float | None = None, **fields) -> None:
@@ -93,7 +118,7 @@ def record(app, item: dict, platform: str, result: str, started: float | None = 
             row["total_s"] = round(now_ts() - started, 1)
         for k, v in fields.items():
             if v is not None and k in COLUMNS:
-                row[k] = str(v)[:1000] if k == "error" else v
+                row[k] = str(v)[:4000] if k in ("error", "upload_body", "container_status_text") else v
         cols = [c for c in COLUMNS if c in row and c != "id"]
         app.db.x(f"INSERT INTO history({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                  tuple(row[c] for c in cols))
@@ -139,13 +164,16 @@ def to_csv(app) -> bytes:
     w.writerow(["№", "дата", "шортс", "платформа", "результат", "пояснення", "файл", "назва", "тривалість, с",
                 "ширина", "висота", "к/с", "відео, кбіт/с", "розмір, МБ", "надіслано файл", "надіслано, МБ",
                 "спосіб", "HTTP завантаження", "завантаження, с", "обробка, с", "усього, с", "посилання", "помилка",
-                "версія"])
+                "версія", "етап, де зламалось", "відповідь завантаження (debug_info)", "контейнер",
+                "status_code контейнера", "status контейнера"])
     for r in rows:
         w.writerow([r["id"], local_dt(app.cfg, r["ts"]).strftime("%Y-%m-%d %H:%M"), r["item_id"],
                     NAMES.get(r["platform"], r["platform"]), r["result"], RESULTS.get(r["result"], ""),
                     r["file"], r["title"], r["duration"], r["width"], r["height"], r["fps"], r["vkbps"],
                     r["size_mb"], r["sent_file"], r["sent_mb"], r["method"], r["upload_http"], r["upload_s"],
-                    r["processing_s"], r["total_s"], r["url"], r["error"], r["version"]])
+                    r["processing_s"], r["total_s"], r["url"], r["error"], r["version"], r.get("stage"),
+                    r.get("upload_body"), r.get("container_id"), r.get("container_status"),
+                    r.get("container_status_text")])
     return ("﻿" + buf.getvalue()).encode("utf-8")
 
 
@@ -180,5 +208,13 @@ def summary(app) -> str:
         if codes:
             lines.append("📤 Відповідь завантаження → опубліковано: "
                          + ", ".join(f"HTTP {k}: {v[1]} з {v[0]}" for k, v in sorted(codes.items())))
+    stages = db.q("SELECT stage, COUNT(*) AS n FROM history WHERE platform='instagram' AND stage IS NOT NULL "
+                  "AND stage<>'' GROUP BY stage ORDER BY n DESC")
+    if stages:
+        lines.append("🧩 Де зламалось: " + ", ".join(f"{esc(r['stage'])} — {r['n']}" for r in stages))
+    st = db.q("SELECT container_status, COUNT(*) AS n FROM history WHERE platform='instagram' "
+              "AND container_status IS NOT NULL GROUP BY container_status ORDER BY n DESC")
+    if st:
+        lines.append("📦 Стан контейнера: " + ", ".join(f"{esc(str(r['container_status']))} — {r['n']}" for r in st))
     lines.append("\nПовна таблиця — файлом нижче (відкривається в Excel).")
     return "\n".join(lines)
