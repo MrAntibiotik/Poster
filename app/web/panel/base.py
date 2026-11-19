@@ -58,7 +58,7 @@ class BaseMixin:
                 msg = fn(*args)
                 self.jobs[name] = {"state": "ok", "message": msg or "Готово", "finished": now_ts()}
             except Exception as e:  # noqa: BLE001
-                log.exception("Задача %s", name)
+                log.exception("Задача %s не вдалася: %s", name, str(e)[:300])
                 self.jobs[name] = {"state": "error", "message": str(e), "finished": now_ts()}
         threading.Thread(target=run, daemon=True, name=f"job-{name}").start()
 

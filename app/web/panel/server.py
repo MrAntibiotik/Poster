@@ -231,7 +231,8 @@ def make_handler(panel: Panel):
                     return self.json({"message": "Панель закрито"})
                 return self.json({"error": "Not found"}, 404)
             except (ValueError, KeyError, TypeError) as e:
-                log.warning("Панель: %s %s — помилка: %s", path, data.get("name") or "", e)
+                (log.info if "Уже виконується" in str(e) else log.warning)(   # повторне натискання — не помилка
+                    "Панель: %s %s — помилка: %s", path, data.get("name") or "", e)
                 return self.json({"error": str(e)}, 400)
             except PublishError as e:   # зрозуміла помилка платформи (напр. Meta не обміняла токен) — без трасування
                 log.warning("Панель: %s — %s", path, e)
