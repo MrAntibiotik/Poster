@@ -219,6 +219,31 @@ class Publisher:
         log.info("#%s: успішно %s, помилки %s", item_id, ok, failed)
 
     def _publish_one(self, key: str, item: dict, meta) -> dict:
+        """Публікація на одну платформу + запис спроби в історію публікацій (для аналізу)."""
+        started = now_ts()
+        plat = self.app.platforms.get(key)
+        if plat is not None:
+            try:
+                plat.diag = None          # деталі Instagram — лише цієї спроби
+            except AttributeError:
+                pass
+        res = self._publish_one_raw(key, item, meta)
+        if res is not None and res.get("status") != "ig_wait":
+            st = res.get("status")
+            note = str(res.get("note") or "")
+            kind = {"ok": "ok", "processing": "processing"}.get(st)
+            if st == "manual":
+                kind = "manual_long" if "довше" in note else "manual_rejected" if "не прийняв" in note else "manual"
+            elif st == "error":
+                kind = "auth" if res.get("reauth") else "limited" if res.get("retry_at") else "error"
+            from app.insights import history
+            extra = history.ig_details(plat) if key == "instagram" else {}
+            history.record(self.app, item, key, kind or str(st), started, url=res.get("url") or None,
+                           error=res.get("error"), method=res.get("method_name") or extra.pop("method", None),
+                           **extra)
+        return res
+
+    def _publish_one_raw(self, key: str, item: dict, meta) -> dict:
         app = self.app
         igc = app.cfg["platforms"].get("instagram") or {}
         too_long = key == "instagram" and not igc.get("manual") and self._ig_too_long(item, igc)
@@ -342,6 +367,9 @@ class Publisher:
 
     def _ig_to_phone_item(self, it: dict, why: str) -> bool:
         """Те саме з фону: підпис беремо з json шортса."""
+        from app.insights import history
+        if (self.app.cfg["platforms"].get("instagram") or {}).get("fallback_manual", True):
+            history.record(self.app, it, "instagram", "manual_rejected", error=why)
         try:
             meta = apply_always_hashtags(load_meta(it["json"], it["title_override"]), self.app.cfg)
         except Exception:  # noqa: BLE001
@@ -409,7 +437,10 @@ class Publisher:
                 return
             except Exception as e:  # noqa: BLE001
                 got, why = None, str(e)[:300]
+            from app.insights import history
             if got:
+                history.record(app, it, "instagram", "ok_background", r.get("since"), url=got.get("url"),
+                               method=r.get("method_name"), processing_s=now - int(r.get("since") or now))
                 log.info("#%s instagram: опубліковано (%s) %s", it["id"], r.get("method_name"), got.get("url"))
                 self._save_ig(it, {"status": "ok", "attempts": len(r.get("tried") or [1]), "published_at": now_ts(),
                                    **got, "note": r.get("method_name") or ""})
@@ -419,6 +450,8 @@ class Publisher:
                     app.bot.drop_failed_card(it["id"])
                 continue
             why = why or f"за {(now - int(r.get('since') or now)) // 60} хв не оброблено"
+            history.record(app, it, "instagram", "next_method", r.get("since"), method=r.get("method_name"),
+                           error=why, processing_s=now - int(r.get("since") or now))
             nxt = int(r.get("method") or 0) + 1
             methods = getattr(plat, "METHODS", ())
             if nxt < len(methods):
@@ -467,13 +500,18 @@ class Publisher:
             return "limit"
         except Exception as e:  # noqa: BLE001
             log.warning("#%s instagram: фонова обробка не вдалася: %s", it["id"], e)
+            from app.insights import history
+            history.record(app, it, "instagram", "error", r.get("since"), error=str(e))
             self._save_ig(it, {"status": "error", "attempts": 1, "error": str(e)[:500]})
             db.event(it["id"], "platform_error", {"platform": "instagram", "error": str(e)[:2000]})
             if hasattr(app.bot, "notify_failed"):
                 app.bot.notify_failed(it["id"])
             return "error"
         mins = (now - int(r.get("since") or now)) // 60
+        from app.insights import history
         if got:
+            history.record(app, it, "instagram", "ok_background", r.get("since"), url=got.get("url"),
+                           processing_s=now - int(r.get("since") or now))
             log.info("#%s instagram: опубліковано після фонової обробки %s", it["id"], got.get("url"))
             self._save_ig(it, {"status": "ok", "attempts": 1, "published_at": now_ts(), **got,
                                "note": f"Instagram обробляв {max(1, mins)} хв"})
@@ -486,6 +524,8 @@ class Publisher:
             err = (f"Instagram так і не обробив відео ({mins} хв «In Progress») — контейнер завис. "
                    "Повторіть або опублікуйте з телефона («📱 Надіслати мені для Instagram»).")
             log.warning("#%s instagram: контейнер %s завис (%s хв) — більше не чекаю", it["id"], r.get("container"), mins)
+            history.record(app, it, "instagram", "stuck", r.get("since"), error=err,
+                           processing_s=now - int(r.get("since") or now))
             if self._ig_to_phone_item(it, err):
                 return "error"
             self._save_ig(it, {"status": "error", "attempts": 1, "error": err})

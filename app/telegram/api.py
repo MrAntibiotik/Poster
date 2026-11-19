@@ -100,6 +100,10 @@ class TelegramAPI:
                          caption=caption, parse_mode="HTML", reply_markup=reply_markup,
                          supports_streaming="true", width=width, height=height, duration=duration)
 
+    def send_document(self, chat_id, path, caption=""):
+        return self.call("sendDocument", files={"document": path}, http_timeout=300, chat_id=chat_id,
+                         caption=caption[:1024], parse_mode="HTML")
+
     def edit_caption(self, chat_id, message_id, caption, reply_markup=None):
         return self.call("editMessageCaption", chat_id=chat_id, message_id=message_id,
                          caption=caption, parse_mode="HTML",

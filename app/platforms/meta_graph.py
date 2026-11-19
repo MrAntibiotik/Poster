@@ -375,6 +375,7 @@ class Instagram(_MetaBase):
                 try:
                     if fname != "оригінал":
                         self.report("готую копію для Instagram")
+                    self._variant_name = fname
                     out = self._publish_file(get_file(), meta, token)
                 except StillProcessing:
                     raise   # файл дійшов, Instagram обробляє — дочекаємось у фоні; новий контейнер = дубль
@@ -501,7 +502,8 @@ class Instagram(_MetaBase):
         size = check["size"]
         self.diag = diag = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "file": Path(video_path).name,
                             "size_mb": round(size / 1048576, 1), "token": "користувача" if token else "сторінки",
-                            "stages": [], "file_check": {"size": check["size"], "md5": check["md5"]}}
+                            "stages": [], "file_check": {"size": check["size"], "md5": check["md5"]},
+                            "variant": getattr(self, "_variant_name", "")}
         try:
             from app.core import media
             diag["probe"] = media.ig_summary(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
@@ -759,6 +761,8 @@ class Instagram(_MetaBase):
             self.report(f"завантажую в Instagram ({name}, {size:.0f} МБ)")
             log.info("Instagram: контейнер %s, %s — завантажую %s (%.1f МБ)", cid, name, path, size)
             note = ""
+            self.diag = {"file": Path(path).name, "size_mb": round(size, 1), "variant": name, "stages": []}
+            t0 = time.time()
             try:
                 g.upload_binary(uri, path)
             except RateLimited:
@@ -766,6 +770,9 @@ class Instagram(_MetaBase):
             except PublishError as e:
                 note = short_error(e)[:120]
                 log.info("Instagram rupload: %s — це ще не відмова, перевірю результат пізніше", note)
+            up = getattr(g, "last_upload", {}) or {}
+            self.diag["rupload"] = {"http": up.get("http")}
+            self.diag["stages"].append({"stage": "rupload", "ok": not note, "seconds": round(time.time() - t0, 1)})
             return {"container": cid, "method": method, "method_name": name, "upload_note": note,
                     "file_mb": round(size, 1)}
         finally:

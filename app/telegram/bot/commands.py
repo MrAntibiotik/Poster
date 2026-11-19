@@ -151,6 +151,19 @@ class CommandsMixin:
             self.send("▶️ Розклад відновлено.", keyboard=True)
         elif cmd == "/clean":
             self.clean_chat(chat, latest=(self._last_incoming or {}).get(chat))
+        elif cmd == "/history":
+            if role != "admin":
+                return reply("⛔ Лише для адміністратора.", False)
+            from pathlib import Path as _P
+            from app.insights import history
+            history.backfill(app)
+            reply(history.summary(app))
+            out = _P(self.cfg["paths"]["data"]) / "історія_публікацій.csv"
+            out.write_bytes(history.to_csv(app))
+            try:
+                self.tg.send_document(chat, str(out), "🗂 Усі спроби публікацій (Excel: «Дані → З тексту/CSV» або просто відкрити)")
+            except Exception as e:  # noqa: BLE001
+                reply(f"Не вдалося надіслати файл: {esc(str(e)[:200])}. Він лежить тут: <code>{esc(str(out))}</code>")
         elif cmd == "/log":
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)

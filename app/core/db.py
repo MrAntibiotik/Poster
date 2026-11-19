@@ -83,6 +83,34 @@ CREATE TABLE IF NOT EXISTS account_stats (
 );
 CREATE INDEX IF NOT EXISTS account_stats_idx ON account_stats(platform, ts);
 
+-- історія публікацій: кожна спроба кожного відео на кожній платформі (для аналізу закономірностей)
+CREATE TABLE IF NOT EXISTS history (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts           INTEGER NOT NULL,
+    item_id      INTEGER,
+    platform     TEXT NOT NULL,
+    result       TEXT NOT NULL,
+    file         TEXT,
+    title        TEXT,
+    duration     REAL,
+    width        INTEGER,
+    height       INTEGER,
+    fps          REAL,
+    vkbps        INTEGER,
+    size_mb      REAL,
+    sent_file    TEXT,
+    sent_mb      REAL,
+    method       TEXT,
+    upload_http  INTEGER,
+    upload_s     REAL,
+    processing_s REAL,
+    total_s      REAL,
+    url          TEXT,
+    error        TEXT,
+    version      TEXT
+);
+CREATE INDEX IF NOT EXISTS history_idx ON history(item_id, platform, ts);
+
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT

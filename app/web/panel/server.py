@@ -98,6 +98,16 @@ def make_handler(panel: Panel):
                 except Exception as e:  # noqa: BLE001
                     log.exception("state")
                     return self.json({"error": str(e)}, 500)
+            if self.path == "/api/history.csv":
+                if not self.authed():
+                    return self.json({"error": "auth"}, 401)
+                from types import SimpleNamespace
+                from app.insights import history
+                app = SimpleNamespace(db=panel.db, cfg=panel.cfg)
+                history.backfill(app)
+                body = history.to_csv(app)
+                return self._send(200, body, "text/csv; charset=utf-8",
+                                  {"Content-Disposition": "attachment; filename=\"poster-history.csv\""})
             if self.path == "/api/versions":
                 if not self.authed():
                     return self.json({"error": "auth"}, 401)

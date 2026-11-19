@@ -53,6 +53,8 @@ class IgManualMixin:
                                 {"status": "skipped", "note": "Instagram пропущено вручну"})
         self.db.update_item(item_id, results=results)
         self.db.event(item_id, "instagram_manual", {"done": done, "by": chat})
+        from app.insights import history
+        history.record(self.app, item, "instagram", "manual_done" if done else "skipped")
         try:
             for cid, v, t in json.loads(self.db.get(f"igman:{item_id}") or "[]"):
                 self._delete(cid, [v, t])
