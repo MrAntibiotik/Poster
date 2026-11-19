@@ -222,6 +222,17 @@ def summary(app) -> str:
         if codes:
             lines.append("📤 Відповідь завантаження → опубліковано: "
                          + ", ".join(f"HTTP {k}: {v[1]} з {v[0]}" for k, v in sorted(codes.items())))
+    # по днях: чи проходили відео через API (без ручних/проміжних записів) — щоб побачити, КОЛИ почались відмови
+    days: dict[str, list[int]] = {}
+    for r in db.q("SELECT ts, result FROM history WHERE platform='instagram' AND result NOT IN "
+                  "('manual','manual_long','manual_done','skipped','processing','next_method') ORDER BY ts"):
+        d = local_dt(app.cfg, r["ts"]).strftime("%d.%m")
+        c = days.setdefault(d, [0, 0])
+        c[0] += 1
+        c[1] += r["result"] in ok
+    if days:
+        lines.append("📅 Instagram через API по днях (пройшло / спроб): "
+                     + ", ".join(f"{d} {v[1]}/{v[0]}" for d, v in list(days.items())[-14:]))
     stages = db.q("SELECT stage, COUNT(*) AS n FROM history WHERE platform='instagram' AND stage IS NOT NULL "
                   "AND stage<>'' GROUP BY stage ORDER BY n DESC")
     if stages:

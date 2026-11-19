@@ -100,6 +100,8 @@ class HistoryTest(FlowBase):
         s = history.summary(self.app)
         self.assertIn("46–55 с: 1 з 2 пройшло", s)
         self.assertIn("HTTP 200: 1 з 1", s)
+        self.assertIn("по днях", s)
+        self.assertIn("11.11 1/3", s)                                       # a — ok, b і c — відмова
         self.assertIn("HTTP 400: 0 з 2", s)   # b і c (обидва — IGBad)
         self.assertIn("rupload (завантаження) — 2", s)
         self.assertIn("IN_PROGRESS — 2", s)
