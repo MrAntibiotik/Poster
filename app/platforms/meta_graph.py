@@ -533,6 +533,12 @@ class Instagram(_MetaBase):
             Instagram.current = None
             Instagram._upload_lock.release()
 
+    def upload_offset(self, cid: str) -> int | None:
+        """ОДИН запит: скільки байтів відео Meta отримала для контейнера (None — невідомо)."""
+        g = self._g()
+        srv = g.upload_status(f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}")
+        return srv["offset"] if isinstance(srv.get("offset"), int) else None
+
     def poll_container(self, cid: str) -> dict:
         """ОДИН запит стану контейнера. {"state", "status_code", "status", "time"}; кожна перевірка — у діагностиці."""
         st = self._g().get(cid, fields="status_code,status")

@@ -316,5 +316,33 @@ class LostUploadTest(IgFlowBase):
         self.assertEqual(len(rows), 3)                                       # кожна втрата — в історії
 
 
+class LegacyLostTest(IgFlowBase):
+    def test_old_container_with_400_checked_once_and_retried(self):
+        a, = self.publish("a")
+        offsets = []
+        self.ig.upload_offset = lambda cid: offsets.append(cid) or 0
+        results = dict(self.app.db.get_item(a)["results"])     # як запис версії 170: без upload_lost, з HTTP 400
+        ig = {k: v for k, v in results["instagram"].items() if k != "upload_lost"}
+        ig["ig_report"] = {"upload_http": 400}
+        results["instagram"] = ig
+        self.app.db.update_item(a, results=results)
+        self.later(45)
+        self.assertEqual(offsets, ["C1"])                                  # один запит, не щоразу
+        self.assertEqual(self.res(a)["status"], "ig_next")                 # файл не дійшов → нове завантаження
+
+    def test_old_container_with_200_not_checked(self):
+        a, = self.publish("a")
+        offsets = []
+        self.ig.upload_offset = lambda cid: offsets.append(cid) or 0
+        results = dict(self.app.db.get_item(a)["results"])
+        ig = {k: v for k, v in results["instagram"].items() if k != "upload_lost"}
+        ig["ig_report"] = {"upload_http": 200}
+        results["instagram"] = ig
+        self.app.db.update_item(a, results=results)
+        self.later(90)
+        self.assertEqual(offsets, [])
+        self.assertEqual(self.res(a)["status"], "processing")
+
+
 if __name__ == "__main__":
     unittest.main()

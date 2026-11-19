@@ -647,6 +647,18 @@ class Publisher:
             return "failed"
         # waiting / unknown — той самий контейнер, нового НЕ створюємо…
         lost_after = 60 * int(self._ig_cfg().get("lost_retry_after_min", 30))
+        if "upload_lost" not in r and age >= lost_after:
+            # контейнер від попередньої версії (до перевірки «чи дійшов файл»): якщо завантаження було з помилкою —
+            # ОДИН раз питаємо, скільки байтів у Meta; 0 — файл не дійшов, далі як upload_lost
+            http = r.get("upload_http") or (r.get("ig_report") or {}).get("upload_http")
+            lost = False
+            if http and int(http) >= 400 and hasattr(plat, "upload_offset"):
+                try:
+                    lost = plat.upload_offset(cid) == 0
+                except Exception as e:  # noqa: BLE001
+                    log.info("#%s instagram: не вдалося перевірити, чи дійшов файл: %s", it["id"], e)
+            r = {**r, "upload_lost": lost}
+            self._save_ig(it, r)
         if r.get("upload_lost") and age >= lost_after:
             # …крім одного випадку: rupload 400 і на сервері Meta 0 байтів — файлу там немає, контейнер не оживе
             return self._ig_lost(it, r, plat, polls, res, age)
