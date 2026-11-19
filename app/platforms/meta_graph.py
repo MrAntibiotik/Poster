@@ -348,9 +348,12 @@ class Instagram(_MetaBase):
                                   cid, p["state"], p["status_code"], p["status"])
         # waiting / unknown: тайм-аут — це не помилка; той самий контейнер чекає у фоні
         self._stage("обробка", True, p.get("waited_s", 0), f"{p['status_code']} — далі у фоні")
-        log.info("Instagram: контейнер %s ще %s після %s с — чекаю у фоні той самий контейнер",
-                 cid, p["status_code"], p.get("waited_s"))
-        raise StillProcessing(f"Instagram ще обробляє відео (контейнер {cid}, {p['status_code']})", cid)
+        log.info("Instagram: контейнер %s ще %s після %s с — чекаю у фоні той самий контейнер%s",
+                 cid, p["status_code"], p.get("waited_s"),
+                 " (файл до Meta не дійшов — якщо не оживе, буде нове завантаження)" if up.get("upload_lost") else "")
+        e = StillProcessing(f"Instagram ще обробляє відео (контейнер {cid}, {p['status_code']})", cid)
+        e.upload_lost = bool(up.get("upload_lost"))
+        raise e
 
     current: str | None = None
 
@@ -512,10 +515,20 @@ class Instagram(_MetaBase):
             up = getattr(g, "last_upload", {}) or {}
             d["rupload"] = {"http": up.get("http"), "body": up.get("body"), "seconds": up.get("seconds"),
                             "mbps": up.get("mbps"), "trace": up.get("trace") or {}}
+            lost = False
+            if note:
+                # ОДИН запит: скільки байтів Meta реально має. 0 після 400 — файлу на сервері немає: такий контейнер
+                # опублікувати неможливо (за спостереженнями — висить «In Progress» годинами), а нове завантаження
+                # пізніше проходить (#54, #55, #63). Тоді Publisher через паузу вантажить відео наново — без ризику дубля.
+                srv = g.upload_status(uri)
+                d["rupload"]["after"] = srv
+                lost = isinstance(srv.get("offset"), int) and srv["offset"] == 0
+                d["upload_lost"] = lost
             if not _media.file_unchanged(path, check):
                 d["file_changed_during_upload"] = True
-            self._stage("rupload", not note, time.time() - t0, f"HTTP {up.get('http')}" + (f": {note}" if note else ""))
-            return {**rec, "upload_note": note, "upload_http": up.get("http")}
+            self._stage("rupload", not note, time.time() - t0, f"HTTP {up.get('http')}" + (f": {note}" if note else "")
+                        + ("; на сервері Meta 0 байтів" if lost else ""))
+            return {**rec, "upload_note": note, "upload_http": up.get("http"), "upload_lost": lost}
         finally:
             Instagram.current = None
             Instagram._upload_lock.release()

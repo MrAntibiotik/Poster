@@ -53,6 +53,10 @@ class FakeIG:
     def publish(self, path, meta, method=0, on_container=None):
         cid, rec = self._new(method, on_container)
         how = self.inline.get(cid, self.default_inline)
+        if how == "lost":
+            e = StillProcessing("файл не дійшов", cid)
+            e.upload_lost = True
+            raise e
         if how == "ok":
             self.publishes.append(cid)
             return {"id": "M" + cid, "url": f"https://ig/{cid}", **rec}
@@ -280,6 +284,36 @@ class DiagnosticsFlowTest(IgFlowBase):
         self.assertGreaterEqual(len(polls), 4)                             # усі перевірки, а не лише остання
         self.assertEqual(polls[-1][1], "FINISHED")
         self.assertEqual(row["category"], None)                               # опубліковано — проблеми немає
+
+
+class LostUploadTest(IgFlowBase):
+    def test_lost_upload_retried_later_and_published(self):
+        self.ig.inline["C1"] = "lost"
+        a, b = self.publish("a", "b")
+        self.later(36)
+        self.assertEqual(self.res(a)["status"], "processing")             # до 30 хв — чекаємо той самий
+        self.later(5)
+        r = self.res(a)
+        self.assertEqual((r["status"], r["lost_retries"]), ("ig_next", 1))   # файл не дійшов → нове завантаження пізніше
+        self.assertEqual(self.ig.uploads[1], ("C2", 0))                   # тим часом #b іде в Instagram (не блокує)
+        self.ig.inline["C2"] = "ok"                                       # (#b)
+        self.ig.status["C2"] = "FINISHED"
+        self.later(35)
+        self.assertEqual(self.ig.uploads[2], ("C3", 0))                    # #a — новим завантаженням, той самий спосіб
+        self.ig.status["C3"] = "FINISHED"
+        self.later(10)
+        self.assertEqual(self.res(a)["status"], "ok")
+        self.assertEqual(self.sent, [])
+
+    def test_lost_twice_then_telegram(self):
+        self.ig.default_inline = "lost"
+        a, = self.publish("a")
+        self.later(4 * 60)
+        self.assertEqual(len(self.ig.uploads), 3)                          # перше + 2 повторні, не більше
+        self.assertEqual(self.res(a)["status"], "manual")
+        self.assertEqual(self.sent, [a])
+        rows = self.app.db.q("SELECT result FROM history WHERE item_id=? AND result='lost_retry'", (a,))
+        self.assertEqual(len(rows), 3)                                       # кожна втрата — в історії
 
 
 if __name__ == "__main__":

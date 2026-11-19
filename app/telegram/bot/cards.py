@@ -235,7 +235,9 @@ class CardsMixin:
                 lines.append(f"{icon} {NAMES[p]} — {esc(ig_wait_text(r, now_ts()))}")
                 continue
             if r.get("status") == "ig_next":
-                lines.append(f"{icon} {NAMES[p]} — 🔄 пробую інший спосіб: {esc(r.get('note') or '')}")
+                when = int(r.get("not_before") or 0)
+                at = f" (о {local_dt(self.cfg, when).strftime('%H:%M')})" if when > now_ts() else ""
+                lines.append(f"{icon} {NAMES[p]} — 🔄 {esc(r.get('note') or 'пробую інший спосіб')}{at}")
                 continue
             if r.get("status") == "ig_wait":
                 lines.append(f"{icon} {NAMES[p]} — ⏳ чекає, поки Instagram обробить #{r.get('after')}")
