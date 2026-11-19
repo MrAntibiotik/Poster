@@ -130,11 +130,28 @@ class DurationTest(IgBase):
                 "trc": "", "primaries": "", "colorspace": "", "format": "mov,mp4,m4a,3gp,3g2,mj2", "size_mb": 0.002}
 
     def test_long_video_is_not_blocked(self):                           # 9
+        # довше 59,5 с: не блокується й не йде в Telegram — іде обрізана копія (оригінал не змінюється)
         self.probe = self.probe_of(75.0)
+        copy = self.tmp / "copy.mp4"
+        copy.write_bytes(b"c" * 100)
+        self.media.instagram_copy = lambda path, cfg, **kw: str(copy)
         f = self.http(meta_graph, self.routes([{"status_code": "FINISHED"}]))
         r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
-        self.assertEqual(r["method_name"], "оригінал")   # сумісний оригінал іде без перекодування й без обрізання
+        self.assertEqual(r["method_name"], "копія під вимоги Reels")
         self.assertEqual(self.count(f)["containers"], 1)
+
+    def test_compatible_short_original_goes_as_is(self):
+        self.probe = self.probe_of(52.0)
+        self.http(meta_graph, self.routes([{"status_code": "FINISHED"}]))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["method_name"], "оригінал")      # сумісний і не довший за 59,5 с — без перекодування
+
+    def test_no_trim_setting_allows_original(self):
+        self.cfg["platforms"]["instagram"]["max_seconds"] = 0
+        self.probe = self.probe_of(75.0)
+        self.http(meta_graph, self.routes([{"status_code": "FINISHED"}]))
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["method_name"], "оригінал")
 
     def test_outside_official_limits_no_container(self):
         for dur in (2.0, 16 * 60.0):
@@ -175,15 +192,22 @@ class CopyTest(unittest.TestCase):
         self.cfg = {"paths": {"data": str(self.tmp / "data")}, "ffmpeg": "ffmpeg", "ffprobe": "ffprobe",
                     "platforms": {"instagram": {}}}
 
-    def test_copy_not_trimmed_original_untouched(self):                 # 10, 12
+    def test_copy_trimmed_to_59_5_original_untouched(self):             # 12 + рішення: шортс до 60 с
         import hashlib
         before = hashlib.md5(self.src.read_bytes()).hexdigest()
         out = self.media.instagram_copy(str(self.src), self.cfg, mode="safe30")
         p = self.media.ig_probe(out, "ffprobe")
-        self.assertGreater(p["duration"], 61.5)                         # не 59.5
+        self.assertLessEqual(p["duration"], 59.6)                       # копія — до 59,5 с
+        self.assertGreater(p["duration"], 59.0)
         self.assertLessEqual(p["akbps"], 128)
         self.assertEqual(p["arate"], 48000)
         self.assertEqual(hashlib.md5(self.src.read_bytes()).hexdigest(), before)
+        self.assertGreater(self.media.ig_probe(str(self.src), "ffprobe")["duration"], 61.5)   # оригінал — 62 с
+
+    def test_no_trim_when_disabled(self):                                # 10 (max_seconds = 0)
+        self.cfg["platforms"]["instagram"]["max_seconds"] = 0
+        out = self.media.instagram_copy(str(self.src), self.cfg, mode="safe30")
+        self.assertGreater(self.media.ig_probe(out, "ffprobe")["duration"], 61.5)
 
     def test_old_trimmed_cache_not_used(self):                          # 11
         import hashlib
@@ -193,8 +217,9 @@ class CopyTest(unittest.TestCase):
         old_key = hashlib.md5(f"{self.src}|{os.path.getmtime(self.src)}|45.0|sdr3|t59.5".encode()).hexdigest()[:10]
         old = cache / f"{self.src.stem}_{old_key}_igl.mp4"
         old.write_bytes(b"old trimmed copy")
+        self.cfg["platforms"]["instagram"]["max_seconds"] = 0
         out = self.media.instagram_copy(str(self.src), self.cfg, mode="safe30")
-        self.assertNotEqual(Path(out), old)
+        self.assertNotEqual(Path(out), old)                                  # стара копія з кешу не береться
         self.assertGreater(self.media.ig_probe(out, "ffprobe")["duration"], 61.5)
 
 

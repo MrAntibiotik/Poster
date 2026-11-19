@@ -195,9 +195,21 @@ def ig_problems(p: dict) -> list[str]:
 
 
 # Внутрішнє налаштування Poster (НЕ вимога Meta): цільовий розмір копії. 16.11 rupload відкидав копії 85–89 МБ,
-# ~45 МБ проходили. Змінюється в config: platforms.instagram.copy_target_mb. Тривалість копії НЕ обрізається.
+# ~45 МБ проходили. Змінюється в config: platforms.instagram.copy_target_mb.
 IG_TARGET_MB = 45
-IG_COPY_VERSION = "v4-notrim"   # змінюється, коли змінюється спосіб копіювання: старі (обрізані) копії не беруться
+# Рішення користувача (НЕ вимога Meta — Reels API приймає до 15 хв): шортси до 60 с, тому копія для Instagram
+# обрізається до 59,5 с. Налаштування platforms.instagram.max_seconds (0 — не обрізати). Оригінал не змінюється.
+IG_MAX_SECONDS = 59.5
+IG_COPY_VERSION = "v5"   # змінюється, коли змінюється спосіб копіювання: старі копії не беруться
+
+
+def ig_max_seconds(cfg: dict) -> float:
+    """Межа тривалості копії для Instagram (с); 0 — без обрізання."""
+    v = ((cfg.get("platforms") or {}).get("instagram") or {}).get("max_seconds", IG_MAX_SECONDS)
+    try:
+        return max(0.0, float(v or 0))
+    except (TypeError, ValueError):
+        return IG_MAX_SECONDS
 
 
 def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> str:
@@ -211,7 +223,8 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
     target = float((cfg.get("platforms") or {}).get("instagram", {}).get("copy_target_mb") or IG_TARGET_MB)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|{IG_COPY_VERSION}".encode()).hexdigest()[:10]
+    limit = ig_max_seconds(cfg)
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|{IG_COPY_VERSION}|t{limit:g}".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl'}.get(mode, 'ig') }.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
@@ -234,12 +247,14 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     level = ["-level:v", "4.1"] if lite else ["-level:v", "4.2"]
     cap = 6000 if lite else 10000 if strict else 20000            # кбіт/с
     dur = float(p.get("duration") or 0)
+    trim = ["-t", f"{limit:g}"] if limit and dur > limit else []   # шортс — до 59,5 с (налаштування max_seconds)
+    if trim:
+        dur = limit
     if dur > 0:   # файл має вийти ≤ target МБ: великі файли Instagram відкидає (rupload 400)
         cap = min(cap, max(2500, int(target * 8 * 1024 / dur) - 160))
     crf = "21" if lite else "19" if strict else "17"
     rate = ["-crf", crf, "-maxrate", f"{cap}k", "-bufsize", f"{cap * 2}k"]
-    # тривалість НЕ обрізаємо: Reels API приймає до 15 хв (перевірка — ig_duration_problem до завантаження)
-    args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
+    args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), *trim,
             "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-vf", vf, *fps_args, *level,
             "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", *rate, "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
             # завжди позначки SDR BT.709: без них (або з BT.2020/PQ від джерела) Instagram відкидає відео

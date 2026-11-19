@@ -442,7 +442,9 @@ class Instagram(_MetaBase):
         except Exception:  # noqa: BLE001
             p = {}
         max_mb = float(self.pcfg.get("max_upload_mb", 100) or 1e6)
-        if not p or (not _media.ig_problems(p) and p.get("size_mb", 0) <= max_mb):
+        limit = _media.ig_max_seconds(self.cfg)
+        too_long = bool(limit and float(p.get("duration") or 0) > limit)   # довше 59,5 с — лише обрізана копія
+        if not p or (not _media.ig_problems(p) and not too_long and p.get("size_mb", 0) <= max_mb):
             return (("оригінал", None),) + self.METHODS
         return self.METHODS
 
