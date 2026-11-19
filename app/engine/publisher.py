@@ -410,6 +410,8 @@ class Publisher:
         створить другий). Новий контейнер (наступний спосіб) — лише після підтвердженої відмови Meta (ERROR/EXPIRED)."""
         app, igc = self.app, self._ig_cfg()
         prev = item["results"].get("instagram") or {}
+        if prev.get("status") == "ig_next" and int(prev.get("not_before") or 0) > now_ts():
+            return prev   # нове завантаження призначене на пізніше — не раніше (навіть після перезапуску / повтору)
         method = int(prev.get("method") or 0) if prev.get("status") == "ig_next" else 0
         tried = list(prev.get("tried") or []) if prev.get("status") == "ig_next" else []
         lost_retries = int(prev.get("lost_retries") or 0) if prev.get("status") == "ig_next" else 0
@@ -430,10 +432,11 @@ class Publisher:
                 log.info("#%s instagram: завантажено (%s, контейнер %s) — перша перевірка через %s хв",
                          item["id"], up["method_name"], up["container"], wait // 60)
                 return {"status": "processing", **up, "since": started, "next_at": now_ts() + wait, "checks": 0,
+                        "silent": True,
                         "lost_retries": lost_retries,
                         "tried": tried + [up["method_name"]], "ig_report": snap,
                         "note": f"Instagram обробляє ({up['method_name']}) — перевірю через {wait // 60} хв"}
-            r = plat.publish(item["mp4"], meta, method, on_container)
+            r = plat.publish(item["mp4"], meta, method, on_container, inline_wait=self._ig_max_wait())
             log.info("#%s instagram: опубліковано (%s) %s", item["id"], r.get("method_name"), r.get("url"))
             if hasattr(app.bot, "resolve"):
                 app.bot.resolve("reauth_instagram")
@@ -444,13 +447,17 @@ class Publisher:
                 return stored
             return None
         except StillProcessing as e:
+            # 10 хв (max_wait_min) — і не готово: цей контейнер покидаємо (його ніхто не опублікує — дубля немає),
+            # нове завантаження того самого відео пізніше (історія: завислі не оживали, нове пізніше проходило)
             stored = (app.db.get_item(item["id"])["results"].get("instagram") or {})
             app.db.event(item["id"], "ig_processing", {"container": e.container_id})
-            return {**stored, "status": "processing", "container": e.container_id, "inline": False,
-                    "upload_lost": bool(getattr(e, "upload_lost", False)), "lost_retries": lost_retries,
-                    "since": int(stored.get("since") or started), "next_at": now_ts() + 120, "checks": 0,
-                    "tried": tried + [stored.get("method_name") or ""], "ig_report": self._ig_snapshot(plat, "обробляється — далі у фоні"),
-                    "note": "Instagram ще обробляє — чекаю той самий контейнер, опублікую, щойно буде готово"}
+            r = {**stored, "container": e.container_id, "upload_lost": bool(getattr(e, "upload_lost", False)),
+                 "lost_retries": lost_retries, "since": int(stored.get("since") or started), "method": method,
+                 "tried": tried + [stored.get("method_name") or ""],
+                 "ig_report": self._ig_snapshot(plat, "не оброблено за 10 хв")}
+            polls = [list(x) for x in ((getattr(plat, "diag", None) or {}).get("polls") or [])]
+            return self._ig_retry(item, plat, r, polls, {"status_code": (polls[-1][1] if polls else None)},
+                                  now_ts() - r["since"])
         except ContainerFailed as e:
             stored = (app.db.get_item(item["id"])["results"].get("instagram") or {})
             return self._ig_after_failure(item, plat, {**stored, "container": e.container_id, "method": method,
@@ -537,9 +544,8 @@ class Publisher:
             if now - int(r.get("since") or now) >= limit and not r.get("delay_told"):
                 self._ig_delay_notice(it, r, now)          # без жодного запиту до Meta
                 r = (db.get_item(it["id"])["results"].get("instagram") or {})
-            legacy = "upload_lost" not in r and now - int(r.get("since") or now) >= \
-                60 * int(self._ig_cfg().get("lost_retry_after_min", 30))
-            if now < int(r.get("next_at") or 0) and not legacy:   # контейнер від старої версії — перевірити одразу
+            overdue = now - int(r.get("since") or now) >= self._ig_wait_limit(r)   # напр. від старої версії — одразу
+            if now < int(r.get("next_at") or 0) and not overdue:
                 continue
             if self._ig_check(it, r, plat, now) == "limit":
                 return
@@ -568,29 +574,39 @@ class Publisher:
     BG_LONG_STEP = 3 * 3600
     BG_FINAL = 24 * 3600 + 600
 
-    LOST_RETRY_PAUSES = (30 * 60, 60 * 60)   # нове завантаження через 30 хв, ще одне — через годину
+    RETRY_PAUSES = (30 * 60, 60 * 60)   # нове завантаження через 30 хв, ще одне — через годину; далі — у Telegram
 
-    def _ig_lost(self, it: dict, r: dict, plat, polls: list, res: dict, age: int) -> str:
-        """Файл до Meta не дійшов (rupload 400, 0 байтів): нове завантаження того самого відео через паузу —
-        дубля не буде, бо в старому контейнері немає відео. Після LOST_RETRY_PAUSES спроб — вам у Telegram."""
+    def _ig_max_wait(self) -> int:
+        """Скільки чекати обробки одного контейнера (рішення користувача: 10 хв)."""
+        return 60 * int(self._ig_cfg().get("max_wait_min", 10))
+
+    def _ig_wait_limit(self, r: dict) -> int:
+        """«Тихий» режим: перша й єдина перевірка — через wait_min; звичайний — max_wait_min (10 хв)."""
+        if r.get("silent"):
+            return max(self._ig_max_wait(), 60 * int(self._ig_cfg().get("wait_min", 20)))
+        return self._ig_max_wait()
+
+    def _ig_retry(self, it: dict, plat, r: dict, polls: list, res: dict, age: int) -> dict:
+        """Контейнер не оброблено за max_wait_min (або файл до Meta не дійшов): контейнер покидаємо — його ніхто не
+        опублікує, тож дубля немає; нове завантаження того самого відео через паузу; після RETRY_PAUSES — у Telegram."""
         n = int(r.get("lost_retries") or 0)
-        why = (f"файл до Meta не дійшов (rupload {r.get('upload_http') or 400}, на сервері 0 байтів), контейнер "
-               f"{r.get('container')} {age // 60} хв «{res.get('status_code')}»")
-        self._hist(it, plat, "lost_retry", int(r.get("since") or 0), polls=polls, error=why, processing_s=age)
-        if n < len(self.LOST_RETRY_PAUSES):
-            pause = self.LOST_RETRY_PAUSES[n]
-            when = now_ts() + pause
-            log.warning("#%s instagram: %s — нове завантаження через %s хв (спроба %s з %s)", it["id"], why,
-                        pause // 60, n + 1, len(self.LOST_RETRY_PAUSES))
-            self.app.db.event(it["id"], "ig_lost_retry", {"container": r.get("container"), "retry": n + 1})
-            self._save_ig(it, {"status": "ig_next", "method": int(r.get("method") or 0), "not_before": when,
-                               "lost_retries": n + 1, "tried": [t for t in r.get("tried") or [] if t],
-                               "note": f"файл до Meta не дійшов — повторю завантаження через {pause // 60} хв"})
-            return "lost"
+        lost = bool(r.get("upload_lost"))
+        why = (f"контейнер {r.get('container')}: {age // 60} хв «{res.get('status_code') or '—'}»"
+               + (f"; файл до Meta не дійшов (rupload {r.get('upload_http') or 400}, 0 байтів)" if lost else ""))
+        self._hist(it, plat, "lost_retry" if lost else "stuck_retry", int(r.get("since") or 0), polls=polls,
+                   error=why, processing_s=age)
+        if n < len(self.RETRY_PAUSES):
+            pause = self.RETRY_PAUSES[n]
+            log.warning("#%s instagram: %s — не чекаю далі, нове завантаження через %s хв (спроба %s з %s)",
+                        it["id"], why, pause // 60, n + 1, len(self.RETRY_PAUSES))
+            self.app.db.event(it["id"], "ig_retry", {"container": r.get("container"), "retry": n + 1, "lost": lost})
+            return {"status": "ig_next", "method": int(r.get("method") or 0), "not_before": now_ts() + pause,
+                    "lost_retries": n + 1, "tried": [t for t in r.get("tried") or [] if t],
+                    "note": ("файл до Meta не дійшов" if lost else f"Instagram не обробив за {self._ig_max_wait() // 60} хв")
+                            + f" — повторю завантаження через {pause // 60} хв"}
         log.warning("#%s instagram: %s — повторні завантаження не допомогли", it["id"], why)
-        self._save_ig(it, self._ig_after_failure(it, plat, {**r, "polls": polls, "method": 99}, "lost",
-                                                 why + f"; після {n} нових завантажень"))
-        return "failed"
+        return self._ig_after_failure(it, plat, {**r, "polls": polls, "method": 99}, "stuck",
+                                      why + f"; після {n} нових завантажень")
 
     def _ig_delay_notice(self, it: dict, r: dict, now: int) -> None:
         """Контейнер обробляється довше block_max_min: одне повідомлення; інші шортси в Instagram ідуть далі."""
@@ -653,23 +669,10 @@ class Publisher:
                        processing_s=age)
             self._save_ig(it, self._ig_after_failure(it, plat, {**r, "polls": polls}, state, why))
             return "failed"
-        # waiting / unknown — той самий контейнер, нового НЕ створюємо…
-        lost_after = 60 * int(self._ig_cfg().get("lost_retry_after_min", 30))
-        if "upload_lost" not in r and age >= lost_after:
-            # контейнер від попередньої версії (до перевірки «чи дійшов файл»): якщо завантаження було з помилкою —
-            # ОДИН раз питаємо, скільки байтів у Meta; 0 — файл не дійшов, далі як upload_lost
-            http = r.get("upload_http") or (r.get("ig_report") or {}).get("upload_http")
-            lost = False
-            if http and int(http) >= 400 and hasattr(plat, "upload_offset"):
-                try:
-                    lost = plat.upload_offset(cid) == 0
-                except Exception as e:  # noqa: BLE001
-                    log.info("#%s instagram: не вдалося перевірити, чи дійшов файл: %s", it["id"], e)
-            r = {**r, "upload_lost": lost}
-            self._save_ig(it, r)
-        if r.get("upload_lost") and age >= lost_after:
-            # …крім одного випадку: rupload 400 і на сервері Meta 0 байтів — файлу там немає, контейнер не оживе
-            return self._ig_lost(it, r, plat, polls, res, age)
+        # waiting / unknown — довше max_wait_min (10 хв) не чекаємо: нове завантаження пізніше або вручну
+        if age >= self._ig_wait_limit(r):
+            self._save_ig(it, self._ig_retry(it, plat, {**r, "polls": polls}, polls, res, age))
+            return "retry"
         if state == "unknown":
             log.warning("#%s instagram: невідомий статус контейнера %s: %r — чекаю далі той самий контейнер",
                         it["id"], cid, res.get("status_code"))

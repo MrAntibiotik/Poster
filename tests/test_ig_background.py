@@ -1,5 +1,6 @@
-"""Публікатор Instagram: один контейнер — одне очікування. Новий контейнер — лише після ERROR / EXPIRED від Meta.
-Тайм-аут не створює нового контейнера; стан переживає перезапуск; черга інших платформ не стоїть."""
+"""Публікатор Instagram: контейнер чекаємо не довше 10 хв (рішення користувача). Не готово — цей контейнер
+покидаємо (його ніхто не опублікує, дубля немає), нове завантаження через 30 хв, ще одне через 60 хв, далі —
+у Telegram. ERROR / EXPIRED — інший спосіб. Між спробами інші шортси публікуються як завжди."""
 from __future__ import annotations
 
 import sys
@@ -23,12 +24,12 @@ class Ok:
 
 
 class FakeIG:
-    """Імітація Instagram: сценарій статусів на кожен контейнер."""
+    """Імітація Instagram: що станеться з кожним контейнером."""
     METHODS = (("копія під вимоги Reels", ""), ("легка копія 30 к/с", "safe30"))
 
     def __init__(self):
-        self.uploads, self.checks, self.publishes = [], [], []
-        self.inline = {}       # cid → що повернути одразу: "ok" | "wait" | "error" | "expired"
+        self.uploads, self.checks, self.publishes, self.waits = [], [], [], []
+        self.inline = {}       # cid → "ok" | "wait" | "lost" | "error" | "expired"
         self.status = {}       # cid → status_code для фонових перевірок
         self.default_inline = "wait"
 
@@ -50,19 +51,18 @@ class FakeIG:
         cid, rec = self._new(method, on_container)
         return {**rec, "upload_note": "", "upload_http": 200}
 
-    def publish(self, path, meta, method=0, on_container=None):
+    def publish(self, path, meta, method=0, on_container=None, inline_wait=None):
+        self.waits.append(inline_wait)
         cid, rec = self._new(method, on_container)
         how = self.inline.get(cid, self.default_inline)
-        if how == "lost":
-            e = StillProcessing("файл не дійшов", cid)
-            e.upload_lost = True
-            raise e
         if how == "ok":
             self.publishes.append(cid)
             return {"id": "M" + cid, "url": f"https://ig/{cid}", **rec}
         if how in ("error", "expired"):
             raise ContainerFailed(f"контейнер {how.upper()}", cid, how, how.upper(), "x")
-        raise StillProcessing("ще обробляється", cid)
+        e = StillProcessing("ще обробляється", cid)
+        e.upload_lost = how == "lost"
+        raise e
 
     def finish_container(self, cid, since=0):
         self.checks.append(cid)
@@ -89,10 +89,8 @@ class IgFlowBase(FlowBase):
         self.cfg["platforms"]["instagram"]["silent_wait"] = self.silent
         self.yt, self.ig = Ok(), FakeIG()
         self.app.platforms = {"youtube": self.yt, "instagram": self.ig}
-        self.sent, self.msgs = [], []
+        self.sent = []
         self.app.bot.instagram_manual = lambda item_id, meta: self.sent.append(item_id)
-        orig_send = self.app.bot.send
-        self.app.bot.send = lambda text, *a, **k: (self.msgs.append(text), orig_send(text, *a, **k))
         self.now = self.ts(11, "12:00")
         config.FAKE_NOW = self.now
 
@@ -115,56 +113,54 @@ class IgFlowBase(FlowBase):
             self.app.publisher.finish_instagram(self.now)
 
 
-class PollFlowTest(IgFlowBase):
+class TenMinutesTest(IgFlowBase):
     def test_instant_publish(self):
         self.ig.default_inline = "ok"
         a, = self.publish("a")
         self.assertEqual(self.res(a)["status"], "ok")
-        self.assertEqual(self.ig.checks, [])
+        self.assertEqual(self.ig.waits, [600])                             # чекаємо не більше 10 хв
 
-    def test_in_progress_never_creates_new_container(self):             # 1, 8
-        a, = self.publish("a")
-        self.assertEqual(self.res(a)["status"], "processing")
-        self.later(6 * 60)                                                 # 6 годин IN_PROGRESS
-        self.assertEqual(self.ig.uploads, [("C1", 0)])                    # той самий контейнер
-        self.assertEqual(self.res(a)["status"], "processing")
-        self.assertLessEqual(len(self.ig.checks), 7)                      # рідкі перевірки: 2,5,10,20,40 хв, далі раз на 3 год
-        self.ig.status["C1"] = "FINISHED"
-        self.later(180)
-        self.assertEqual(self.res(a)["status"], "ok")                     # 3
-        self.assertEqual(self.ig.publishes, ["C1"])
+    def test_not_ready_in_10_min_reupload_later_then_publish(self):
+        a, = self.publish("a")                                             # C1: 10 хв — не готово
+        self.assertEqual(self.res(a)["status"], "ig_next")
+        self.assertEqual(self.ig.checks, [])                               # фонового очікування немає
+        self.later(29)
+        self.assertEqual(len(self.ig.uploads), 1)                          # до 30 хв — нічого
+        self.ig.inline["C2"] = "ok"
+        self.later(2)
+        self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 0)])          # нове завантаження того самого відео
+        self.assertEqual(self.res(a)["status"], "ok")
+        self.assertEqual(self.ig.publishes, ["C2"])                        # опубліковано один раз — без дубля
 
-    def test_whole_day_in_progress_few_requests(self):
+    def test_three_tries_then_telegram(self):
         a, = self.publish("a")
-        self.later(24 * 60 + 15)                                          # Meta добу не змінює статус
-        self.assertLessEqual(self.ig.checks.count("C1"), 13)              # ≈13 запитів за добу, не сотні
-        self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 1)])          # після доби — як EXPIRED: інший спосіб
-
-    def test_pending_never_creates_new_container(self):                 # 2
-        a, = self.publish("a")
-        self.ig.status["C1"] = "PENDING"
-        self.later(120)
-        self.assertEqual(self.ig.uploads, [("C1", 0)])
-        self.assertEqual(self.res(a)["status"], "processing")
-
-    def test_error_allows_one_controlled_next_method(self):             # 4
-        a, = self.publish("a")
-        self.ig.status["C1"] = "ERROR"
-        self.later(3)
-        self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 1)])          # наступний спосіб — лише після ERROR
-        self.ig.status["C2"] = "ERROR"
-        self.later(10)
-        self.assertEqual(len(self.ig.uploads), 2)                          # способів більше немає — без нових контейнерів
-        self.assertEqual(self.res(a)["status"], "manual")                  # повне відео — вам у Telegram
+        self.later(4 * 60)
+        self.assertEqual(len(self.ig.uploads), 3)                          # перше + 2 повторні, не більше
+        self.assertEqual(self.res(a)["status"], "manual")
         self.assertEqual(self.sent, [a])
+        rows = self.app.db.q("SELECT result FROM history WHERE item_id=? AND result='stuck_retry'", (a,))
+        self.assertEqual(len(rows), 3)
 
-    def test_expired_allows_new_attempt(self):                           # 5
+    def test_lost_upload_same_flow(self):
+        self.ig.default_inline = "lost"
         a, = self.publish("a")
-        self.ig.status["C1"] = "EXPIRED"
-        self.later(3)
-        self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 1)])
+        self.assertIn("файл до Meta не дійшов", self.res(a)["note"])
+        rows = self.app.db.q("SELECT result FROM history WHERE item_id=? AND result='lost_retry'", (a,))
+        self.assertEqual(len(rows), 1)
 
-    def test_inline_error_goes_to_next_method(self):
+    def test_others_publish_while_waiting_for_retry(self):
+        a, b = self.publish("a", "b")
+        self.assertEqual(self.res(a)["status"], "ig_next")
+        self.assertEqual(self.ig.uploads[1], ("C2", 0))                     # #b одразу, не чекає #a
+        self.assertEqual(self.yt.n, 2)
+
+    def test_retry_button_does_not_upload_early(self):
+        a, = self.publish("a")
+        self.app.publisher.start(a)                                        # «🔁» / перезапуск — до призначеного часу
+        self.assertEqual(len(self.ig.uploads), 1)
+        self.assertEqual(self.yt.n, 1)
+
+    def test_error_goes_to_next_method(self):
         self.ig.inline["C1"] = "error"
         self.ig.inline["C2"] = "ok"
         a, = self.publish("a")
@@ -172,79 +168,13 @@ class PollFlowTest(IgFlowBase):
         self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 1)])
         self.assertEqual(self.res(a)["status"], "ok")
 
-    def test_published_status_no_duplicate(self):                       # 6
+    def test_expired_goes_to_next_method(self):
+        self.ig.inline["C1"] = "expired"
         a, = self.publish("a")
-        self.ig.status["C1"] = "PUBLISHED"
-        self.later(3)
-        self.assertEqual(self.res(a)["status"], "ok")
-        self.assertEqual(self.ig.publishes, [])
-        self.assertEqual(len(self.ig.uploads), 1)
+        self.later(2)
+        self.assertEqual(self.ig.uploads[1], ("C2", 1))
 
-    def test_unknown_status_keeps_waiting(self):                        # 7
-        a, = self.publish("a")
-        self.ig.status["C1"] = "SOMETHING_NEW"
-        self.later(120)
-        self.assertEqual(len(self.ig.uploads), 1)
-        self.assertEqual(self.res(a)["status"], "processing")
-
-    def test_media_publish_error_retries_same_container(self):
-        a, = self.publish("a")
-        self.ig.status["C1"] = "MEDIA_PUBLISH_FAIL"
-        self.later(30)
-        self.assertEqual(len(self.ig.uploads), 1)                          # жодного нового контейнера
-        self.assertEqual(self.res(a)["status"], "error")
-        self.assertIn("media_publish", self.res(a)["error"])
-
-    def test_one_at_a_time_and_delay_releases_queue(self):
-        a, b = self.publish("a", "b")
-        self.assertEqual(self.yt.n, 2)                                     # YouTube обох — одразу
-        self.assertEqual(self.res(b)["status"], "ig_wait")
-        self.later(30)
-        self.assertEqual(len(self.ig.uploads), 1)                          # поки #a обробляється — #b чекає
-        self.later(40)                                                     # понад годину — #a чергу більше не тримає
-        self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 0)])
-        self.assertEqual(self.res(a)["status"], "processing")              # #a чекає далі той самий контейнер
-        self.assertEqual(len([m for m in self.msgs if "обробляє #" in m]), 1)   # повідомлення про затримку — раз
-
-    def test_restart_during_wait_does_not_reupload(self):
-        a, = self.publish("a")
-        self.app = self._app()                                             # «перезапуск»
-        self.app.platforms = {"youtube": self.yt, "instagram": self.ig}
-        self.app.scheduler.resume_publishing()
-        self.ig.status["C1"] = "FINISHED"
-        self.later(5)
-        self.assertEqual(self.res(a)["status"], "ok")
-        self.assertEqual(len(self.ig.uploads), 1)
-
-    def test_restart_mid_inline_wait_keeps_container(self):
-        # процес упав посеред першого очікування: ID контейнера вже в базі — новий не створюється
-        self.ig.default_inline = "crash"
-
-        def crash(path, meta, method=0, on_container=None):
-            self.ig._new(method, on_container)
-            raise KeyboardInterrupt
-        self.ig.publish = crash
-        self.make_short("a")
-        self.app.scheduler.scan(self.now)
-        a = self.app.db.queue()[0]["id"]
-        with self.assertRaises(KeyboardInterrupt):
-            self.app.publisher.start(a)
-        self.assertEqual(self.res(a)["container"], "C1")
-        self.app = self._app()
-        self.app.platforms = {"youtube": self.yt, "instagram": FakeIG()}
-        self.app.platforms["instagram"].status["C1"] = "FINISHED"
-        self.app.scheduler.resume_publishing()
-        self.later(15)
-        self.assertEqual(self.res(a)["status"], "ok")
-        self.assertEqual(self.app.platforms["instagram"].uploads, [])       # жодного нового завантаження
-
-    def test_retry_while_processing_does_not_reupload(self):
-        a, = self.publish("a")
-        self.app.publisher.start(a)
-        self.assertEqual(len(self.ig.uploads), 1)
-        self.assertEqual(self.yt.n, 1)
-
-    def test_long_video_not_routed_to_telegram(self):                    # 9
+    def test_long_video_not_routed_to_telegram(self):
         from unittest import mock
         from app.core import media
         self.ig.default_inline = "ok"
@@ -254,100 +184,86 @@ class PollFlowTest(IgFlowBase):
         self.assertEqual(self.res(a)["status"], "ok")
 
 
+class RestartTest(IgFlowBase):
+    def crash_after_container(self):
+        def crash(path, meta, method=0, on_container=None, inline_wait=None):
+            self.ig._new(method, on_container)
+            raise KeyboardInterrupt
+        self.ig.publish = crash
+        self.make_short("a")
+        self.app.scheduler.scan(self.now)
+        a = self.app.db.queue()[0]["id"]
+        with self.assertRaises(KeyboardInterrupt):
+            self.app.publisher.start(a)
+        self.app = self._app()                                             # «перезапуск»
+        self.ig = FakeIG()
+        self.app.platforms = {"youtube": self.yt, "instagram": self.ig}
+        self.app.scheduler.resume_publishing()
+        return a
+
+    def test_restart_finished_container_published_once(self):
+        a = self.crash_after_container()
+        self.ig.status["C1"] = "FINISHED"
+        self.later(13)
+        self.assertEqual(self.res(a)["status"], "ok")
+        self.assertEqual(self.ig.uploads, [])                              # не вантажили вдруге
+
+    def test_restart_published_status_no_duplicate(self):
+        a = self.crash_after_container()
+        self.ig.status["C1"] = "PUBLISHED"
+        self.later(13)
+        self.assertEqual(self.res(a)["status"], "ok")
+        self.assertEqual(self.ig.publishes, [])
+
+    def test_restart_stuck_container_retries_after_10_min(self):
+        a = self.crash_after_container()
+        self.later(12)
+        self.assertEqual(self.res(a)["status"], "ig_next")
+        self.assertEqual(self.ig.uploads, [])                              # нове — лише через паузу
+
+
 class SilentFlowTest(IgFlowBase):
     silent = True
 
-    def test_silent_wait_then_check_and_no_new_container_on_timeout(self):
+    def test_silent_one_check_then_retry_later(self):
         a, = self.publish("a")
         self.later(19)
         self.assertEqual(self.ig.checks, [])                               # 19 хв — жодного запиту
         self.later(1)
-        self.assertEqual(self.ig.checks, ["C1"])
-        self.later(60)
-        self.assertEqual(self.ig.uploads, [("C1", 0)])                     # не готово ≠ помилка: без нового контейнера
-        self.ig.status["C1"] = "FINISHED"
-        self.later(30)
-        self.assertEqual(self.res(a)["status"], "ok")
+        self.assertEqual(self.ig.checks, ["C1"])                           # одна перевірка: не готово
+        self.assertEqual(self.res(a)["status"], "ig_next")
 
-
-class DiagnosticsFlowTest(IgFlowBase):
-    def test_history_keeps_every_status_check_and_status_shows_container(self):
+    def test_silent_media_publish_error_retries_same_container(self):
         a, = self.publish("a")
+        self.ig.status["C1"] = "MEDIA_PUBLISH_FAIL"
+        self.later(40)
+        self.assertEqual(len(self.ig.uploads), 1)
+        self.assertEqual(self.res(a)["status"], "error")
+        self.assertIn("media_publish", self.res(a)["error"])
+
+    def test_silent_finished_publishes(self):
+        a, = self.publish("a")
+        self.ig.status["C1"] = "FINISHED"
         self.later(20)
-        text = self.app.status_text()
-        self.assertIn("контейнер C1", text)                                 # «🕐 Статус»: що й скільки чекає
-        self.ig.status["C1"] = "FINISHED"
-        self.later(30)
-        import json
-        row = self.app.db.one("SELECT * FROM history WHERE item_id=? AND result='ok_background'", (a,))
-        polls = json.loads(row["polls"])
-        self.assertGreaterEqual(len(polls), 4)                             # усі перевірки, а не лише остання
-        self.assertEqual(polls[-1][1], "FINISHED")
-        self.assertEqual(row["category"], None)                               # опубліковано — проблеми немає
-
-
-class LostUploadTest(IgFlowBase):
-    def test_lost_upload_retried_later_and_published(self):
-        self.ig.inline["C1"] = "lost"
-        a, b = self.publish("a", "b")
-        self.later(36)
-        self.assertEqual(self.res(a)["status"], "processing")             # до 30 хв — чекаємо той самий
-        self.later(5)
-        r = self.res(a)
-        self.assertEqual((r["status"], r["lost_retries"]), ("ig_next", 1))   # файл не дійшов → нове завантаження пізніше
-        self.assertEqual(self.ig.uploads[1], ("C2", 0))                   # тим часом #b іде в Instagram (не блокує)
-        self.ig.inline["C2"] = "ok"                                       # (#b)
-        self.ig.status["C2"] = "FINISHED"
-        self.later(35)
-        self.assertEqual(self.ig.uploads[2], ("C3", 0))                    # #a — новим завантаженням, той самий спосіб
-        self.ig.status["C3"] = "FINISHED"
-        self.later(10)
         self.assertEqual(self.res(a)["status"], "ok")
-        self.assertEqual(self.sent, [])
 
-    def test_lost_twice_then_telegram(self):
-        self.ig.default_inline = "lost"
+
+class LegacyTest(IgFlowBase):
+    def test_container_from_old_version_waiting_hours_is_retried_now(self):
         a, = self.publish("a")
-        self.later(4 * 60)
-        self.assertEqual(len(self.ig.uploads), 3)                          # перше + 2 повторні, не більше
-        self.assertEqual(self.res(a)["status"], "manual")
-        self.assertEqual(self.sent, [a])
-        rows = self.app.db.q("SELECT result FROM history WHERE item_id=? AND result='lost_retry'", (a,))
-        self.assertEqual(len(rows), 3)                                       # кожна втрата — в історії
-
-
-class LegacyLostTest(IgFlowBase):
-    def test_old_container_with_400_checked_once_and_retried(self):
-        a, = self.publish("a")
-        offsets = []
-        self.ig.upload_offset = lambda cid: offsets.append(cid) or 0
-        results = dict(self.app.db.get_item(a)["results"])     # як запис версії 170: без upload_lost, з HTTP 400
-        ig = {k: v for k, v in results["instagram"].items() if k != "upload_lost"}
-        ig["ig_report"] = {"upload_http": 400}
-        results["instagram"] = ig
+        results = dict(self.app.db.get_item(a)["results"])                 # як #73: «processing» 6 годин
+        results["instagram"] = {"status": "processing", "container": "C9", "since": self.now - 391 * 60,
+                                "next_at": self.now + 20 * 60, "method": 0, "method_name": "копія під вимоги Reels"}
         self.app.db.update_item(a, results=results)
-        self.later(45)
-        self.assertEqual(offsets, ["C1"])                                  # один запит, не щоразу
-        self.assertEqual(self.res(a)["status"], "ig_next")                 # файл не дійшов → нове завантаження
-
-    def test_old_container_with_200_not_checked(self):
-        a, = self.publish("a")
-        offsets = []
-        self.ig.upload_offset = lambda cid: offsets.append(cid) or 0
-        results = dict(self.app.db.get_item(a)["results"])
-        ig = {k: v for k, v in results["instagram"].items() if k != "upload_lost"}
-        ig["ig_report"] = {"upload_http": 200}
-        results["instagram"] = ig
-        self.app.db.update_item(a, results=results)
-        self.later(90)
-        self.assertEqual(offsets, [])
-        self.assertEqual(self.res(a)["status"], "processing")
+        self.later(1)
+        self.assertEqual(self.ig.checks, ["C9"])                           # одна перевірка — одразу
+        self.assertEqual(self.res(a)["status"], "ig_next")
 
 
 class RealInstagramFlowTest(IgFlowBase):
-    """Справжній модуль Instagram + публікатор (імітація лише HTTP): тут ловляться помилки стику, як аварія #73."""
+    """Справжній модуль Instagram + публікатор (імітація лише HTTP): тут ловляться помилки стику (як аварія #73)."""
 
-    def test_upload_400_zero_bytes_full_cycle(self):
+    def test_full_cycle_400_then_reupload_publishes(self):
         from app.core import media
         from app.platforms import meta_graph
         from tests.test_platforms import FakeHTTP, Resp
@@ -375,29 +291,19 @@ class RealInstagramFlowTest(IgFlowBase):
         meta_graph.requests = f
         self.app.platforms = {"instagram": meta_graph.Instagram(self.cfg)}
         a, = self.publish("a")
+        self.assertNotEqual(self.app.db.get_item(a)["status"], "failed")    # без «аварійно завершилась»
         r = self.res(a)
-        self.assertEqual((r["status"], r["container"], r["upload_lost"]), ("processing", "C1", True))
-        self.assertNotEqual(self.app.db.get_item(a)["status"], "failed")       # без «аварійно завершилась»
-        self.later(41)
-        self.assertEqual(self.res(a)["status"], "ig_next")
+        self.assertEqual(r["status"], "ig_next")
+        self.assertIn("файл до Meta не дійшов", r["note"])
+        polls_c1 = [c for c in f.calls if c[0] == "GET" and c[1].endswith("/C1")]
+        self.assertLessEqual(len(polls_c1), 12)                            # ~10 хв, рідко
         self.later(31)
         self.assertEqual(self.res(a)["status"], "ok")
-        self.assertEqual(n["c"], 2)                                              # рівно два контейнери
-        rows = self.app.db.q("SELECT result FROM history WHERE item_id=? AND platform='instagram'", (a,))
-        self.assertIn("lost_retry", [x["result"] for x in rows])
-
-    def test_legacy_record_checked_right_away(self):
-        a, = self.publish("a")
-        offsets = []
-        self.ig.upload_offset = lambda cid: offsets.append(cid) or 0
-        results = dict(self.app.db.get_item(a)["results"])
-        ig = {k: v for k, v in results["instagram"].items() if k != "upload_lost"}
-        ig.update(ig_report={"upload_http": 400}, since=self.now - 90 * 60, next_at=self.now + 180 * 60)
-        results["instagram"] = ig
-        self.app.db.update_item(a, results=results)
-        self.later(1)                                                            # не чекаємо 3 год розкладу
-        self.assertEqual(offsets, ["C1"])
-        self.assertEqual(self.res(a)["status"], "ig_next")
+        self.assertEqual(n["c"], 2)                                        # рівно два контейнери, один Reels
+        rows = [x["result"] for x in self.app.db.q("SELECT result FROM history WHERE item_id=? AND platform='instagram'",
+                                                   (a,))]
+        self.assertIn("lost_retry", rows)
+        self.assertIn("ok", rows)
 
 
 if __name__ == "__main__":
