@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from .base import Platform, PublishError, RateLimited, Stopped, StillProcessing, TokenExpired
+from .base import ContainerFailed, Platform, PublishError, RateLimited, Stopped, StillProcessing, TokenExpired
 
 log = logging.getLogger("meta")
 
@@ -22,11 +22,24 @@ TOKEN_ERROR_CODES = {102, 190, 463, 467}
 RATE_LIMIT_CODES = {4, 17, 32, 613} | set(range(80001, 80015))
 LIMIT_FILE = Path(tempfile.gettempdir()) / "poster-meta-limit.json"   # спільний для всіх каналів (один додаток Meta)
 POLL_DELAYS = (10, 20, 40, 80)   # перевірки стану контейнера: затримка наростає, далі — раз на 80 с
-# Після «rupload 400» справжні шортси Instagram НЕ обробляє ніколи (#50×3, #54–#56, #63 — години «In Progress»),
-# а ті, що проходять, дають rupload 200. Тому після 400 — лише коротка перевірка (~3 хв), далі відмова
-# (Publisher надішле відео вам у Telegram), без години очікування й без блокування черги Instagram.
-INLINE_WAIT = 10 * 60     # стільки чекаємо обробки, тримаючи чергу; далі — у фоні (StillProcessing)
-CONTAINER_TTL = 23 * 3600  # контейнер Instagram живе 24 год — після цього чекати марно
+
+# Статуси контейнера Instagram (IG Container status_code) → що робить Poster
+CONTAINER_STATES = {
+    "FINISHED": "ready",       # можна публікувати (media_publish)
+    "IN_PROGRESS": "waiting",  # Meta обробляє — чекати той самий контейнер
+    "PENDING": "waiting",      # у черзі обробки — чекати той самий контейнер
+    "ERROR": "error",          # підтверджена відмова — причину зберегти, можна наступний спосіб
+    "EXPIRED": "expired",      # не опублікований за 24 год — можна нову спробу
+    "PUBLISHED": "already",    # уже опубліковано — НЕ публікувати вдруге
+}
+
+
+def container_state(code) -> str:
+    """Невідомий статус — 'unknown': зберігаємо в діагностиці й чекаємо, новий контейнер НЕ створюємо."""
+    return CONTAINER_STATES.get(str(code or "").upper(), "unknown")
+INLINE_WAIT = 10 * 60     # стільки чекаємо обробки, тримаючи чергу; далі — той самий контейнер у фоні (StillProcessing)
+# Тайм-аути Poster — лише про те, як довго тримати чергу й як часто питати. Вони НЕ означають помилку Meta:
+# новий контейнер створюється тільки після status_code ERROR або EXPIRED (Meta: невикористаний контейнер — 24 год).
 STATS_MAX_USAGE = 60      # статистику не знімаємо, якщо використано ≥ N% годинної квоти — бережемо для публікацій
 
 
@@ -304,21 +317,40 @@ class Instagram(_MetaBase):
             raise PublishError("не задано IG_USER_ID")
         return ig
 
-    def publish(self, video_path: str, meta) -> dict:
-        """Публікація Reels з кількома спробами, бо Instagram буває вибагливим до завантаження:
-        файл — оригінал (якщо відповідає вимогам Reels), потім копія під вимоги Instagram;
-        токен — токен сторінки, потім токен користувача (у прикладах Meta саме він).
-        Помилка 400 від rupload не означає провал: спершу перевіряємо стан контейнера."""
-        # по одному відео за раз: паралельні великі завантаження Instagram відхиляє; поки чекаємо — слухаємо «Стоп»
-        while not Instagram._upload_lock.acquire(timeout=3):
-            self._check_stop()
-        Instagram.current = video_path   # для «🕐 Статус»: що саме зараз вантажиться в Instagram
-        try:
-            self._check_stop()
-            return self._publish_locked(video_path, meta)
-        finally:
-            Instagram.current = None
-            Instagram._upload_lock.release()
+    def publish(self, video_path: str, meta, method: int = 0, on_container=None, inline_wait: int | None = None) -> dict:
+        """Публікація Reels за єдиною логікою: один контейнер, одне завантаження, очікування ТОГО САМОГО контейнера.
+        FINISHED → media_publish; PUBLISHED → знайти вже опублікований (без повтору); ERROR/EXPIRED → ContainerFailed
+        (наступний спосіб вирішує Publisher); IN_PROGRESS/PENDING/невідомий після inline_wait → StillProcessing
+        (той самий контейнер чекає у фоні — новий НЕ створюється)."""
+        up = self.upload_only(video_path, meta, method, on_container)
+        cid = up["container"]
+        since = time.time()
+        p = self.wait_inline(cid, INLINE_WAIT if inline_wait is None else inline_wait)
+        info = {"method": up["method"], "method_name": up["method_name"], "container": cid}
+        if p["state"] == "ready":
+            self._stage("обробка", True, p.get("waited_s", 0), "FINISHED")
+            try:
+                out = self.publish_container(cid)
+            except PublishError:
+                self._save_diag("помилка media_publish")
+                raise
+            self._save_diag("опубліковано")
+            return {**out, **info}
+        if p["state"] == "already":
+            self._stage("обробка", True, p.get("waited_s", 0), "PUBLISHED")
+            self._save_diag("контейнер уже опубліковано")
+            return {**self.find_published(since - 3600), **info, "note": "контейнер уже був опублікований — без повтору"}
+        if p["state"] in ("error", "expired"):
+            self._stage("обробка", False, p.get("waited_s", 0), f"{p['status_code']}: {p['status']}")
+            self._save_diag(f"контейнер {p['status_code']}")
+            raise ContainerFailed(f"Instagram: контейнер {p['status_code']}: {p['status']}{ig_hint(p['status'])}"
+                                  + (f" (завантаження: {up['upload_note']})" if up.get("upload_note") else ""),
+                                  cid, p["state"], p["status_code"], p["status"])
+        # waiting / unknown: тайм-аут — це не помилка; той самий контейнер чекає у фоні
+        self._stage("обробка", True, p.get("waited_s", 0), f"{p['status_code']} — далі у фоні")
+        log.info("Instagram: контейнер %s ще %s після %s с — чекаю у фоні той самий контейнер",
+                 cid, p["status_code"], p.get("waited_s"))
+        raise StillProcessing(f"Instagram ще обробляє відео (контейнер {cid}, {p['status_code']})", cid)
 
     current: str | None = None
 
@@ -327,111 +359,6 @@ class Instagram(_MetaBase):
             raise Stopped("публікації зупинено")
 
     _upload_lock = threading.Lock()
-
-    def _publish_locked(self, video_path: str, meta) -> dict:
-        from app.core import media
-        try:
-            problems = media.ig_problems(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
-        except OSError:
-            problems = []
-        tokens = [("сторінки", None)]
-        user = self.secrets.get("META_USER_TOKEN")
-        if user and user != self._g().token:
-            tokens.append(("користувача", user))
-        size_mb = os.path.getsize(video_path) / 1024 / 1024
-        limit = float(self.pcfg.get("max_upload_mb", 100) or 10 ** 6)
-        limit = min(limit, float(self.pcfg.get("copy_target_mb") or media.IG_TARGET_MB) + 5)   # більші — лише копією
-        big = size_mb > limit
-        # Порядок спроб: оригінал (якщо легкий і за вимогами) → копія під вимоги Reels (вона вже не раз
-        # проходила і з важкими файлами) → сувора копія 10 Мбіт/с → крайній варіант 30 к/с.
-        files = ([] if problems or big else [("оригінал", lambda: video_path)]) + \
-            [("копія під вимоги Reels", lambda: media.instagram_copy(video_path, self.cfg))] + \
-            [("сувора копія (та ж частота кадрів, 10 Мбіт/с)",
-              lambda: media.instagram_copy(video_path, self.cfg, mode="safe60")),
-             ("крайній варіант (30 к/с, 6 Мбіт/с)", lambda: media.instagram_copy(video_path, self.cfg, mode="safe30"))]
-        normal_first = files[0][0]
-        best = self._best_variant()
-        if best and best != normal_first and any(f[0] == best for f in files):
-            # останні рази Instagram приймав лише цей варіант — починаємо з нього (60 к/с перевіряємо раз на добу)
-            files = [f for f in files if f[0] == best] + [f for f in files if f[0] != best]
-            log.info("Instagram: починаю з варіанта, що спрацював минулого разу: %s", best)
-        single = bool(self.pcfg.get("single_attempt", True))
-        if single:
-            # Діагностичний режим (тимчасово): одна спроба — один контейнер, одне завантаження, без перебору
-            # варіантів і без запасного шляху через Facebook. Повтор — вручну («🔁»), після аналізу етапів.
-            # Яку одну копію пробуємо — експеримент діагностики (platforms.instagram.diag_variant):
-            # "" — звичайна (60 к/с), "safe60" — 60 к/с полегшена, "safe30" — 30 к/с рівень 4.1 (єдина, що проходила)
-            want = {"safe30": "крайній", "safe60": "сувора"}.get(str(self.pcfg.get("diag_variant", "safe30")))
-            pick = [f for f in files if want and f[0].startswith(want)]
-            files = pick[:1] or files[:1]
-            tokens = tokens[:1]   # і один токен: жодного другого контейнера / завантаження
-        if single and str(self.pcfg.get("diag_method", "rupload")) == "fb_link" and self.secrets.get("FB_PAGE_ID"):
-            return self._diag_via_facebook(files[0], video_path, meta)
-        errors = []
-        via_fb = bool(self.pcfg.get("facebook_fallback", False) and self.secrets.get("FB_PAGE_ID")) and not single
-        for tname, token in tokens:
-            for fname, get_file in files:
-                self._check_stop()
-                try:
-                    if fname != "оригінал":
-                        self.report("готую копію для Instagram")
-                    self._variant_name = fname
-                    out = self._publish_file(get_file(), meta, token)
-                except StillProcessing:
-                    raise   # файл дійшов, Instagram обробляє — дочекаємось у фоні; новий контейнер = дубль
-                except PublishError as e:
-                    if not self._upload_rejected(e):
-                        raise  # інша помилка (токен, ліміт, формат) — без перебору
-                    self._save_diag("відмова")
-                    log.warning("Instagram: %s + токен %s — відмова: %s", fname, tname, e)
-                    errors.append(f"{fname}" + (f" (токен {tname})" if len(tokens) > 1 else "") + f" — {short_error(e)}")
-                    if not via_fb:
-                        continue
-                    via_fb = False                       # запасний шлях — один раз, одразу після першої відмови
-                    try:
-                        self._check_stop()
-                        self.report("готую копію для Instagram")
-                        out = self._publish_via_facebook(media.instagram_copy(video_path, self.cfg), meta)
-                    except Stopped:
-                        raise
-                    except PublishError as e2:
-                        log.warning("Instagram через Facebook — відмова: %s", e2)
-                        errors.append(f"через тимчасове відео Facebook — {short_error(e2)}")
-                        continue
-                    out["note"] = ("Instagram: пряме завантаження відхилено — опубліковано через тимчасове "
-                                   "відео Facebook (його видалено)")
-                    out["tried"] = errors[:6]
-                    return out
-                notes = []
-                if big:
-                    notes.append(f"файл {size_mb:.0f} МБ — завантажено {fname} "
-                                 "(Instagram однаково стискає Reels до ~3–5 Мбіт/с)")
-                elif problems:
-                    notes.append("перекодовано під вимоги Reels (" + ", ".join(problems) + ")")
-                elif fname != "оригінал":
-                    notes.append("Instagram не прийняв оригінал — опубліковано копію під вимоги Reels")
-                if token:
-                    notes.append("завантажено з токеном користувача")
-                if notes:
-                    out["note"] = "Instagram: " + "; ".join(notes)
-                if errors:  # що не пройшло перед успіхом — для «🧾 Деталі»
-                    out["tried"] = errors[:6]
-                self._remember_variant(None if fname == normal_first else fname)
-                return out
-        try:
-            about = media.ig_summary(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
-        except Exception:  # noqa: BLE001
-            about = ""
-        stages = (getattr(self, "diag", None) or {}).get("summary")
-        if single:
-            raise PublishError("Instagram не прийняв відео (діагностичний режим: одна спроба, без повторів). "
-                               + (f"Етапи: {stages}. " if stages else "") + "; ".join(errors)
-                               + " — Повторити вручну: «🔁 Повторити зараз».")
-        raise PublishError(f"Instagram не прийняв відео ({len(errors)} спроб): " + "; ".join(errors)
-                           + (f". Файл: {about}" if about else "")
-                           + ("" if len(tokens) > 1 else
-                              " — Порада: у панелі (Instagram + Facebook) ще раз «Отримати сторінки» → «Підключити»,"
-                              " щоб зберегти токен користувача для резервної спроби."))
 
     def _stage(self, name: str, ok: bool, seconds: float, info: str = "") -> None:
         d = getattr(self, "diag", None)
@@ -491,359 +418,183 @@ class Instagram(_MetaBase):
                 "processing_s": (st.get("обробка") or {}).get("seconds"), "method": d.get("variant"),
                 "outcome": outcome}
 
-    def _variant_file(self) -> Path:
-        data = (self.cfg.get("paths") or {}).get("data")
-        return Path(data) / "ig_variant.json" if data else None
+    # ---------------- Єдиний шлях публікації Reels (звичайний, «тихий» і фоновий) ----------------
+    # Один активний контейнер — одне очікування. Новий контейнер (наступний спосіб) — ЛИШЕ після підтвердженої
+    # відповіді Meta ERROR або EXPIRED. Тайм-аут очікування НЕ є помилкою: контейнер зберігається й перевіряється далі.
+    # Способи: оригінал (якщо вже відповідає вимогам Reels) → копія під вимоги Reels → легка копія 30 к/с.
+    METHODS = (("копія під вимоги Reels", ""), ("легка копія 30 к/с", "safe30"))   # лише 1080p — 720p надто погано
 
-    def _best_variant(self) -> str | None:
-        """Варіант файлу, який Instagram прийняв минулого разу, коли звичайний не пройшов.
-        Раз на добу пробуємо знову звичайний порядок (60 к/с) — раптом Instagram знову приймає."""
-        try:
-            st = json.loads(self._variant_file().read_text(encoding="utf-8"))
-        except (OSError, ValueError, AttributeError):
-            return None
-        if time.time() - float(st.get("ts") or 0) > 24 * 3600:
-            return None
-        return st.get("best")
-
-    def _remember_variant(self, best: str | None) -> None:
-        f = self._variant_file()
-        if f is None:
-            return
-        try:
-            if best:
-                f.write_text(json.dumps({"best": best, "ts": time.time()}, ensure_ascii=False), encoding="utf-8")
-            else:
-                f.unlink(missing_ok=True)
-        except OSError as e:
-            log.debug("ig_variant: %s", e)
-
-    @staticmethod
-    def _upload_rejected(e: Exception) -> bool:
-        t = str(e).lower()
-        return "processingfailed" in t or "processing failed" in t or "не прийняв завантаження" in t
-
-    def _publish_file(self, video_path: str, meta, token: str | None = None) -> dict:
-        g = self.graph(token) if token else self._g()
+    def methods_for(self, video_path: str) -> tuple:
+        """Способи для цього файлу: оригінал без перекодування, якщо він уже сумісний (не знижуємо якість без потреби)
+        або якщо ffprobe не зміг його прочитати (тоді вантажимо як є — так було й раніше)."""
         from app.core import media as _media
-        try:   # той самий файл, що підемо вантажити: є, читається повністю, не змінюється
-            check = _media.file_check(video_path)
-        except _media.MediaError as e:
-            raise PublishError(f"Instagram: перевірка файлу перед завантаженням — {e}") from e
-        size = check["size"]
-        self.diag = diag = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "file": Path(video_path).name,
-                            "size_mb": round(size / 1048576, 1), "token": "користувача" if token else "сторінки",
-                            "stages": [], "file_check": {"size": check["size"], "md5": check["md5"]},
-                            "variant": getattr(self, "_variant_name", "")}
         try:
-            from app.core import media
-            diag["probe_raw"] = media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe"))
-            diag["probe"] = media.ig_summary(diag["probe_raw"])
+            p = _media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe"))
         except Exception:  # noqa: BLE001
-            pass
-        self._stage("файл", True, 0, f"{size / 1048576:.1f} МБ, читається повністю, не змінюється")
-        t0 = time.time()
+            p = {}
+        max_mb = float(self.pcfg.get("max_upload_mb", 100) or 1e6)
+        if not p or (not _media.ig_problems(p) and p.get("size_mb", 0) <= max_mb):
+            return (("оригінал", None),) + self.METHODS
+        return self.METHODS
+
+    def upload_only(self, video_path: str, meta, method: int = 0, on_container=None) -> dict:
+        """Перевірка тривалості → (копія) → контейнер → ОДНЕ завантаження файлу. БЕЗ опитування статусу.
+        on_container(record) — викликається одразу після створення контейнера (Poster зберігає ID у базі:
+        після перезапуску контейнер не губиться і не створюється вдруге). «rupload 400» — ще не відмова:
+        результат покаже статус контейнера."""
+        from app.core import media as _media
+        while not Instagram._upload_lock.acquire(timeout=3):   # одне завантаження в Instagram за раз
+            self._check_stop()
+        Instagram.current = video_path
         try:
-            c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable",
-                       caption=meta.instagram_text[:2200],
-                       share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
-        except PublishError as e:
-            self._stage("контейнер", False, time.time() - t0, str(e)[:300])
-            self._save_diag("помилка створення контейнера")
-            raise
-        cid = c["id"]
-        diag["container"] = cid
-        self._stage("контейнер", True, time.time() - t0, cid)
-        uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
-        log.info("Instagram: контейнер %s, завантажую %s (%.1f МБ)", cid, video_path,
-                 os.path.getsize(video_path) / 1024 / 1024)
-        self.report(f"завантажую файл ({os.path.getsize(video_path) / 1024 / 1024:.0f} МБ)")
-        upload_error = None
-        try:
-            g.upload_binary(uri, video_path, float(self.pcfg.get("upload_chunk_mb", 0) or 0))
-            if not _media.file_unchanged(video_path, check):
-                diag["file_changed_during_upload"] = True
-            up = getattr(g, "last_upload", {})
-            if up.get("chunk_mb"):   # частинами: переконатись, що сервер має ВСІ байти, перш ніж чекати обробки
-                got = g.upload_status(uri)
-                diag["rupload_after"] = got
-                if isinstance(got.get("offset"), int) and got["offset"] < size:
-                    raise PublishError(f"rupload прийняв {got['offset'] / 1048576:.1f} з {size / 1048576:.1f} МБ "
-                                       f"(частин надіслано {len(up.get('chunks') or [])}) — файл дійшов не повністю")
-            up = getattr(g, "last_upload", {})
-            parts = len(up.get("chunks") or [])
-            self._stage("rupload", True, up.get("seconds", 0),
-                        f"HTTP {up.get('http')}, {up.get('mbps')} Мбіт/с" + (f", частин {parts}" if parts > 1 else ""))
-            log.info("Instagram rupload ✅ %.1f МБ за %s с%s", size / 1048576, up.get("seconds"),
-                     f" ({parts} частин по {up.get('chunk_mb'):g} МБ)" if parts > 1 else "")
-            diag["uri"] = uri
-        except PublishError as e:
-            up = getattr(g, "last_upload", {})
-            if not _media.file_unchanged(video_path, check):
-                diag["file_changed_during_upload"] = True
-                log.warning("Instagram: файл змінився під час завантаження (OneDrive / інша програма?): %s", video_path)
-            got = g.upload_status(uri)
-            diag["rupload"] = {**up, "after": got}
-            self._stage("rupload", False, up.get("seconds", 0),
-                        f"HTTP {up.get('http')} за {up.get('seconds')} с ({up.get('mbps')} Мбіт/с"
-                        + (f", частинами по {up.get('chunk_mb'):g} МБ: прийнято {len(up.get('chunks') or []) - 1}"
-                           f" з {-(-up.get('bytes', 0) // int(up.get('chunk_mb') * 1048576))}" if up.get("chunk_mb") else "")
-                        + "); "
-                        f"сервер каже: {json.dumps(got, ensure_ascii=False)[:160]}")
-            # offset 0 після 400 — НЕ доказ, що файл не дійшов: 11–14.11 так само було 400, а контейнер
-            # за кілька хвилин ставав FINISHED і відео публікувалось. Тому чекаємо обробки, як тоді.
-            # 400 від rupload буває хибною: файл дійшов і обробляється. Повторно в той самий контейнер НЕ шлемо —
-            # друга відправка ламає обробку («Video Transcoding Error: both HD and SD progressive failed»).
-            upload_error = e
-            # часто хибна відповідь: файл дійшов і обробляється. Справжня помилка буде в підсумку публікації
-            log.info("Instagram rupload: %s — перевіряю, чи відео все одно обробляється", short_error(e))
+            self._check_stop()
+            orig = _media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")) or {}
+            bad = _media.ig_duration_problem(orig)
+            if bad:   # поза офіційними межами Reels API — контейнер навіть не створюємо (і не обрізаємо)
+                raise PublishError(f"Instagram: {bad}")
+            methods = self.methods_for(video_path)
+            name, mode = methods[min(method, len(methods) - 1)]
+            self.report(f"готую файл для Instagram: {name}")
+            path = video_path if mode is None else _media.instagram_copy(video_path, self.cfg, mode=mode)
+            try:
+                check = _media.file_check(path)
+            except Exception as e:  # noqa: BLE001
+                raise PublishError(f"Instagram: файл не готовий — {e}") from e
+            self._check_stop()
+            size = check["size"] / 1048576
+            self.diag = d = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "file": Path(path).name,
+                             "size_mb": round(size, 1), "variant": name, "method": method, "stages": [], "polls": []}
+            try:
+                d["probe_raw"] = orig if mode is None else _media.ig_probe(path, self.cfg.get("ffprobe", "ffprobe"))
+            except Exception:  # noqa: BLE001
+                pass
+            g = self._g()
+            t0 = time.time()
+            try:
+                c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable",
+                           caption=meta.instagram_text[:2200],
+                           share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
+            except PublishError as e:
+                self._stage("контейнер", False, time.time() - t0, str(e)[:300])
+                self._save_diag("помилка створення контейнера")
+                raise
+            cid = c["id"]
+            d["container"] = cid
+            d["container_created"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._stage("контейнер", True, time.time() - t0, cid)
+            rec = {"container": cid, "method": method, "method_name": name, "file_mb": round(size, 1),
+                   "methods_total": len(methods)}
+            if on_container:
+                on_container(rec)
+            uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
+            self.report(f"завантажую в Instagram ({name}, {size:.0f} МБ)")
+            log.info("Instagram: контейнер %s, %s — завантажую %s (%.1f МБ)", cid, name, path, size)
+            note = ""
+            t0 = time.time()
+            try:
+                g.upload_binary(uri, path, float(self.pcfg.get("upload_chunk_mb", 0) or 0))
+            except RateLimited:
+                raise
+            except PublishError as e:
+                note = short_error(e)[:300]
+                log.info("Instagram rupload: %s — ще не відмова, результат покаже статус контейнера", note)
+            up = getattr(g, "last_upload", {}) or {}
+            d["rupload"] = {"http": up.get("http"), "body": up.get("body"), "seconds": up.get("seconds"),
+                            "mbps": up.get("mbps"), "trace": up.get("trace") or {}}
+            if not _media.file_unchanged(path, check):
+                d["file_changed_during_upload"] = True
+            self._stage("rupload", not note, time.time() - t0, f"HTTP {up.get('http')}" + (f": {note}" if note else ""))
+            return {**rec, "upload_note": note, "upload_http": up.get("http")}
+        finally:
+            Instagram.current = None
+            Instagram._upload_lock.release()
 
-        return self._wait_and_publish(g, cid, upload_error)
+    def poll_container(self, cid: str) -> dict:
+        """ОДИН запит стану контейнера. {"state", "status_code", "status", "time"}; кожна перевірка — у діагностиці."""
+        st = self._g().get(cid, fields="status_code,status")
+        code = st.get("status_code")
+        res = {"state": container_state(code), "status_code": code, "status": (st.get("status") or "")[:1000],
+               "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        d = getattr(self, "diag", None)
+        if d is not None and d.get("container") == cid:
+            d.setdefault("polls", []).append([res["time"], code, res["status"][:300]])
+        self.last_container = {"container_id": cid, "container_status": code,
+                               "container_status_text": res["status"], "stage": "обробка"}
+        return res
 
-    def _wait_and_publish(self, g, cid: str, upload_error=None) -> dict:
-        """Чекає, поки Instagram обробить контейнер, і публікує його."""
-        start = time.time()
-        deadline = start + (3 * 60 if upload_error else INLINE_WAIT)
-        self.report("Instagram обробляє відео")
-        delays = iter(POLL_DELAYS)
-        diag = getattr(self, "diag", None) or {"stages": []}
-        polls = diag.setdefault("polls", [])
-        while True:
-            st = g.get(cid, fields="status_code,status")
-            code = st.get("status_code")
-            polls.append([int(time.time() - start), code, (st.get("status") or "")[:120]])
-            self.report("Instagram обробляє відео")   # «живий»: остання перевірка щойно
-            if code == "FINISHED":
-                if upload_error:
-                    log.info("Instagram: попри помилку завантаження контейнер готовий — публікую")
-                self._stage("обробка", True, time.time() - start, f"FINISHED, перевірок {len(polls)}")
-                break
-            if code in ("ERROR", "EXPIRED"):
-                self._stage("обробка", False, time.time() - start, f"{code}: {st.get('status')}")
-                self._save_diag(f"контейнер {code}")
-                reason = f"{st.get('status')}{ig_hint(st.get('status'))}"
-                raise PublishError(f"{upload_error} | стан контейнера: {reason}" if upload_error
-                                   else f"Instagram відхилив відео: {reason}")
-            if time.time() > deadline and code == "IN_PROGRESS" and not upload_error:
-                # обробляється довго — не здаємось і не тримаємо чергу: далі чекаємо у фоні той самий контейнер
-                self._stage("обробка", True, time.time() - start, f"IN_PROGRESS після {len(polls)} перевірок — далі у фоні")
-                log.info("Instagram: контейнер %s обробляється понад %d хв — дочекаюсь у фоні й опублікую",
-                         cid, int((time.time() - start) / 60))
-                raise StillProcessing(f"Instagram ще обробляє відео (контейнер {cid})", cid)
-            if time.time() > deadline:
-                srv = g.upload_status(diag["uri"]) if diag.get("uri") else {}
-                if srv:
-                    diag["rupload_after_wait"] = srv
-                self._stage("обробка", False, time.time() - start,
-                            f"{code} після {len(polls)} перевірок: {(st.get('status') or '')[:100]}"
-                            + (f"; rupload має: {json.dumps(srv, ensure_ascii=False)[:120]}" if srv else ""))
-                self._save_diag("обробка не завершилась")
-                if upload_error:
-                    waited = int((time.time() - start) / 60)
-                    raise PublishError(f"{upload_error}{self._container_reason(g, cid)} (чекали {waited} хв)")
-                raise PublishError("Instagram: обробка відео триває понад 10 хв"
-                                   + (f". Етапи: {diag.get('summary')}" if diag.get("summary") else ""))
-            # перевіряємо рідше, що довше обробка: кожен запит з'їдає годинну квоту Meta; «Стоп» — щосекунди
-            # квота Meta ≈200 запитів/год на весь додаток: опитування раз на 20 с, потім раз на хвилину,
-            # а при квоті ≥80% — раз на 2 хв
-            pause = next(delays, POLL_DELAYS[-1])     # 10 → 20 → 40 → 80 → 80… с: один контейнер, рідкі перевірки
-            if usage_pct() >= 80:
-                pause = max(pause, 120)
-            for _ in range(pause):
-                self._check_stop()
-                time.sleep(1)
-
-        self._check_stop()   # відео готове, але натиснули «Стоп» — не публікуємо
-        self.report("публікую готове відео")
+    def publish_container(self, cid: str) -> dict:
+        """media_publish готового контейнера + посилання. Помилка — PublishError з префіксом «media_publish:»."""
+        g = self._g()
+        self.last_container = {**(getattr(self, "last_container", None) or {}), "stage": "media_publish"}
         t1 = time.time()
         try:
             mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
         except PublishError as e:
             self._stage("публікація", False, time.time() - t1, str(e)[:300])
-            self._save_diag("помилка media_publish")
-            raise
-        self._stage("публікація", True, time.time() - t1, mid)
-        self._save_diag("опубліковано")
-        out = {"id": mid, "url": ""}
-        try:  # після публікації — помилки не критичні (щоб не опублікувати двічі)
-            out["url"] = g.get(mid, fields="permalink").get("permalink", "")
-        except Exception as e:  # noqa: BLE001
-            log.warning("Instagram permalink: %s", e)
-        return out
-
-    FB_LINK_WAIT = 10 * 60
-
-    def _diag_via_facebook(self, variant, original: str, meta) -> dict:
-        """Експеримент діагностики: одна спроба БЕЗ rupload — через неопубліковане відео Facebook (video_url)."""
-        fname, get_file = variant
-        self._check_stop()
-        if fname != "оригінал":
-            self.report("готую копію для Instagram")
-        path = get_file()
-        from app.core import media as _media
-        try:
-            check = _media.file_check(path)
-        except _media.MediaError as e:
-            raise PublishError(f"Instagram: перевірка файлу перед завантаженням — {e}") from e
-        self.diag = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "file": Path(path).name,
-                     "size_mb": round(check["size"] / 1048576, 1), "method": "через Facebook (video_url)",
-                     "stages": []}
-        try:
-            orig = _media.ig_summary(_media.ig_probe(original, self.cfg.get("ffprobe", "ffprobe")))
-            copy = _media.ig_summary(_media.ig_probe(path, self.cfg.get("ffprobe", "ffprobe")))
-        except Exception:  # noqa: BLE001
-            orig = copy = ""
-        self._stage("файл", True, 0, f"{check['size'] / 1048576:.1f} МБ, {fname}"
-                    + (f"; оригінал: {orig}" if orig else "") + (f"; копія: {copy}" if copy and path != original else ""))
-        t0 = time.time()
-        try:
-            out = self._publish_via_facebook(path, meta)
-        except Stopped:
-            raise
-        except PublishError as e:
-            self._stage("через Facebook", False, time.time() - t0, str(e)[:300])
-            self._save_diag("відмова (шлях через Facebook)")
-            raise PublishError("Instagram не прийняв відео (діагностика: одна спроба через Facebook, без rupload). "
-                               f"Етапи: {self.diag.get('summary')}") from e
-        self._stage("через Facebook", True, time.time() - t0, "опубліковано")
-        self._save_diag("опубліковано через Facebook")
-        out["note"] = ("Instagram: опубліковано через тимчасове відео Facebook (пряме завантаження rupload "
-                       "Instagram зараз відкидає)")
-        return out
-
-    def _publish_via_facebook(self, video_path: str, meta) -> dict:
-        """Запасний шлях, коли Instagram відхиляє пряме завантаження (rupload ProcessingFailedError):
-        відео — на сторінку Facebook НЕОПУБЛІКОВАНИМ (ніхто не бачить) → Instagram бере його за посиланням
-        (video_url) → тимчасове відео з Facebook видаляється за будь-якого результату."""
-        page = self.secrets.get("FB_PAGE_ID")
-        if not page:
-            raise PublishError("немає FB_PAGE_ID — запасний шлях через Facebook недоступний")
-        fb = self.graph()                                   # токен сторінки: відео — на сторінку
-        self.report("запасний шлях: вантажу відео на Facebook (неопубліковане)")
-        vid = fb.upload_video_unpublished(page, video_path, "тимчасово — для публікації в Instagram")["id"]
-        log.info("Instagram через Facebook: тимчасове відео %s", vid)
-        try:
-            src, start = "", time.time()
-            while time.time() - start < self.FB_LINK_WAIT:
-                st = fb.get(vid, fields="status,source")
-                vs = (st.get("status") or {}).get("video_status")
-                if vs == "error":
-                    raise PublishError(f"Facebook не обробив тимчасове відео: {st.get('status')}")
-                if st.get("source") and vs in (None, "ready"):
-                    src = st["source"]
-                    break
-                self.report("запасний шлях: Facebook обробляє відео")
-                for _ in range(20 if usage_pct() < 80 else 60):
-                    self._check_stop()
-                    time.sleep(1)
-            if not src:
-                raise PublishError("Facebook не дав посилання на тимчасове відео за 10 хв")
-            g = self._g()
-            c = g.post(f"{self.ig_id}/media", media_type="REELS", video_url=src,
-                       caption=meta.instagram_text[:2200],
-                       share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
-            out = self._wait_and_publish(g, c["id"])
-            out["via"] = "facebook"
-            return out
-        finally:
-            try:
-                fb.delete(vid)
-            except Exception as e:  # noqa: BLE001
-                log.warning("Тимчасове відео Facebook %s не видалено: %s — видаліть вручну (неопубліковане)", vid, e)
-
-    @staticmethod
-    def _container_reason(g, cid: str) -> str:
-        """Instagram зберігає точну причину відмови в контейнері — додаємо її до помилки."""
-        try:
-            st = g.get(cid, fields="status_code,status")
-        except Exception as e:  # noqa: BLE001
-            log.debug("status контейнера: %s", e)
-            return ""
-        reason = st.get("status") or st.get("status_code") or ""
-        return f" | стан контейнера: {reason}{ig_hint(reason)}" if reason else ""
-
-    # Способи завантаження — по черзі, лише якщо попередній не пройшов за wait_min (типово 20 хв). Між ними
-    # ми Instagram НЕ опитуємо: завантажили → чекаємо мовчки → один запит «готово?» → публікуємо або наступний спосіб.
-    METHODS = (("копія під вимоги Reels", ""), ("легка копія 30 к/с", "safe30"))   # лише 1080p — 720p надто погано
-
-    def upload_only(self, video_path: str, meta, method: int = 0) -> dict:
-        """Контейнер + одне завантаження файлу, БЕЗ опитування статусу. {"container", "method", "method_name", …}.
-        «rupload 400» не помилка: файл часто все одно доходить — це покаже перевірка через wait_min."""
-        from app.core import media as _media
-        if not Instagram._upload_lock.acquire(timeout=3600):
-            raise PublishError("Instagram: інше відео ще завантажується")
-        Instagram.current = video_path
-        try:
-            self._check_stop()
-            name, mode = self.METHODS[min(method, len(self.METHODS) - 1)]
-            self.report(f"готую файл для Instagram: {name}")
-            path = _media.instagram_copy(video_path, self.cfg, mode=mode)
-            try:
-                _media.file_check(path)
-            except Exception as e:  # noqa: BLE001
-                raise PublishError(f"Instagram: файл не готовий — {e}") from e
-            self._check_stop()
-            g = self._g()
-            c = g.post(f"{self.ig_id}/media", media_type="REELS", upload_type="resumable",
-                       caption=meta.instagram_text[:2200],
-                       share_to_feed="true" if self.pcfg.get("share_to_feed", True) else "false")
-            cid = c["id"]
-            uri = c.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{g.version}/{cid}"
-            size = os.path.getsize(path) / 1048576
-            self.report(f"завантажую в Instagram ({name}, {size:.0f} МБ)")
-            log.info("Instagram: контейнер %s, %s — завантажую %s (%.1f МБ)", cid, name, path, size)
-            note = ""
-            self.diag = {"file": Path(path).name, "size_mb": round(size, 1), "variant": name, "stages": [],
-                         "container": cid}
-            try:
-                self.diag["probe_raw"] = _media.ig_probe(path, self.cfg.get("ffprobe", "ffprobe"))
-            except Exception:  # noqa: BLE001
-                pass
-            t0 = time.time()
-            try:
-                g.upload_binary(uri, path)
-            except RateLimited:
-                raise
-            except PublishError as e:
-                note = short_error(e)[:120]
-                log.info("Instagram rupload: %s — це ще не відмова, перевірю результат пізніше", note)
-            up = getattr(g, "last_upload", {}) or {}
-            self.diag["rupload"] = {"http": up.get("http"), "body": up.get("body")}
-            self.diag["container"] = cid
-            self.diag["stages"].append({"stage": "rupload", "ok": not note, "seconds": round(time.time() - t0, 1)})
-            return {"container": cid, "method": method, "method_name": name, "upload_note": note,
-                    "file_mb": round(size, 1)}
-        finally:
-            Instagram.current = None
-            Instagram._upload_lock.release()
-
-    def finish_container(self, cid: str) -> dict | None:
-        """Фонове завершення: контейнер готовий — публікуємо ({"id", "url"}); ще обробляється — None;
-        ERROR/EXPIRED — PublishError. Файл повторно НЕ вантажимо."""
-        g = self._g()
-        st = g.get(cid, fields="status_code,status")
-        code = st.get("status_code")
-        # для історії публікацій: що саме відповів Instagram і на якому етапі
-        self.last_container = {"container_id": cid, "container_status": code,
-                               "container_status_text": (st.get("status") or "")[:1000], "stage": "обробка"}
-        if code in ("ERROR", "EXPIRED"):
-            raise PublishError(f"Instagram відхилив відео під час обробки: {st.get('status')}{ig_hint(st.get('status'))}")
-        if code == "PUBLISHED":
-            raise PublishError("контейнер уже опубліковано раніше — перевірте профіль Instagram")
-        if code != "FINISHED":
-            return None
-        self.last_container["stage"] = "media_publish"
-        try:
-            mid = g.post(f"{self.ig_id}/media_publish", creation_id=cid)["id"]
-        except PublishError as e:
             raise PublishError(f"media_publish: {e}") from e
+        self._stage("публікація", True, time.time() - t1, mid)
         self.last_container["stage"] = ""
         out = {"id": mid, "url": ""}
-        try:
+        try:   # після публікації — помилки не критичні (щоб не опублікувати двічі)
             out["url"] = g.get(mid, fields="permalink").get("permalink", "")
         except Exception as e:  # noqa: BLE001
             log.warning("Instagram permalink: %s", e)
         return out
+
+    def find_published(self, since: float) -> dict:
+        """Контейнер уже PUBLISHED (наприклад, media_publish спрацював, але відповідь загубилась) — знайти цей Reels
+        серед останніх публікацій акаунта (один запит), щоб НЕ публікувати вдруге."""
+        try:
+            r = self._g().get(f"{self.ig_id}/media", limit=10, fields="id,permalink,timestamp")
+        except PublishError as e:
+            log.info("Instagram: не вдалося знайти вже опублікований Reels: %s", e)
+            return {"id": "", "url": ""}
+        best = None
+        for m in r.get("data") or []:
+            try:
+                ts = datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z").timestamp()
+            except (KeyError, ValueError):
+                continue
+            if ts >= since - 120 and (best is None or ts < best[0]):
+                best = (ts, m)
+        return {"id": best[1]["id"], "url": best[1].get("permalink") or ""} if best else {"id": "", "url": ""}
+
+    def finish_container(self, cid: str, since: float = 0) -> dict:
+        """ОДНА перевірка контейнера й, якщо готовий, публікація. Повертає {"state", "status_code", "status", …}:
+        published — опубліковано (id, url); waiting — IN_PROGRESS/PENDING (чекати далі той самий контейнер);
+        unknown — невідомий статус (чекати, НЕ створювати новий); error / expired — підтверджена відмова Meta
+        (можна наступний спосіб); already — контейнер уже PUBLISHED (не публікувати вдруге). Файл НЕ вантажимо."""
+        p = self.poll_container(cid)
+        if p["state"] == "ready":
+            return {**p, **self.publish_container(cid), "state": "published"}
+        if p["state"] == "already":
+            return {**p, **self.find_published(since), "state": "already"}
+        return p
+
+    def wait_inline(self, cid: str, seconds: int) -> dict:
+        """Чекати обробки до `seconds` (наростаючі паузи 10/20/40/80 с, «Стоп» — щосекунди). Повертає останню
+        перевірку. Тайм-аут — це НЕ помилка: повертається стан waiting/unknown, контейнер чекає далі у фоні."""
+        start = time.time()
+        delays = iter(POLL_DELAYS)
+        self.report("Instagram обробляє відео")
+        while True:
+            p = self.poll_container(cid)
+            self.report("Instagram обробляє відео")
+            if p["state"] not in ("waiting", "unknown"):
+                p["waited_s"] = round(time.time() - start, 1)
+                return p
+            if p["state"] == "unknown":
+                log.warning("Instagram: невідомий статус контейнера %s: %r — чекаю той самий контейнер",
+                            cid, p["status_code"])
+            pause = next(delays, POLL_DELAYS[-1])
+            if usage_pct() >= 80:
+                pause = max(pause, 120)
+            if time.time() + pause - start > seconds:
+                p["waited_s"] = round(time.time() - start, 1)
+                return p
+            for _ in range(pause):
+                self._check_stop()
+                time.sleep(1)
 
     def check(self) -> str:
         r = self._g().get(self.ig_id, fields="username")

@@ -90,8 +90,8 @@ class HistoryTest(FlowBase):
         self.assertEqual(ig["container_status_text"], "Media is still being processed.")
         self.assertEqual((ig["duration"], ig["size_mb"]), (50.0, 140))
 
-        c = self.publish("c", 59.0)
-        self.assertEqual(self.rows(c)["instagram"]["result"], "manual_long")
+        c = self.publish("c", 59.0)   # стару межу «понад 55 с — лише вручну» прибрано: пробуємо через API
+        self.assertEqual(self.rows(c)["instagram"]["result"], "manual_rejected")
 
         csv_text = history.to_csv(self.app).decode("utf-8-sig")
         self.assertIn("manual_rejected", csv_text)
@@ -100,9 +100,9 @@ class HistoryTest(FlowBase):
         s = history.summary(self.app)
         self.assertIn("46–55 с: 1 з 2 пройшло", s)
         self.assertIn("HTTP 200: 1 з 1", s)
-        self.assertIn("HTTP 400: 0 з 1", s)
-        self.assertIn("rupload (завантаження) — 1", s)
-        self.assertIn("IN_PROGRESS — 1", s)
+        self.assertIn("HTTP 400: 0 з 2", s)   # b і c (обидва — IGBad)
+        self.assertIn("rupload (завантаження) — 2", s)
+        self.assertIn("IN_PROGRESS — 2", s)
 
 
 class ContainerDetailsTest(unittest.TestCase):

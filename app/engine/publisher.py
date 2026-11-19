@@ -9,7 +9,7 @@ from pathlib import Path
 from app.core import media
 from app.core.config import PLATFORMS, local_dt, now_ts
 from app.core.meta import apply_always_hashtags, highlight_description, load_meta, move_pair, read_json, write_json
-from app.platforms import RateLimited, StillProcessing, Stopped, TokenExpired
+from app.platforms import ContainerFailed, PublishError, RateLimited, StillProcessing, Stopped, TokenExpired
 
 log = logging.getLogger("publisher")
 
@@ -19,6 +19,8 @@ PENDING = ("manual", "skipped", "processing", "ig_wait", "ig_next")
 DONE = tuple(x for x in ("ok",) + PENDING if x != "ig_next")   # ig_next — Instagram ще треба завантажити (інший спосіб)
 IG_PENDING_SQL = ("status IN ('posted','publishing','failed') AND "
                   "(results LIKE '%\"processing\"%' OR results LIKE '%\"ig_wait\"%' OR results LIKE '%\"ig_next\"%')")
+# якщо процес перезапустився посеред першого очікування (до 10 хв) — фон підхопить той самий контейнер після цього
+INLINE_GRACE = 12 * 60
 IG_BUSY = ("processing", "ig_next")   # Instagram зайнятий цим шортсом — інші чекають (строго одне відео за раз)
 
 
@@ -246,18 +248,12 @@ class Publisher:
     def _publish_one_raw(self, key: str, item: dict, meta) -> dict:
         app = self.app
         igc = app.cfg["platforms"].get("instagram") or {}
-        too_long = key == "instagram" and not igc.get("manual") and self._ig_too_long(item, igc)
-        if key == "instagram" and (igc.get("manual") or too_long) \
+        # (старе внутрішнє обмеження «довші за 55 с — лише вручну» прибрано: Reels API приймає 3 с – 15 хв)
+        if key == "instagram" and igc.get("manual") \
                 and hasattr(app.bot, "instagram_manual") and not app.cfg.get("dry_run"):
-            try:   # напівавтомат: відео й підпис — вам у Telegram, публікуєте з телефона
+            try:   # напівавтомат (увімкнений вами): відео й підпис — вам у Telegram, публікуєте з телефона
                 app.bot.instagram_manual(item["id"], meta)
-                if too_long:
-                    log.info("#%s instagram: відео %s с — довше за %s с, Instagram через API таке не приймає; "
-                             "надіслано вам у Telegram повністю (без запитів до Instagram)",
-                             item["id"], too_long, igc.get("auto_max_seconds"))
-                return {"status": "manual", "sent_at": now_ts(),
-                        "note": (f"{too_long} с — довше за {igc.get('auto_max_seconds')} с, тому вам у Telegram"
-                                 if too_long else "надіслано в Telegram для публікації з телефона")}
+                return {"status": "manual", "sent_at": now_ts(), "note": "надіслано в Telegram для публікації з телефона"}
             except Exception as e:  # noqa: BLE001
                 log.warning("#%s Instagram вручну: не вдалося надіслати в Telegram: %s", item["id"], e)
                 return {"status": "error", "attempts": 1, "error": f"не вдалося надіслати відео в Telegram: {e}"[:500]}
@@ -280,6 +276,15 @@ class Publisher:
         except AttributeError:
             pass
         self._report(item["id"], "завантажую")
+        if key == "instagram" and hasattr(plat, "upload_only") and not app.cfg.get("dry_run"):
+            if app.db.get("stopped") == "1" or app.db.get(f"held:{item['id']}"):
+                return None
+            try:
+                item = self._ensure_file(item)
+            except RuntimeError as e:
+                app.db.event(item["id"], "platform_error", {"platform": key, "error": str(e)})
+                return {"status": "error", "attempts": 1, "error": str(e)[:500]}
+            return self._publish_instagram(item, meta, plat)
         for i in range(1, attempts + 1):
             if app.db.get("stopped") == "1" or app.db.get(f"held:{item['id']}"):
                 return None
@@ -288,44 +293,13 @@ class Publisher:
                     r = {"id": f"dry-{key}-{item['id']}", "url": f"https://example.com/{key}/{item['id']}",
                          "note": "dry_run: реальної публікації не було"}
                 else:
-                    if not Path(item["mp4"]).is_file():   # файл перенесли? шукаємо за назвою, перш ніж здаватися
-                        new = None
-                        try:
-                            from app.channels import cutter_link
-                            new = cutter_link.locate(item["mp4"], cutter_link.build_index(app))
-                            if new and cutter_link.path_owner(app.db, new, item["id"]):
-                                new = None   # файл уже належить іншому запису — не беремо (буде дубль)
-                        except Exception:  # noqa: BLE001
-                            pass
-                        if not new:
-                            raise RuntimeError(f"файлу немає на місці: {item['mp4']}")
-                        log.info("#%s: файл перенесено — беру з нового місця %s", item["id"], new)
-                        app.db.update_item(item["id"], mp4=str(new), json=str(new.with_suffix(".json")))
-                        item = {**item, "mp4": str(new), "json": str(new.with_suffix(".json"))}
+                    item = self._ensure_file(item)
                     previews = Path(app.cfg["paths"]["data"]) / "previews"
                     if previews in Path(item["mp4"]).parents:
                         raise RuntimeError("спроба опублікувати стиснуту прев'ю-копію замість оригіналу — зупинено")
                     if i == 1:
                         log.info("#%s %s: завантажую оригінал без змін: %s (%.1f МБ)", item["id"], key,
                                  item["mp4"], Path(item["mp4"]).stat().st_size / 1024 / 1024)
-                    if key == "instagram" and hasattr(plat, "upload_only") and \
-                            (app.cfg["platforms"].get("instagram") or {}).get("silent_wait", False):
-                        # завантажили — і мовчки чекаємо wait_min; один запит «готово?» робить finish_instagram
-                        prev = item["results"].get("instagram") or {}
-                        m = int(prev.get("method") or 0) if prev.get("status") == "ig_next" else 0
-                        up = plat.upload_only(item["mp4"], meta, m)
-                        now = now_ts()
-                        wait = 60 * int((app.cfg["platforms"].get("instagram") or {}).get("wait_min", 20))
-                        log.info("#%s instagram: завантажено (%s) — перевірю один раз через %s хв, до того Instagram "
-                                 "не турбую", item["id"], up.get("method_name"), wait // 60)
-                        app.db.set(f"pubtry:{item['id']}:{key}", None)
-                        try:
-                            up["ig_report"] = plat.container_record("завантажено — чекаю обробки")
-                        except Exception:  # noqa: BLE001
-                            pass
-                        return {"status": "processing", **up, "since": now, "next_at": now + wait,
-                                "tried": list(prev.get("tried") or []) + [up.get("method_name")],
-                                "note": f"Instagram обробляє ({up.get('method_name')}) — перевірю через {wait // 60} хв"}
                     r = plat.publish(item["mp4"], meta)
                 log.info("#%s %s: опубліковано %s", item["id"], key, r.get("url"))
                 if hasattr(app.bot, "resolve"):
@@ -334,18 +308,6 @@ class Publisher:
             except Stopped:
                 app.db.set(f"pubtry:{item['id']}:{key}", None)
                 return None
-            except StillProcessing as e:
-                # файл дійшов, Instagram довго обробляє — черга йде далі, публікація завершиться у фоні
-                app.db.set(f"pubtry:{item['id']}:{key}", None)
-                app.db.event(item["id"], "ig_processing", {"container": e.container_id})
-                now = now_ts()
-                try:
-                    snap = plat.container_record("обробляється — далі у фоні")
-                except Exception:  # noqa: BLE001
-                    snap = {}
-                return {"status": "processing", "flow": "poll", "container": e.container_id, "since": now,
-                        "next_at": now + 120, "checks": 0, "ig_report": snap,
-                        "note": "Instagram ще обробляє — опублікую, щойно буде готово"}
             except RateLimited as e:
                 # повтори одразу лише подовжують блокування — публікація піде сама після паузи
                 log.warning("#%s %s: %s", item["id"], key, e)
@@ -397,21 +359,6 @@ class Publisher:
             except Exception as e:  # noqa: BLE001
                 log.debug("журнал контейнера: %s", e)
 
-    def _ig_to_phone_item(self, it: dict, why: str) -> bool:
-        """Те саме з фону: підпис беремо з json шортса."""
-        from app.insights import history
-        if (self.app.cfg["platforms"].get("instagram") or {}).get("fallback_manual", True):
-            history.record(self.app, it, "instagram", "manual_rejected", error=why)
-        try:
-            meta = apply_always_hashtags(load_meta(it["json"], it["title_override"]), self.app.cfg)
-        except Exception:  # noqa: BLE001
-            return False
-        if not self._ig_to_phone(it, meta, why):
-            return False
-        self._save_ig(it, {"status": "manual", "sent_at": now_ts(), "error": why[:500],
-                           "note": "Instagram через API не прийняв — надіслано вам у Telegram"})
-        return True
-
     def _ig_to_phone(self, item: dict, meta, why: str) -> bool:
         """Instagram через API не прийняв — одразу повне відео вам у Telegram (platforms.instagram.fallback_manual)."""
         app = self.app
@@ -426,89 +373,161 @@ class Publisher:
         log.info("#%s instagram: через API не прийняв (%s) — відео надіслано вам у Telegram", item["id"], why[:120])
         return True
 
-    def _ig_too_long(self, item: dict, igc: dict) -> int:
-        """Тривалість (с), якщо відео довше за platforms.instagram.auto_max_seconds (інакше 0)."""
-        limit = float(igc.get("auto_max_seconds", 55) or 0)
-        if not limit:
-            return 0
+    # ---------------- Instagram: єдина логіка (звичайна, «тиха» і фонова) ----------------
+    def _ensure_file(self, item: dict) -> dict:
+        """Файл перенесли? Шукаємо за назвою, перш ніж здаватися (RuntimeError — файлу немає)."""
+        app = self.app
+        if Path(item["mp4"]).is_file():
+            return item
+        new = None
         try:
-            dur = float(media.ig_probe(item["mp4"], self.app.cfg.get("ffprobe", "ffprobe")).get("duration") or 0)
-        except Exception:  # noqa: BLE001 — не вдалося виміряти: пробуємо як звичайно
-            return 0
-        return int(round(dur)) if dur > limit else 0
+            from app.channels import cutter_link
+            new = cutter_link.locate(item["mp4"], cutter_link.build_index(app))
+            if new and cutter_link.path_owner(app.db, new, item["id"]):
+                new = None   # файл уже належить іншому запису — не беремо (буде дубль)
+        except Exception as e:  # noqa: BLE001
+            log.debug("пошук перенесеного: %s", e)
+        if not new:
+            raise RuntimeError(f"файлу немає на місці: {item['mp4']}")
+        log.info("#%s: файл перенесено — беру з нового місця %s", item["id"], new)
+        app.db.update_item(item["id"], mp4=str(new), json=str(new.with_suffix(".json")))
+        return {**item, "mp4": str(new), "json": str(new.with_suffix(".json"))}
+
+    def _ig_cfg(self) -> dict:
+        return self.app.cfg["platforms"].get("instagram") or {}
+
+    def _publish_instagram(self, item: dict, meta, plat) -> dict:
+        """Один контейнер — одне очікування. ID контейнера зберігається в базі одразу після створення (перезапуск не
+        створить другий). Новий контейнер (наступний спосіб) — лише після підтвердженої відмови Meta (ERROR/EXPIRED)."""
+        app, igc = self.app, self._ig_cfg()
+        prev = item["results"].get("instagram") or {}
+        method = int(prev.get("method") or 0) if prev.get("status") == "ig_next" else 0
+        tried = list(prev.get("tried") or []) if prev.get("status") == "ig_next" else []
+        silent = bool(igc.get("silent_wait", False))
+        wait = 60 * int(igc.get("wait_min", 20))
+        started = now_ts()
+
+        def on_container(rec: dict) -> None:   # відразу в базу: після перезапуску — той самий контейнер, не новий
+            now = now_ts()
+            self._save_ig(item, {"status": "processing", **rec, "since": now, "checks": 0, "tried": tried,
+                                 "next_at": now + (wait if silent else INLINE_GRACE), "inline": not silent,
+                                 "note": f"Instagram обробляє ({rec.get('method_name')})"})
+        try:
+            if silent:
+                up = plat.upload_only(item["mp4"], meta, method, on_container)
+                snap = self._ig_snapshot(plat, "завантажено — тиша до першої перевірки")
+                log.info("#%s instagram: завантажено (%s, контейнер %s) — перша перевірка через %s хв",
+                         item["id"], up["method_name"], up["container"], wait // 60)
+                return {"status": "processing", **up, "since": started, "next_at": now_ts() + wait, "checks": 0,
+                        "tried": tried + [up["method_name"]], "ig_report": snap,
+                        "note": f"Instagram обробляє ({up['method_name']}) — перевірю через {wait // 60} хв"}
+            r = plat.publish(item["mp4"], meta, method, on_container)
+            log.info("#%s instagram: опубліковано (%s) %s", item["id"], r.get("method_name"), r.get("url"))
+            if hasattr(app.bot, "resolve"):
+                app.bot.resolve("reauth_instagram")
+            return {"status": "ok", "attempts": len(tried) + 1, "published_at": now_ts(), **r}
+        except Stopped:
+            stored = (app.db.get_item(item["id"])["results"].get("instagram") or {})
+            if stored.get("status") == "processing":   # контейнер уже є — НЕ кидаємо його, чекаємо у фоні
+                return stored
+            return None
+        except StillProcessing as e:
+            stored = (app.db.get_item(item["id"])["results"].get("instagram") or {})
+            app.db.event(item["id"], "ig_processing", {"container": e.container_id})
+            return {**stored, "status": "processing", "container": e.container_id, "inline": False,
+                    "since": int(stored.get("since") or started), "next_at": now_ts() + 120, "checks": 0,
+                    "tried": tried + [stored.get("method_name") or ""], "ig_report": self._ig_snapshot(plat, "обробляється — далі у фоні"),
+                    "note": "Instagram ще обробляє — чекаю той самий контейнер, опублікую, щойно буде готово"}
+        except ContainerFailed as e:
+            stored = (app.db.get_item(item["id"])["results"].get("instagram") or {})
+            return self._ig_after_failure(item, plat, {**stored, "container": e.container_id, "method": method,
+                                                       "tried": tried + [stored.get("method_name") or ""]},
+                                          e.state, str(e), meta=meta)
+        except RateLimited as e:
+            log.warning("#%s instagram: %s", item["id"], e)
+            app.db.event(item["id"], "platform_error", {"platform": "instagram", "error": str(e)})
+            return {"status": "error", "attempts": 1, "error": str(e)[:500], "retry_at": e.retry_at}
+        except TokenExpired as e:
+            log.error("#%s instagram: потрібна авторизація: %s", item["id"], e)
+            app.bot.notify_reauth("instagram", str(e))
+            return {"status": "error", "reauth": True, "attempts": 1, "error": f"потрібна повторна авторизація: {e}"[:500]}
+        except PublishError as e:
+            # контейнер не створено / файл не підходить / мережа: нового контейнера автоматично НЕ робимо
+            log.warning("#%s instagram: %s", item["id"], e)
+            app.db.event(item["id"], "platform_error", {"platform": "instagram", "error": str(e)[:2000]})
+            if "тривалість" not in str(e) and self._ig_to_phone(item, meta, str(e)):
+                return {"status": "manual", "sent_at": now_ts(), "error": str(e)[:500],
+                        "note": "Instagram через API не прийняв — надіслано вам у Telegram"}
+            return {"status": "error", "attempts": 1, "error": str(e)[:2000]}
+
+    def _ig_snapshot(self, plat, outcome: str) -> dict:
+        try:
+            return plat.container_record(outcome)
+        except Exception as e:  # noqa: BLE001 — діагностика ніколи не ламає публікацію
+            log.debug("знімок контейнера: %s", e)
+            return {}
+
+    def _ig_after_failure(self, it: dict, plat, r: dict, state: str, why: str, meta=None) -> dict:
+        """Підтверджена відмова Meta (ERROR / EXPIRED): наступний спосіб (новий контейнер) або — якщо способів
+        більше немає — повне відео вам у Telegram / ❌."""
+        methods = len(plat.methods_for(it["mp4"])) if hasattr(plat, "methods_for") else 1
+        nxt = int(r.get("method") or 0) + 1
+        if nxt < methods:
+            log.warning("#%s instagram: контейнер %s — %s (%s); пробую наступний спосіб", it["id"], r.get("container"),
+                        state.upper(), why[:200])
+            self.app.db.event(it["id"], "ig_next_method", {"container": r.get("container"), "state": state, "why": why[:500]})
+            return {"status": "ig_next", "method": nxt, "tried": [t for t in r.get("tried") or [] if t],
+                    "note": f"{r.get('method_name') or 'спосіб'}: {state.upper()} — далі інший спосіб"}
+        err = (f"Instagram не прийняв відео ({', '.join(t for t in r.get('tried') or [] if t) or 'усі способи'}). "
+               f"Останнє: {why[:600]}")
+        self.app.db.event(it["id"], "platform_error", {"platform": "instagram", "error": err[:2000]})
+        try:
+            meta = meta or apply_always_hashtags(load_meta(it["json"], it["title_override"]), self.app.cfg)
+        except Exception:  # noqa: BLE001
+            meta = None
+        if meta is not None and self._ig_to_phone(it, meta, err):
+            return {"status": "manual", "sent_at": now_ts(), "error": err[:500],
+                    "note": "Instagram через API не прийняв — надіслано вам у Telegram"}
+        return {"status": "error", "attempts": len(r.get("tried") or []) or 1, "error": err}
 
     def ig_processing(self, exclude: int | None = None) -> int | None:
-        """Шортс, чиє відео Instagram зараз обробляє у фоні (або None)."""
+        """Шортс, чий контейнер Instagram зараз обробляє (або ще потрібен інший спосіб). Інші чекають — в Instagram
+        одне відео за раз. Контейнер, що обробляється довше block_max_min, чергу більше не тримає (сам чекає далі)."""
+        limit = 60 * int(self._ig_cfg().get("block_max_min", 60))
+        now = now_ts()
         for it in self.app.db.items(IG_PENDING_SQL, order="id"):
-            if it["id"] != exclude and ((it["results"] or {}).get("instagram") or {}).get("status") in IG_BUSY:
-                return it["id"]
+            r = ((it["results"] or {}).get("instagram") or {})
+            if it["id"] == exclude or r.get("status") not in IG_BUSY:
+                continue
+            if r.get("status") == "processing" and now - int(r.get("since") or now) > limit:
+                continue
+            return it["id"]
         return None
 
     def finish_instagram(self, now: int | None = None) -> None:
-        """Фон (раз на хвилину з планувальника): довга обробка Instagram — перевірити контейнер і опублікувати;
-        коли Instagram звільнився — запустити Instagram для шортса, що чекав своєї черги."""
+        """Фон (раз на хвилину): ОДНА перевірка кожного контейнера, якому настав час. Статуси:
+        FINISHED → публікуємо; PUBLISHED → вже опубліковано (без повтору); IN_PROGRESS / PENDING / невідомий →
+        чекаємо той самий контейнер (паузи ростуть, повідомлення про затримку — один раз); ERROR / EXPIRED →
+        наступний спосіб. Потім — Instagram для шортсів, що чекали черги."""
         app, db = self.app, self.app.db
         now = now or now_ts()
         plat = app.platforms.get("instagram")
         if not plat or not hasattr(plat, "finish_container") or db.get("stopped") == "1" or app.cfg.get("dry_run"):
             return
-        items = db.items(IG_PENDING_SQL, order="id")
-        for it in items:
+        for it in db.items(IG_PENDING_SQL, order="id"):
             r = (it["results"] or {}).get("instagram") or {}
-            if r.get("status") != "processing" or now < int(r.get("next_at") or 0) or self.is_active(it["id"]):
+            if r.get("status") != "processing" or now < int(r.get("next_at") or 0) or self.is_active(it["id"]) \
+                    or not r.get("container"):
                 continue
-            if not r.get("method_name"):   # звичайний спосіб (як у версіях до 157): рідкі перевірки до 60 хв
-                if self._finish_poll(it, r, plat, now) == "limit":
-                    return
-                continue
-            why = ""
-            try:   # ОДИН запит: контейнер готовий → публікуємо; ні → наступний спосіб
-                got = plat.finish_container(r["container"])
-            except RateLimited as e:
-                self._save_ig(it, {**r, "next_at": max(e.retry_at, now + 300)})
+            if self._ig_check(it, r, plat, now) == "limit":
                 return
-            except Exception as e:  # noqa: BLE001
-                got, why = None, str(e)[:300]
-            if got:
-                self._hist(it, plat, "ok_background", r.get("since"), url=got.get("url"),
-                               method=r.get("method_name"), processing_s=now - int(r.get("since") or now))
-                log.info("#%s instagram: опубліковано (%s) %s", it["id"], r.get("method_name"), got.get("url"))
-                self._save_ig(it, {"status": "ok", "attempts": len(r.get("tried") or [1]), "published_at": now_ts(),
-                                   **got, "note": r.get("method_name") or ""})
-                db.event(it["id"], "published", {"ok": ["instagram"], "urls": {"instagram": got.get("url")},
-                                                  "background": True})
-                if hasattr(app.bot, "drop_failed_card"):
-                    app.bot.drop_failed_card(it["id"])
-                continue
-            why = why or f"за {(now - int(r.get('since') or now)) // 60} хв не оброблено"
-            self._hist(it, plat, "next_method", r.get("since"), method=r.get("method_name"),
-                           error=why, processing_s=now - int(r.get("since") or now))
-            nxt = int(r.get("method") or 0) + 1
-            methods = getattr(plat, "METHODS", ())
-            if nxt < len(methods):
-                log.warning("#%s instagram: %s не пройшла (%s) — пробую наступний спосіб: %s",
-                            it["id"], r.get("method_name"), why, methods[nxt][0])
-                self._save_ig(it, {"status": "ig_next", "method": nxt, "tried": r.get("tried") or [],
-                                   "note": f"{r.get('method_name')}: {why}; далі — {methods[nxt][0]}"})
-                db.event(it["id"], "ig_next_method", {"failed": r.get("method_name"), "why": why})
-                self.start(it["id"])     # той самий шортс, наступний спосіб; інші в Instagram — після нього
-                return
-            err = (f"Instagram не прийняв відео жодним способом ({', '.join(r.get('tried') or [])}). "
-                   f"Останнє: {why}. Опублікуйте з телефона («📱 Надіслати мені для Instagram») або повторіть пізніше.")
-            log.warning("#%s instagram: %s", it["id"], err)
-            if self._ig_to_phone_item(it, err):
-                continue
-            self._save_ig(it, {"status": "error", "attempts": len(r.get("tried") or []), "error": err})
-            db.event(it["id"], "platform_error", {"platform": "instagram", "error": err})
-            if hasattr(app.bot, "notify_failed"):
-                app.bot.notify_failed(it["id"])
         if db.get("stopped") == "1":
             return
-        for it in db.items(IG_PENDING_SQL, order="id"):   # «наступний спосіб», який не стартував (перезапуск / Стоп)
+        for it in db.items(IG_PENDING_SQL, order="id"):   # інший спосіб, що ще не стартував (перезапуск / «Стоп»)
             if ((it["results"] or {}).get("instagram") or {}).get("status") == "ig_next" and not self.is_active(it["id"]):
                 self.start(it["id"])
                 return
-        if self.ig_processing() or db.get("stopped") == "1":
+        if self.ig_processing():
             return
         for it in db.items(IG_PENDING_SQL, order="id"):
             if ((it["results"] or {}).get("instagram") or {}).get("status") == "ig_wait" and not self.is_active(it["id"]):
@@ -519,52 +538,76 @@ class Publisher:
                 self.start(it["id"])
                 return   # по одному: наступний — коли й цей закінчиться
 
-    def _finish_poll(self, it: dict, r: dict, plat, now: int) -> str:
-        """Звичайний спосіб (версії 144–156, що публікував): контейнер обробляється довше 10 хв — перевіряємо
-        у фоні рідко (2, 3, 5, 10, далі раз на 15 хв), до 60 хв; готово — публікуємо, завис — ❌."""
+    BG_STEPS = (120, 180, 300, 600, 900)   # фонові перевірки: 2, 3, 5, 10, 15 хв, далі 30 хв, після 6 год — 60 хв
+
+    def _ig_check(self, it: dict, r: dict, plat, now: int) -> str:
         app, db = self.app, self.app.db
+        cid, since = r["container"], int(r.get("since") or now)
+        age = now - since
         checks = int(r.get("checks") or 0) + 1
+        polls = list(r.get("polls") or [])[-200:]
         try:
-            got = plat.finish_container(r["container"])
+            res = plat.finish_container(cid, since)
         except RateLimited as e:
             self._save_ig(it, {**r, "next_at": max(e.retry_at, now + 300)})
             return "limit"
-        except Exception as e:  # noqa: BLE001
-            log.warning("#%s instagram: фонова обробка не вдалася: %s", it["id"], e)
-            self._hist(it, plat, "error", r.get("since"), error=str(e))
-            self._save_ig(it, {"status": "error", "attempts": 1, "error": str(e)[:500]})
-            db.event(it["id"], "platform_error", {"platform": "instagram", "error": str(e)[:2000]})
-            if hasattr(app.bot, "notify_failed"):
-                app.bot.notify_failed(it["id"])
-            return "error"
-        mins = (now - int(r.get("since") or now)) // 60
-        if got:
-            self._hist(it, plat, "ok_background", r.get("since"), url=got.get("url"),
-                           processing_s=now - int(r.get("since") or now))
-            log.info("#%s instagram: опубліковано після фонової обробки %s", it["id"], got.get("url"))
-            self._save_ig(it, {"status": "ok", "attempts": 1, "published_at": now_ts(), **got,
-                               "note": f"Instagram обробляв {max(1, mins)} хв"})
-            db.event(it["id"], "published", {"ok": ["instagram"], "urls": {"instagram": got.get("url")},
+        except PublishError as e:
+            if str(e).startswith("media_publish:"):   # контейнер готовий, але публікація не пройшла — той самий
+                fails = int(r.get("publish_fails") or 0) + 1
+                self._hist(it, plat, "error", since, error=str(e))
+                if fails >= 3:
+                    err = f"media_publish не вдався 3 рази поспіль: {e}"
+                    log.warning("#%s instagram: %s", it["id"], err)
+                    self._save_ig(it, {"status": "error", "attempts": 1, "error": err[:2000], "container": cid})
+                    if hasattr(app.bot, "notify_failed"):
+                        app.bot.notify_failed(it["id"])
+                    return "error"
+                self._save_ig(it, {**r, "publish_fails": fails, "next_at": now + 300})
+                return "retry"
+            # мережа / тимчасова помилка запиту — стан невідомий: чекаємо той самий контейнер
+            log.info("#%s instagram: перевірка контейнера %s не вдалася (%s) — спробую пізніше", it["id"], cid, e)
+            self._save_ig(it, {**r, "next_at": now + 600, "last_check_error": str(e)[:300]})
+            return "retry"
+        polls.append([res.get("time") or now, res.get("status_code"), (res.get("status") or "")[:300]])
+        state = res["state"]
+        if state in ("published", "already"):
+            log.info("#%s instagram: %s %s", it["id"], "опубліковано" if state == "published"
+                     else "контейнер уже був опублікований (без повтору)", res.get("url"))
+            self._hist(it, plat, "ok_background", since, url=res.get("url") or None, processing_s=age)
+            self._save_ig(it, {"status": "ok", "attempts": len(r.get("tried") or []) or 1, "published_at": now_ts(),
+                               "id": res.get("id"), "url": res.get("url") or "", "container": cid, "polls": polls,
+                               "note": r.get("method_name") or ""})
+            db.event(it["id"], "published", {"ok": ["instagram"], "urls": {"instagram": res.get("url")},
                                               "background": True})
             if hasattr(app.bot, "drop_failed_card"):
                 app.bot.drop_failed_card(it["id"])
             return "ok"
-        if mins > int((app.cfg["platforms"].get("instagram") or {}).get("background_max_min", 60)):
-            err = (f"Instagram так і не обробив відео ({mins} хв «In Progress») — контейнер завис. "
-                   "Повторіть або опублікуйте з телефона («📱 Надіслати мені для Instagram»).")
-            log.warning("#%s instagram: контейнер %s завис (%s хв) — більше не чекаю", it["id"], r.get("container"), mins)
-            self._hist(it, plat, "stuck", r.get("since"), error=err,
-                           processing_s=now - int(r.get("since") or now))
-            if self._ig_to_phone_item(it, err):
-                return "error"
-            self._save_ig(it, {"status": "error", "attempts": 1, "error": err})
-            db.event(it["id"], "platform_error", {"platform": "instagram", "error": err})
-            if hasattr(app.bot, "notify_failed"):
-                app.bot.notify_failed(it["id"])
-            return "error"
-        log.info("#%s instagram: контейнер %s ще обробляється (%s хв) — перевірю пізніше", it["id"], r.get("container"), mins)
-        step = (120, 180, 300, 600)[checks - 1] if checks <= 4 else 900
-        self._save_ig(it, {**r, "checks": checks, "next_at": now + step})
+        if state in ("error", "expired"):
+            why = f"{res.get('status_code')}: {res.get('status')}"
+            self._hist(it, plat, "next_method" if state == "error" else "error", since, error=why, processing_s=age)
+            self._save_ig(it, self._ig_after_failure(it, plat, {**r, "polls": polls}, state, why))
+            return "failed"
+        # waiting / unknown — той самий контейнер, нового НЕ створюємо
+        if state == "unknown":
+            log.warning("#%s instagram: невідомий статус контейнера %s: %r — чекаю далі той самий контейнер",
+                        it["id"], cid, res.get("status_code"))
+        step = self.BG_STEPS[checks - 1] if checks <= len(self.BG_STEPS) else (1800 if age < 6 * 3600 else 3600)
+        upd = {**r, "checks": checks, "next_at": now + step, "polls": polls,
+               "last_status": res.get("status_code"), "last_status_text": res.get("status")}
+        notify_after = 60 * int(self._ig_cfg().get("block_max_min", 60))
+        if age >= notify_after and not r.get("delay_told"):
+            upd["delay_told"] = True
+            log.warning("#%s instagram: контейнер %s обробляється %s хв (%s) — зберігаю й перевіряю далі",
+                        it["id"], cid, age // 60, res.get("status_code"))
+            if hasattr(app.bot, "send"):
+                app.bot.send(f"⏳ Instagram обробляє #{it['id']} уже {age // 60} хв (статус {res.get('status_code')}). "
+                             f"Контейнер {cid} збережено — перевіряю далі й опублікую, щойно Meta закінчить; новий не "
+                             "створюю. Інші шортси в Instagram ідуть далі. Не хочете чекати — «📱 Надіслати мені для "
+                             "Instagram» під шортсом.")
+        else:
+            log.info("#%s instagram: контейнер %s — %s (%s хв), наступна перевірка через %s хв",
+                     it["id"], cid, res.get("status_code"), age // 60, step // 60)
+        self._save_ig(it, upd)
         return "wait"
 
     def _save_ig(self, item: dict, res: dict) -> None:

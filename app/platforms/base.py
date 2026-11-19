@@ -24,6 +24,18 @@ class StillProcessing(PublishError):
         self.container_id = str(container_id)
 
 
+class ContainerFailed(PublishError):
+    """Meta підтвердила відмову контейнера: status_code ERROR або EXPIRED. Лише тоді дозволено наступний спосіб
+    (новий контейнер). state — 'error' / 'expired'."""
+
+    def __init__(self, msg: str, container_id: str, state: str, status_code=None, status: str = ""):
+        super().__init__(msg)
+        self.container_id = str(container_id)
+        self.state = state
+        self.status_code = status_code
+        self.status = status
+
+
 class RateLimited(PublishError):
     """Платформа тимчасово обмежила кількість запитів. retry_at — коли можна знову (unix-час)."""
 

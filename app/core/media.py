@@ -75,11 +75,16 @@ def quality(path: str, ffprobe: str = "ffprobe") -> dict:
     return out
 
 
-# Вимоги Instagram Reels (Content Publishing API)
+# Вимоги Instagram Reels (Content Publishing API, довідник IG User Media → Reel Specifications).
+# Офіційні: MP4/MOV, H.264/HEVC, AAC до 48 кГц моно/стерео, 23–60 к/с, тривалість 3 с – 15 хв.
+# Ширина ≤1920, відео ≤25 Мбіт/с, звук ≤128 кбіт/с — з тієї ж таблиці; 300 МБ — за сторонніми джерелами
+# (на сторінці Meta з цієї сесії не перевірено). Внутрішні налаштування Poster — окремо (IG_TARGET_MB нижче).
 IG_MAX_VIDEO_KBPS = 25_000
 IG_MAX_AUDIO_KBPS = 128
 IG_MAX_WIDTH = 1920
 IG_MAX_MB = 300
+IG_MIN_SECONDS = 3
+IG_MAX_DURATION = 15 * 60
 
 
 def ig_probe(path: str, ffprobe: str = "ffprobe") -> dict:
@@ -87,7 +92,7 @@ def ig_probe(path: str, ffprobe: str = "ffprobe") -> dict:
     try:
         r = run_hidden([ffprobe, "-v", "error", "-show_entries",
                         "stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,bit_rate,sample_rate,channels,"
-                        "pix_fmt,color_transfer,color_primaries,color_space:format=duration,bit_rate", "-of", "json", str(path)],
+                        "pix_fmt,color_transfer,color_primaries,color_space:format=duration,bit_rate,format_name", "-of", "json", str(path)],
                        timeout=60)
         info = json.loads(r.stdout or b"{}")
     except (MediaError, ValueError):
@@ -116,7 +121,7 @@ def ig_probe(path: str, ffprobe: str = "ffprobe") -> dict:
             "acodec": a.get("codec_name"), "akbps": a_k, "arate": int(a.get("sample_rate") or 0),
             "channels": int(a.get("channels") or 0), "duration": float(fmt.get("duration") or 0),
             "trc": v.get("color_transfer") or "", "primaries": v.get("color_primaries") or "",
-            "colorspace": v.get("color_space") or "",
+            "colorspace": v.get("color_space") or "", "format": fmt.get("format_name") or "",
             "size_mb": os.path.getsize(path) / 1024 / 1024}
 
 
@@ -144,17 +149,34 @@ def ig_summary(p: dict) -> str:
     return ", ".join(x for x in parts if x)
 
 
+def ig_duration_problem(p: dict) -> str:
+    """Тривалість поза офіційними межами Reels API (3 с – 15 хв). Це не виправити перекодуванням (не обрізаємо)."""
+    d = float((p or {}).get("duration") or 0)
+    if not d:
+        return ""
+    if d < IG_MIN_SECONDS:
+        return f"тривалість {d:.1f} с — менше за {IG_MIN_SECONDS} с (мінімум Reels API)"
+    if d > IG_MAX_DURATION:
+        return f"тривалість {d / 60:.1f} хв — більше за 15 хв (максимум Reels API)"
+    return ""
+
+
 def ig_problems(p: dict) -> list[str]:
     """Чому файл не підходить Instagram Reels (порожньо — підходить)."""
     if not p:
         return []
     out = []
+    fmt = str(p.get("format") or "")
+    if fmt and not any(x in fmt for x in ("mp4", "mov")):
+        out.append(f"контейнер {fmt}")
     if p["vcodec"] not in ("h264", "hevc"):
         out.append(f"кодек відео {p['vcodec']}")
     if p["width"] > IG_MAX_WIDTH:
         out.append(f"ширина {p['width']} px > {IG_MAX_WIDTH}")
     if p["fps"] and not 23 <= p["fps"] <= 60.5:
         out.append(f"{p['fps']:.0f} к/с")
+    if p.get("vfr"):
+        out.append("змінна частота кадрів (VFR)")
     if p["vkbps"] > IG_MAX_VIDEO_KBPS:
         out.append(f"відео {p['vkbps'] / 1000:.0f} Мбіт/с > 25")
     if p["pix_fmt"] and p["pix_fmt"] not in ("yuv420p", "yuvj420p"):
@@ -172,8 +194,10 @@ def ig_problems(p: dict) -> list[str]:
     return out
 
 
-IG_MAX_SECONDS = 59.5   # копія для Instagram не довша (Reels рівно 1:00 і довші — під підозрою)
-IG_TARGET_MB = 45   # rupload відкидав копії 85–89 МБ (ProcessingFailedError на останній частині), ~45 МБ проходили
+# Внутрішнє налаштування Poster (НЕ вимога Meta): цільовий розмір копії. 16.11 rupload відкидав копії 85–89 МБ,
+# ~45 МБ проходили. Змінюється в config: platforms.instagram.copy_target_mb. Тривалість копії НЕ обрізається.
+IG_TARGET_MB = 45
+IG_COPY_VERSION = "v4-notrim"   # змінюється, коли змінюється спосіб копіювання: старі (обрізані) копії не беруться
 
 
 def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> str:
@@ -187,7 +211,7 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
     target = float((cfg.get("platforms") or {}).get("instagram", {}).get("copy_target_mb") or IG_TARGET_MB)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr3|t{IG_MAX_SECONDS}".encode()).hexdigest()[:10]
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|{IG_COPY_VERSION}".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_{ {'safe60': 'ig60', 'safe30': 'igl'}.get(mode, 'ig') }.mp4"
     if out.exists() and out.stat().st_size > 0:
         return str(out)
@@ -195,7 +219,13 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
     fps = p.get("fps") or 30
     if lite:  # «безпечна» копія: 30 к/с рівно, рівень H.264 4.1, без метаданих — Instagram перекодовує її без збоїв
         fps = 30
-    fps_args = ["-r", "30", "-vsync", "cfr"] if lite or not 23 <= fps <= 60.5 else ["-vsync", "cfr"]
+    # сталий темп кадрів (CFR); частота — як в оригіналі в межах 23–60: вище 60 → 60, нижче 23 → 30
+    if lite or fps < 23:
+        fps_args = ["-r", "30", "-vsync", "cfr"]
+    elif fps > 60.5:
+        fps_args = ["-r", "60", "-vsync", "cfr"]
+    else:
+        fps_args = ["-vsync", "cfr"]
     g = int(round(min(max(fps, 23), 60) * 2))
     vf = "scale='if(gt(iw,ih),min(iw,1920),min(iw,1080))':-2:flags=lanczos,setsar=1,format=yuv420p"
     if is_hdr(p) and cfg.get("_ig_tonemap", True):   # HDR → SDR (Instagram HDR-Reels через API не приймає)
@@ -208,8 +238,8 @@ def instagram_copy(path: str, cfg: dict, lite: bool = False, mode: str = "") -> 
         cap = min(cap, max(2500, int(target * 8 * 1024 / dur) - 160))
     crf = "21" if lite else "19" if strict else "17"
     rate = ["-crf", crf, "-maxrate", f"{cap}k", "-bufsize", f"{cap * 2}k"]
-    trim = ["-t", f"{IG_MAX_SECONDS:g}"] if dur > IG_MAX_SECONDS else []   # Reels — менше хвилини
-    args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), *trim,
+    # тривалість НЕ обрізаємо: Reels API приймає до 15 хв (перевірка — ig_duration_problem до завантаження)
+    args = [cfg["ffmpeg"], "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
             "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-vf", vf, *fps_args, *level,
             "-c:v", "libx264", "-preset", "medium", "-profile:v", "high", *rate, "-g", str(g), "-keyint_min", str(g), "-sc_threshold", "0",
             # завжди позначки SDR BT.709: без них (або з BT.2020/PQ від джерела) Instagram відкидає відео
@@ -269,7 +299,7 @@ def telegram_copy(path: str, cfg: dict) -> str:
         return path  # і так маленьке — надсилаємо як є
     cache = Path(cfg["paths"]["data"]) / "previews"
     cache.mkdir(parents=True, exist_ok=True)
-    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2|t{IG_MAX_SECONDS}".encode()).hexdigest()[:10]
+    key = hashlib.md5(f"{path}|{os.path.getmtime(path)}|{target}|sdr2|t59.5".encode()).hexdigest()[:10]
     out = cache / f"{Path(path).stem}_{key}_tg.mp4"
     if out.exists() and 0 < out.stat().st_size <= TG_LIMIT:
         return str(out)
