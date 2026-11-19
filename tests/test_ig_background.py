@@ -124,11 +124,17 @@ class PollFlowTest(IgFlowBase):
         self.later(6 * 60)                                                 # 6 годин IN_PROGRESS
         self.assertEqual(self.ig.uploads, [("C1", 0)])                    # той самий контейнер
         self.assertEqual(self.res(a)["status"], "processing")
-        self.assertLess(len(self.ig.checks), 30)                          # рідкі перевірки
+        self.assertLessEqual(len(self.ig.checks), 7)                      # рідкі перевірки: 2,5,10,20,40 хв, далі раз на 3 год
         self.ig.status["C1"] = "FINISHED"
-        self.later(60)
+        self.later(180)
         self.assertEqual(self.res(a)["status"], "ok")                     # 3
         self.assertEqual(self.ig.publishes, ["C1"])
+
+    def test_whole_day_in_progress_few_requests(self):
+        a, = self.publish("a")
+        self.later(24 * 60 + 15)                                          # Meta добу не змінює статус
+        self.assertLessEqual(self.ig.checks.count("C1"), 13)              # ≈13 запитів за добу, не сотні
+        self.assertEqual(self.ig.uploads, [("C1", 0), ("C2", 1)])          # після доби — як EXPIRED: інший спосіб
 
     def test_pending_never_creates_new_container(self):                 # 2
         a, = self.publish("a")

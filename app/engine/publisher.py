@@ -517,10 +517,15 @@ class Publisher:
         plat = app.platforms.get("instagram")
         if not plat or not hasattr(plat, "finish_container") or db.get("stopped") == "1" or app.cfg.get("dry_run"):
             return
+        limit = 60 * int(self._ig_cfg().get("block_max_min", 60))
         for it in db.items(IG_PENDING_SQL, order="id"):
             r = (it["results"] or {}).get("instagram") or {}
-            if r.get("status") != "processing" or now < int(r.get("next_at") or 0) or self.is_active(it["id"]) \
-                    or not r.get("container"):
+            if r.get("status") != "processing" or self.is_active(it["id"]) or not r.get("container"):
+                continue
+            if now - int(r.get("since") or now) >= limit and not r.get("delay_told"):
+                self._ig_delay_notice(it, r, now)          # без жодного запиту до Meta
+                r = (db.get_item(it["id"])["results"].get("instagram") or {})
+            if now < int(r.get("next_at") or 0):
                 continue
             if self._ig_check(it, r, plat, now) == "limit":
                 return
@@ -541,7 +546,24 @@ class Publisher:
                 self.start(it["id"])
                 return   # по одному: наступний — коли й цей закінчиться
 
-    BG_STEPS = (120, 180, 300, 600, 900)   # фонові перевірки: 2, 3, 5, 10, 15 хв, далі 30 хв, після 6 год — 60 хв
+    # Фонові перевірки одного контейнера — мінімум запитів до Meta (~13 за добу): 2, 5, 10, 20, 40 хв, далі раз на 3 год;
+    # остання — після 24 год (Meta: невикористаний контейнер закінчується за добу, статус EXPIRED).
+    BG_STEPS = (120, 300, 600, 1200, 2400)
+    BG_LONG_STEP = 3 * 3600
+    BG_FINAL = 24 * 3600 + 600
+
+    def _ig_delay_notice(self, it: dict, r: dict, now: int) -> None:
+        """Контейнер обробляється довше block_max_min: одне повідомлення; інші шортси в Instagram ідуть далі."""
+        age = now - int(r.get("since") or now)
+        log.warning("#%s instagram: контейнер %s обробляється %s хв — зберігаю, перевіряю рідко; інші шортси йдуть далі",
+                    it["id"], r.get("container"), age // 60)
+        self._save_ig(it, {**r, "delay_told": True})
+        if hasattr(self.app.bot, "send"):
+            self.app.bot.send(f"⏳ Instagram обробляє #{it['id']} уже {age // 60} хв"
+                              f"{' (статус ' + str(r['last_status']) + ')' if r.get('last_status') else ''}. "
+                              f"Контейнер {r.get('container')} збережено — перевіряю рідко й опублікую, щойно Meta "
+                              "закінчить; новий не створюю. Наступні шортси в Instagram публікуються як завжди. "
+                              "Не хочете чекати — «📱 Не чекати — надіслати мені» під шортсом.")
 
     def _ig_check(self, it: dict, r: dict, plat, now: int) -> str:
         app, db = self.app, self.app.db
@@ -595,22 +617,20 @@ class Publisher:
         if state == "unknown":
             log.warning("#%s instagram: невідомий статус контейнера %s: %r — чекаю далі той самий контейнер",
                         it["id"], cid, res.get("status_code"))
-        step = self.BG_STEPS[checks - 1] if checks <= len(self.BG_STEPS) else (1800 if age < 6 * 3600 else 3600)
-        upd = {**r, "checks": checks, "next_at": now + step, "polls": polls,
+        if age >= self.BG_FINAL - 60:
+            # минула доба: Meta мала б повернути EXPIRED; контейнер усе одно вже непридатний — як EXPIRED
+            why = f"Meta не завершила обробку за 24 год (останній статус {res.get('status_code')}: {res.get('status')})"
+            self._hist(it, plat, "error", since, polls=polls, error=why, processing_s=age)
+            self._save_ig(it, self._ig_after_failure(it, plat, {**r, "polls": polls}, "expired", why))
+            return "failed"
+        step = self.BG_STEPS[checks - 1] if checks <= len(self.BG_STEPS) else self.BG_LONG_STEP
+        next_at = now + step
+        if next_at > since + 22 * 3600:
+            next_at = since + self.BG_FINAL          # остання перевірка — після доби
+        upd = {**r, "checks": checks, "next_at": next_at, "polls": polls,
                "last_status": res.get("status_code"), "last_status_text": res.get("status")}
-        notify_after = 60 * int(self._ig_cfg().get("block_max_min", 60))
-        if age >= notify_after and not r.get("delay_told"):
-            upd["delay_told"] = True
-            log.warning("#%s instagram: контейнер %s обробляється %s хв (%s) — зберігаю й перевіряю далі",
-                        it["id"], cid, age // 60, res.get("status_code"))
-            if hasattr(app.bot, "send"):
-                app.bot.send(f"⏳ Instagram обробляє #{it['id']} уже {age // 60} хв (статус {res.get('status_code')}). "
-                             f"Контейнер {cid} збережено — перевіряю далі й опублікую, щойно Meta закінчить; новий не "
-                             "створюю. Інші шортси в Instagram ідуть далі. Не хочете чекати — «📱 Надіслати мені для "
-                             "Instagram» під шортсом.")
-        else:
-            log.info("#%s instagram: контейнер %s — %s (%s хв), наступна перевірка через %s хв",
-                     it["id"], cid, res.get("status_code"), age // 60, step // 60)
+        log.info("#%s instagram: контейнер %s — %s (%s хв), наступна перевірка через %s хв",
+                 it["id"], cid, res.get("status_code"), age // 60, (next_at - now) // 60)
         self._save_ig(it, upd)
         return "wait"
 
