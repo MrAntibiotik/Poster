@@ -344,5 +344,61 @@ class LegacyLostTest(IgFlowBase):
         self.assertEqual(self.res(a)["status"], "processing")
 
 
+class RealInstagramFlowTest(IgFlowBase):
+    """Справжній модуль Instagram + публікатор (імітація лише HTTP): тут ловляться помилки стику, як аварія #73."""
+
+    def test_upload_400_zero_bytes_full_cycle(self):
+        from app.core import media
+        from app.platforms import meta_graph
+        from tests.test_platforms import FakeHTTP, Resp
+        body = '{"debug_info":{"retriable":false,"type":"ProcessingFailedError","message":"Request processing failed"}}'
+        self.cfg["secrets"].update(META_PAGE_TOKEN="PAGE", IG_USER_ID="IG1")
+        orig = (meta_graph.time, meta_graph.requests, media.FILE_SETTLE)
+        self.addCleanup(lambda: (setattr(meta_graph, "time", orig[0]), setattr(meta_graph, "requests", orig[1]),
+                                 setattr(media, "FILE_SETTLE", orig[2])))
+        clock = [1_763_000_000.0]
+        meta_graph.time = type("T", (), {"time": staticmethod(lambda: clock[0]),
+                                         "sleep": staticmethod(lambda s: clock.__setitem__(0, clock[0] + s))})
+        media.FILE_SETTLE = 0
+        n = {"c": 0}
+
+        def create(url, kw):
+            n["c"] += 1
+            return Resp({"id": f"C{n['c']}", "uri": f"https://rupload.facebook.com/ig-api-upload/v25.0/C{n['c']}"})
+        f = FakeHTTP([("POST", "/IG1/media_publish", Resp({"id": "M2"})),
+                      ("POST", "/IG1/media", create),
+                      ("POST", "rupload", [Resp(None, 400, body), Resp({"success": True})]),
+                      ("GET", "/C1", [Resp({"status_code": "IN_PROGRESS", "status": "In Progress"})] * 999),
+                      ("GET", "/C2", Resp({"status_code": "FINISHED"})),
+                      ("GET", "/M2", Resp({"permalink": "https://ig/M2"}))])
+        f.rupload_status = {"offset": 0}
+        meta_graph.requests = f
+        self.app.platforms = {"instagram": meta_graph.Instagram(self.cfg)}
+        a, = self.publish("a")
+        r = self.res(a)
+        self.assertEqual((r["status"], r["container"], r["upload_lost"]), ("processing", "C1", True))
+        self.assertNotEqual(self.app.db.get_item(a)["status"], "failed")       # без «аварійно завершилась»
+        self.later(41)
+        self.assertEqual(self.res(a)["status"], "ig_next")
+        self.later(31)
+        self.assertEqual(self.res(a)["status"], "ok")
+        self.assertEqual(n["c"], 2)                                              # рівно два контейнери
+        rows = self.app.db.q("SELECT result FROM history WHERE item_id=? AND platform='instagram'", (a,))
+        self.assertIn("lost_retry", [x["result"] for x in rows])
+
+    def test_legacy_record_checked_right_away(self):
+        a, = self.publish("a")
+        offsets = []
+        self.ig.upload_offset = lambda cid: offsets.append(cid) or 0
+        results = dict(self.app.db.get_item(a)["results"])
+        ig = {k: v for k, v in results["instagram"].items() if k != "upload_lost"}
+        ig.update(ig_report={"upload_http": 400}, since=self.now - 90 * 60, next_at=self.now + 180 * 60)
+        results["instagram"] = ig
+        self.app.db.update_item(a, results=results)
+        self.later(1)                                                            # не чекаємо 3 год розкладу
+        self.assertEqual(offsets, ["C1"])
+        self.assertEqual(self.res(a)["status"], "ig_next")
+
+
 if __name__ == "__main__":
     unittest.main()

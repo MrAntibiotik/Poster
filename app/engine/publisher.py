@@ -230,6 +230,13 @@ class Publisher:
             except AttributeError:
                 pass
         res = self._publish_one_raw(key, item, meta)
+        try:   # діагностика ніколи не зупиняє публікацію — помилку лише в журнал
+            self._record_attempt(key, item, plat, res, started)
+        except Exception:  # noqa: BLE001
+            log.exception("#%s %s: запис в історію публікацій не вдався", item["id"], key)
+        return res
+
+    def _record_attempt(self, key: str, item: dict, plat, res: dict | None, started: int) -> None:
         if res is not None and res.get("status") != "ig_wait":
             st = res.get("status")
             note = str(res.get("note") or "")
@@ -240,10 +247,9 @@ class Publisher:
                 kind = "auth" if res.get("reauth") else "limited" if res.get("retry_at") else "error"
             from app.insights import history
             extra = history.ig_details(plat) if key == "instagram" else {}
+            method = extra.pop("method", None)          # ig_details теж повертає method — не передавати двічі
             history.record(self.app, item, key, kind or str(st), started, url=res.get("url") or None,
-                           error=res.get("error"), method=res.get("method_name") or extra.pop("method", None),
-                           **extra)
-        return res
+                           error=res.get("error"), method=res.get("method_name") or method, **extra)
 
     def _publish_one_raw(self, key: str, item: dict, meta) -> dict:
         app = self.app
@@ -531,7 +537,9 @@ class Publisher:
             if now - int(r.get("since") or now) >= limit and not r.get("delay_told"):
                 self._ig_delay_notice(it, r, now)          # без жодного запиту до Meta
                 r = (db.get_item(it["id"])["results"].get("instagram") or {})
-            if now < int(r.get("next_at") or 0):
+            legacy = "upload_lost" not in r and now - int(r.get("since") or now) >= \
+                60 * int(self._ig_cfg().get("lost_retry_after_min", 30))
+            if now < int(r.get("next_at") or 0) and not legacy:   # контейнер від старої версії — перевірити одразу
                 continue
             if self._ig_check(it, r, plat, now) == "limit":
                 return
