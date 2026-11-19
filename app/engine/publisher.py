@@ -274,7 +274,8 @@ class Publisher:
                     if i == 1:
                         log.info("#%s %s: завантажую оригінал без змін: %s (%.1f МБ)", item["id"], key,
                                  item["mp4"], Path(item["mp4"]).stat().st_size / 1024 / 1024)
-                    if key == "instagram" and hasattr(plat, "upload_only"):
+                    if key == "instagram" and hasattr(plat, "upload_only") and \
+                            (app.cfg["platforms"].get("instagram") or {}).get("silent_wait", False):
                         # завантажили — і мовчки чекаємо wait_min; один запит «готово?» робить finish_instagram
                         prev = item["results"].get("instagram") or {}
                         m = int(prev.get("method") or 0) if prev.get("status") == "ig_next" else 0
@@ -300,8 +301,9 @@ class Publisher:
                 app.db.set(f"pubtry:{item['id']}:{key}", None)
                 app.db.event(item["id"], "ig_processing", {"container": e.container_id})
                 now = now_ts()
-                return {"status": "processing", "container": e.container_id, "since": now, "next_at": now + 120,
-                        "checks": 0, "note": "Instagram ще обробляє — опублікую, щойно буде готово"}
+                return {"status": "processing", "flow": "poll", "container": e.container_id, "since": now,
+                        "next_at": now + 120, "checks": 0,
+                        "note": "Instagram ще обробляє — опублікую, щойно буде готово"}
             except RateLimited as e:
                 # повтори одразу лише подовжують блокування — публікація піде сама після паузи
                 log.warning("#%s %s: %s", item["id"], key, e)
@@ -345,13 +347,12 @@ class Publisher:
         items = db.items(IG_PENDING_SQL, order="id")
         for it in items:
             r = (it["results"] or {}).get("instagram") or {}
-            due = int(r.get("next_at") or 0)
-            if r.get("status") == "processing" and not r.get("method_name"):   # запис старої версії — теж 20 хв тиші
-                due = max(due, int(r.get("since") or 0)
-                          + 60 * int((app.cfg["platforms"].get("instagram") or {}).get("wait_min", 20)))
-            if r.get("status") != "processing" or now < due or self.is_active(it["id"]):
+            if r.get("status") != "processing" or now < int(r.get("next_at") or 0) or self.is_active(it["id"]):
                 continue
-            r = {**r, "method_name": r.get("method_name") or self._ig_method_name(plat, r)}
+            if not r.get("method_name"):   # звичайний спосіб (як у версіях до 157): рідкі перевірки до 60 хв
+                if self._finish_poll(it, r, plat, now) == "limit":
+                    return
+                continue
             why = ""
             try:   # ОДИН запит: контейнер готовий → публікуємо; ні → наступний спосіб
                 got = plat.finish_container(r["container"])
@@ -404,11 +405,46 @@ class Publisher:
                 self.start(it["id"])
                 return   # по одному: наступний — коли й цей закінчиться
 
-    @staticmethod
-    def _ig_method_name(plat, r: dict) -> str:
-        methods = getattr(plat, "METHODS", ())
-        m = int(r.get("method") or 0)
-        return methods[m][0] if m < len(methods) else "перший спосіб"
+    def _finish_poll(self, it: dict, r: dict, plat, now: int) -> str:
+        """Звичайний спосіб (версії 144–156, що публікував): контейнер обробляється довше 10 хв — перевіряємо
+        у фоні рідко (2, 3, 5, 10, далі раз на 15 хв), до 60 хв; готово — публікуємо, завис — ❌."""
+        app, db = self.app, self.app.db
+        checks = int(r.get("checks") or 0) + 1
+        try:
+            got = plat.finish_container(r["container"])
+        except RateLimited as e:
+            self._save_ig(it, {**r, "next_at": max(e.retry_at, now + 300)})
+            return "limit"
+        except Exception as e:  # noqa: BLE001
+            log.warning("#%s instagram: фонова обробка не вдалася: %s", it["id"], e)
+            self._save_ig(it, {"status": "error", "attempts": 1, "error": str(e)[:500]})
+            db.event(it["id"], "platform_error", {"platform": "instagram", "error": str(e)[:2000]})
+            if hasattr(app.bot, "notify_failed"):
+                app.bot.notify_failed(it["id"])
+            return "error"
+        mins = (now - int(r.get("since") or now)) // 60
+        if got:
+            log.info("#%s instagram: опубліковано після фонової обробки %s", it["id"], got.get("url"))
+            self._save_ig(it, {"status": "ok", "attempts": 1, "published_at": now_ts(), **got,
+                               "note": f"Instagram обробляв {max(1, mins)} хв"})
+            db.event(it["id"], "published", {"ok": ["instagram"], "urls": {"instagram": got.get("url")},
+                                              "background": True})
+            if hasattr(app.bot, "drop_failed_card"):
+                app.bot.drop_failed_card(it["id"])
+            return "ok"
+        if mins > int((app.cfg["platforms"].get("instagram") or {}).get("background_max_min", 60)):
+            err = (f"Instagram так і не обробив відео ({mins} хв «In Progress») — контейнер завис. "
+                   "Повторіть або опублікуйте з телефона («📱 Надіслати мені для Instagram»).")
+            log.warning("#%s instagram: контейнер %s завис (%s хв) — більше не чекаю", it["id"], r.get("container"), mins)
+            self._save_ig(it, {"status": "error", "attempts": 1, "error": err})
+            db.event(it["id"], "platform_error", {"platform": "instagram", "error": err})
+            if hasattr(app.bot, "notify_failed"):
+                app.bot.notify_failed(it["id"])
+            return "error"
+        log.info("#%s instagram: контейнер %s ще обробляється (%s хв) — перевірю пізніше", it["id"], r.get("container"), mins)
+        step = (120, 180, 300, 600)[checks - 1] if checks <= 4 else 900
+        self._save_ig(it, {**r, "checks": checks, "next_at": now + step})
+        return "wait"
 
     def _save_ig(self, item: dict, res: dict) -> None:
         results = dict(self.app.db.get_item(item["id"])["results"])

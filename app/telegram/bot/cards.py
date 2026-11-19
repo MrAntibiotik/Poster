@@ -230,6 +230,10 @@ class CardsMixin:
             if r.get("status") == "skipped":
                 lines.append(f"{icon} {NAMES[p]} — ⏭ пропущено")
                 continue
+            if r.get("status") == "processing" and not r.get("method_name"):
+                mins = max(0, (now_ts() - int(r.get("since") or now_ts())) // 60)
+                lines.append(f"{icon} {NAMES[p]} — ⏳ Instagram ще обробляє відео ({mins} хв) — опублікую, щойно буде готово")
+                continue
             if r.get("status") == "processing":
                 left = max(0, (int(r.get("next_at") or 0) - now_ts() + 59) // 60)
                 how = f" ({r['method_name']})" if r.get("method_name") else ""

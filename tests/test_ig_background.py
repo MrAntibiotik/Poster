@@ -47,6 +47,7 @@ class IgWaitTest(FlowBase):
         super().setUp()
         self.cfg["dry_run"] = False
         self.cfg["platforms"]["instagram"]["single_attempt"] = True
+        self.cfg["platforms"]["instagram"]["silent_wait"] = True
         self.yt, self.ig = Ok(), IG()
         self.app.platforms = {"youtube": self.yt, "instagram": self.ig}
         self.now = self.ts(11, "12:00")
@@ -134,6 +135,55 @@ class IgWaitTest(FlowBase):
         self.assertIn("до того не турбую", cap)
         cap = self.app.bot.caption(self.app.db.get_item(b))
         self.assertIn(f"чекає, поки Instagram обробить #{a}", cap)
+
+
+class PollIG(IG):
+    """Звичайний спосіб: publish сам чекає ~10 хв; довше — StillProcessing і фонові перевірки."""
+
+    def publish(self, path, meta):
+        from app.platforms import StillProcessing
+        cid = f"C{len(self.uploads) + 1}"
+        self.uploads.append((cid, "publish"))
+        if self.instant:
+            return {"id": "M" + cid, "url": f"https://ig/{cid}"}
+        raise StillProcessing("Instagram ще обробляє", cid)
+
+
+class IgPollTest(IgWaitTest):
+    def setUp(self):
+        super().setUp()
+        self.cfg["platforms"]["instagram"]["silent_wait"] = False   # типово — звичайний спосіб
+        self.ig = PollIG()
+        self.ig.instant = False
+        self.app.platforms = {"youtube": self.yt, "instagram": self.ig}
+
+    def test_instant_publish(self):
+        self.ig.instant = True
+        a, = self.publish("a")
+        self.assertEqual(self.res(a)["status"], "ok")
+        self.assertEqual(self.ig.checks, [])
+
+    def test_background_checks_then_publish(self):
+        a, b = self.publish("a", "b")
+        self.assertEqual(self.res(a)["status"], "processing")
+        self.assertEqual(self.res(b)["status"], "ig_wait")
+        self.later(2)
+        self.assertEqual(self.ig.checks, ["C1"])          # перша фонова перевірка через 2 хв
+        self.ig.ready.add("C1")
+        self.later(3)
+        self.assertEqual(self.res(a)["status"], "ok")
+        self.assertEqual(self.ig.uploads[-1], ("C2", "publish"))   # тепер Instagram для #b
+
+    def test_stuck_gives_up_after_hour(self):
+        a, = self.publish("a")
+        self.later(70)
+        self.assertEqual(self.res(a)["status"], "error")
+        self.assertIn("завис", self.res(a)["error"])
+        self.assertLess(len(self.ig.checks), 10)          # рідкі перевірки, не щохвилини
+
+    # тести тихого способу тут не потрібні
+    test_silent_wait_then_one_check = test_next_method_after_20_min = test_next_method_blocks_others = None
+    test_one_at_a_time_queue_goes_on = test_card_text = test_survives_restart = None
 
 
 if __name__ == "__main__":
