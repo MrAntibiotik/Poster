@@ -151,6 +151,20 @@ class CommandsMixin:
             self.send("▶️ Розклад відновлено.", keyboard=True)
         elif cmd == "/clean":
             self.clean_chat(chat, latest=(self._last_incoming or {}).get(chat))
+        elif cmd == "/containers":
+            if role != "admin":
+                return reply("⛔ Лише для адміністратора.", False)
+            from app.insights import containers
+            n = next((int(a) for a in args if a.isdigit()), 5)
+            recs = containers.last(self.cfg, max(1, min(n, 15)))
+            if not recs:
+                return reply("📦 Записів про контейнери Instagram ще немає (з'являться після наступної спроби).")
+            blocks = [f"🕐 {esc(r.get('time', ''))}\n<code>{esc(containers.fmt(r))}</code>" for r in recs]
+            text = "📦 <b>Контейнери Instagram</b> (останні {})\n\n".format(len(recs)) + "\n\n".join(blocks)
+            while len(text) > 4000 and len(blocks) > 1:     # Telegram — до 4096 символів
+                blocks.pop(0)
+                text = "📦 <b>Контейнери Instagram</b> (останні {})\n\n".format(len(blocks)) + "\n\n".join(blocks)
+            reply(text)
         elif cmd == "/history":
             if role != "admin":
                 return reply("⛔ Лише для адміністратора.", False)

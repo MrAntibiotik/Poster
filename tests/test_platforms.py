@@ -592,6 +592,10 @@ class InstagramDiagnosticTest(Base):
         self.assertEqual(len(files), 1)
         d = J.loads(files[0].read_text(encoding="utf-8"))
         self.assertEqual([s["stage"] for s in d["stages"]], ["файл", "контейнер", "rupload", "обробка"])
+        from app.insights import containers   # журнал контейнерів: окремий запис на цей контейнер
+        rec = containers.last(self.cfg, 1)[0]
+        self.assertEqual((rec["container"], rec["upload_http"], rec["status_code"]), ("C1", 400, "ERROR"))
+        self.assertIn("ProcessingFailedError", rec["error"])
         self.assertEqual(d["rupload"]["http"], 400)
         self.assertTrue(d["polls"])
 

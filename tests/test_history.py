@@ -116,3 +116,27 @@ class ContainerDetailsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContainersLogTest(unittest.TestCase):
+    def test_format_and_file(self):
+        import tempfile
+        from app.insights import containers
+        d = Path(tempfile.mkdtemp())
+        cfg = {"paths": {"data": str(d)}}
+        rec = {"container": "18454129246135562", "item_id": 63, "duration": 52.3, "size_mb": 44.0, "codec": "h264",
+               "resolution": "1080×1920", "fps": 60, "bitrate_kbps": 5800,
+               "upload": "❌ ні, HTTP 400 за 35 с", "status_code": "IN_PROGRESS",
+               "status": "Media is still being processed.",
+               "error": containers.error_message(BODY, "IN_PROGRESS", "x", "fallback"),
+               "processing_s": 4080, "outcome": "контейнер завис"}
+        text = containers.report(cfg, rec)
+        for line in ("Instagram container:", "ID: 18454129246135562", "Video duration: 52.3 с", "File size: 44.0 МБ",
+                     "Codec: h264", "Resolution: 1080×1920", "FPS: 60", "Bitrate: 5800 кбіт/с",
+                     "Upload completed: ❌ ні, HTTP 400 за 35 с", "Last status_code: IN_PROGRESS",
+                     "Last status: Media is still being processed.",
+                     "Last error_message: ProcessingFailedError: Request processing failed",
+                     "Processing time: 4080 с"):
+            self.assertIn(line, text)
+        self.assertEqual(containers.last(cfg, 5)[0]["container"], "18454129246135562")
+        self.assertEqual(containers.error_message(None, "ERROR", "Error: code 2207026", ""), "Error: code 2207026")

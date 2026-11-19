@@ -459,6 +459,37 @@ class Instagram(_MetaBase):
                 old.unlink(missing_ok=True)
         except (OSError, KeyError) as e:
             log.debug("ig_diag: %s", e)
+        if d.get("container"):
+            try:   # журнал контейнерів ніколи не ламає публікацію
+                from app.insights import containers
+                containers.report(self.cfg, self.container_record(result))
+            except Exception as e:  # noqa: BLE001
+                log.debug("журнал контейнера: %s", e)
+
+    def container_record(self, outcome: str, error: str = "") -> dict:
+        """Підсумок по контейнеру з діагностики цієї спроби (для журналу контейнерів)."""
+        from app.insights import containers
+        d = getattr(self, "diag", None) or {}
+        p = d.get("probe_raw") or {}
+        up = d.get("rupload") or {}
+        st = {s["stage"]: s for s in d.get("stages") or []}
+        polls = d.get("polls") or []
+        code, status = (polls[-1][1], polls[-1][2]) if polls else (None, None)
+        u = st.get("rupload")
+        upload = None
+        if u:
+            upload = (f"{'✅ так' if u['ok'] else '❌ ні'}, HTTP {up.get('http') or '—'} за {u['seconds']:g} с")
+        fail = next((s for s in d.get("stages") or [] if not s["ok"]), None)
+        return {"container": d.get("container"), "item_id": getattr(self, "current_item", None),
+                "file": d.get("file"), "duration": round(p["duration"], 1) if p.get("duration") else None,
+                "size_mb": d.get("size_mb"), "codec": p.get("vcodec"),
+                "resolution": f"{p['width']}×{p['height']}" if p.get("width") else None,
+                "fps": round(p["fps"], 2) if p.get("fps") else None, "bitrate_kbps": p.get("vkbps"),
+                "upload": upload, "upload_http": up.get("http"), "status_code": code, "status": status,
+                "error": containers.error_message(up.get("body"), code, status,
+                                                  error or (fail or {}).get("info") if fail else error),
+                "processing_s": (st.get("обробка") or {}).get("seconds"), "method": d.get("variant"),
+                "outcome": outcome}
 
     def _variant_file(self) -> Path:
         data = (self.cfg.get("paths") or {}).get("data")
@@ -506,7 +537,8 @@ class Instagram(_MetaBase):
                             "variant": getattr(self, "_variant_name", "")}
         try:
             from app.core import media
-            diag["probe"] = media.ig_summary(media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe")))
+            diag["probe_raw"] = media.ig_probe(video_path, self.cfg.get("ffprobe", "ffprobe"))
+            diag["probe"] = media.ig_summary(diag["probe_raw"])
         except Exception:  # noqa: BLE001
             pass
         self._stage("файл", True, 0, f"{size / 1048576:.1f} МБ, читається повністю, не змінюється")
@@ -761,7 +793,12 @@ class Instagram(_MetaBase):
             self.report(f"завантажую в Instagram ({name}, {size:.0f} МБ)")
             log.info("Instagram: контейнер %s, %s — завантажую %s (%.1f МБ)", cid, name, path, size)
             note = ""
-            self.diag = {"file": Path(path).name, "size_mb": round(size, 1), "variant": name, "stages": []}
+            self.diag = {"file": Path(path).name, "size_mb": round(size, 1), "variant": name, "stages": [],
+                         "container": cid}
+            try:
+                self.diag["probe_raw"] = _media.ig_probe(path, self.cfg.get("ffprobe", "ffprobe"))
+            except Exception:  # noqa: BLE001
+                pass
             t0 = time.time()
             try:
                 g.upload_binary(uri, path)

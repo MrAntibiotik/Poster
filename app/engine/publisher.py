@@ -274,6 +274,7 @@ class Publisher:
         pause = int(app.cfg["retry"]["pause_seconds"])
         last = None
         try:
+            plat.current_item = item["id"]       # для журналу контейнерів Instagram
             plat.should_stop = lambda _i=item["id"]: app.db.get("stopped") == "1" or bool(app.db.get(f"held:{_i}"))
             plat.report = lambda phase, _i=item["id"]: self._report(_i, phase)
         except AttributeError:
@@ -318,6 +319,10 @@ class Publisher:
                         log.info("#%s instagram: завантажено (%s) — перевірю один раз через %s хв, до того Instagram "
                                  "не турбую", item["id"], up.get("method_name"), wait // 60)
                         app.db.set(f"pubtry:{item['id']}:{key}", None)
+                        try:
+                            up["ig_report"] = plat.container_record("завантажено — чекаю обробки")
+                        except Exception:  # noqa: BLE001
+                            pass
                         return {"status": "processing", **up, "since": now, "next_at": now + wait,
                                 "tried": list(prev.get("tried") or []) + [up.get("method_name")],
                                 "note": f"Instagram обробляє ({up.get('method_name')}) — перевірю через {wait // 60} хв"}
@@ -334,8 +339,12 @@ class Publisher:
                 app.db.set(f"pubtry:{item['id']}:{key}", None)
                 app.db.event(item["id"], "ig_processing", {"container": e.container_id})
                 now = now_ts()
+                try:
+                    snap = plat.container_record("обробляється — далі у фоні")
+                except Exception:  # noqa: BLE001
+                    snap = {}
                 return {"status": "processing", "flow": "poll", "container": e.container_id, "since": now,
-                        "next_at": now + 120, "checks": 0,
+                        "next_at": now + 120, "checks": 0, "ig_report": snap,
                         "note": "Instagram ще обробляє — опублікую, щойно буде готово"}
             except RateLimited as e:
                 # повтори одразу лише подовжують блокування — публікація піде сама після паузи
@@ -366,9 +375,27 @@ class Publisher:
         return {"status": "error", "attempts": attempts, "error": str(last)[:2000]}
 
     def _hist(self, it: dict, plat, result: str, since=None, **kw) -> None:
-        """Запис фонової події Instagram в історію — зі станом контейнера (status_code / status) і етапом."""
-        from app.insights import history
-        history.record(self.app, it, "instagram", result, since, **{**history.container_details(plat), **kw})
+        """Запис фонової події Instagram в історію — зі станом контейнера (status_code / status) і етапом —
+        і підсумок у журнал контейнерів."""
+        from app.insights import containers, history
+        cd = history.container_details(plat)
+        history.record(self.app, it, "instagram", result, since, **{**cd, **kw})
+        r = (it.get("results") or {}).get("instagram") or {}
+        rec = dict(r.get("ig_report") or {})
+        rec.update({"container": cd.get("container_id") or r.get("container") or rec.get("container"),
+                    "item_id": it["id"],
+                    "status_code": cd.get("container_status") or rec.get("status_code"),
+                    "status": cd.get("container_status_text") or rec.get("status"),
+                    "processing_s": kw.get("processing_s") or rec.get("processing_s"),
+                    "outcome": {"ok_background": "опубліковано (після довгої обробки)", "stuck": "контейнер завис",
+                                "next_method": "не оброблено — наступний спосіб", "error": "помилка"}.get(result, result)})
+        rec["error"] = containers.error_message(None, rec.get("status_code"), rec.get("status"),
+                                                kw.get("error")) or rec.get("error")
+        if rec.get("container"):
+            try:
+                containers.report(self.app.cfg, rec)
+            except Exception as e:  # noqa: BLE001
+                log.debug("журнал контейнера: %s", e)
 
     def _ig_to_phone_item(self, it: dict, why: str) -> bool:
         """Те саме з фону: підпис беремо з json шортса."""

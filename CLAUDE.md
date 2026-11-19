@@ -32,6 +32,10 @@
   status_code/status контейнера, етап, де зламалось (контейнер / rupload / обробка / media_publish), час, повна помилка. Вивантаження — `/history`
   у боті (підсумок + CSV) і панель → Журнал. Новий шлях публікації чи новий результат — обов'язково записувати сюди.
 
+- Журнал контейнерів Instagram (`app/insights/containers.py`): на кожен контейнер — блок «Instagram container:» (ID, тривалість,
+  розмір, кодек, роздільність, к/с, бітрейт надісланого файлу, Upload completed, Last status_code/status/error_message,
+  Processing time, Result) у log.txt і data/ig_containers.jsonl; у боті — /containers. Пишеться в `_save_diag` і `Publisher._hist`.
+
 ## Інше
 
 - Користувач спілкується українською; відповіді — українською, просто й по суті.
