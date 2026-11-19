@@ -220,11 +220,19 @@ class Publisher:
 
     def _publish_one(self, key: str, item: dict, meta) -> dict:
         app = self.app
-        if key == "instagram" and (app.cfg["platforms"].get("instagram") or {}).get("manual") \
+        igc = app.cfg["platforms"].get("instagram") or {}
+        too_long = key == "instagram" and not igc.get("manual") and self._ig_too_long(item, igc)
+        if key == "instagram" and (igc.get("manual") or too_long) \
                 and hasattr(app.bot, "instagram_manual") and not app.cfg.get("dry_run"):
             try:   # напівавтомат: відео й підпис — вам у Telegram, публікуєте з телефона
                 app.bot.instagram_manual(item["id"], meta)
-                return {"status": "manual", "sent_at": now_ts(), "note": "надіслано в Telegram для публікації з телефона"}
+                if too_long:
+                    log.info("#%s instagram: відео %s с — довше за %s с, Instagram через API таке не приймає; "
+                             "надіслано вам у Telegram повністю (без запитів до Instagram)",
+                             item["id"], too_long, igc.get("auto_max_seconds"))
+                return {"status": "manual", "sent_at": now_ts(),
+                        "note": (f"{too_long} с — довше за {igc.get('auto_max_seconds')} с, тому вам у Telegram"
+                                 if too_long else "надіслано в Telegram для публікації з телефона")}
             except Exception as e:  # noqa: BLE001
                 log.warning("#%s Instagram вручну: не вдалося надіслати в Telegram: %s", item["id"], e)
                 return {"status": "error", "attempts": 1, "error": f"не вдалося надіслати відео в Telegram: {e}"[:500]}
@@ -328,6 +336,17 @@ class Publisher:
         app.db.set(f"pubtry:{item['id']}:{key}", None)
         app.db.event(item["id"], "platform_error", {"platform": key, "error": str(last)[:2000]})
         return {"status": "error", "attempts": attempts, "error": str(last)[:2000]}
+
+    def _ig_too_long(self, item: dict, igc: dict) -> int:
+        """Тривалість (с), якщо відео довше за platforms.instagram.auto_max_seconds (інакше 0)."""
+        limit = float(igc.get("auto_max_seconds", 55) or 0)
+        if not limit:
+            return 0
+        try:
+            dur = float(media.ig_probe(item["mp4"], self.app.cfg.get("ffprobe", "ffprobe")).get("duration") or 0)
+        except Exception:  # noqa: BLE001 — не вдалося виміряти: пробуємо як звичайно
+            return 0
+        return int(round(dur)) if dur > limit else 0
 
     def ig_processing(self, exclude: int | None = None) -> int | None:
         """Шортс, чиє відео Instagram зараз обробляє у фоні (або None)."""

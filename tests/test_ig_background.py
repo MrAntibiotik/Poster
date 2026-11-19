@@ -181,6 +181,27 @@ class IgPollTest(IgWaitTest):
         self.assertIn("завис", self.res(a)["error"])
         self.assertLess(len(self.ig.checks), 10)          # рідкі перевірки, не щохвилини
 
+    def test_long_video_goes_to_telegram_without_instagram_requests(self):
+        from unittest import mock
+        from app.core import media
+        sent = []
+        self.app.bot.instagram_manual = lambda item_id, meta: sent.append(item_id)
+        with mock.patch.object(media, "ig_probe", return_value={"duration": 59.2}):
+            a, = self.publish("a")
+        self.assertEqual(sent, [a])
+        self.assertEqual(self.ig.uploads, [])                  # в Instagram — нічого
+        r = self.res(a)
+        self.assertEqual(r["status"], "manual")
+        self.assertIn("59 с", r["note"])
+
+    def test_short_video_goes_to_instagram(self):
+        from unittest import mock
+        from app.core import media
+        self.ig.instant = True
+        with mock.patch.object(media, "ig_probe", return_value={"duration": 52.0}):
+            a, = self.publish("a")
+        self.assertEqual(self.res(a)["status"], "ok")
+
     # тести тихого способу тут не потрібні
     test_silent_wait_then_one_check = test_next_method_after_20_min = test_next_method_blocks_others = None
     test_one_at_a_time_queue_goes_on = test_card_text = test_survives_restart = None

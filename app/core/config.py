@@ -123,6 +123,9 @@ DEFAULTS: dict = {
                       "single_attempt": True,
                       # вручну (напівавтомат): відео й підпис — вам у Telegram, публікуєте з телефона
                       "manual": False,
+                      # довші відео Instagram через API не приймає (52 с проходило, 56–59 с — ні): їх — вам у Telegram
+                      # повністю, без запитів до Instagram. 0 — вимкнути розподіл
+                      "auto_max_seconds": 55,
                       "max_upload_mb": 100},  # важчі файли Instagram часто не приймає — шлемо копію 60 к/с ≤10 Мбіт/с
         "facebook": {"enabled": True},
         "tiktok": {
