@@ -72,6 +72,20 @@ class InfoMixin:
                 lines.append(f"\n✅ <b>{NAMES[p]}</b>" + (f" — {esc(str(r.get('note')))}" if r.get("note") else ""))
                 for t in r.get("tried") or []:
                     lines.append(f"   ✖️ не пройшло: {esc(str(t)[:400])}")
+            elif r.get("status") in ("processing", "ig_next", "ig_wait", "manual", "skipped"):
+                # не помилка: обробляється / чекає нового завантаження / черги / надіслано вам у Telegram
+                from app.insights.containers import wait_text
+                st = r.get("status")
+                text = (wait_text(r, now_ts()) if st == "processing" and r.get("since") else
+                        f"🔄 {r.get('note') or 'наступна спроба пізніше'}" if st == "ig_next" else
+                        f"⏳ {r.get('note') or 'чекає черги в Instagram'}" if st == "ig_wait" else
+                        f"📱 {r.get('note') or 'надіслано вам у Telegram'}" if st == "manual" else "⏭ пропущено")
+                lines.append(f"\n⏳ <b>{NAMES[p]}</b> — {esc(text)}")
+                if r.get("error"):
+                    lines.append(f"   • {esc(short_error(str(r['error'])))}")
+                for t in r.get("tried") or []:
+                    if t:
+                        lines.append(f"   ✖️ не пройшло: {esc(str(t)[:400])}")
             else:
                 lines.append(f"\n❌ <b>{NAMES[p]}</b> (спроб: {r.get('attempts', '?')})")
                 err = str(r.get("error", ""))

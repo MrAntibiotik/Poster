@@ -148,6 +148,13 @@ class TenMinutesTest(IgFlowBase):
         rows = self.app.db.q("SELECT result FROM history WHERE item_id=? AND result='lost_retry'", (a,))
         self.assertEqual(len(rows), 1)
 
+    def test_details_show_waiting_not_error(self):
+        a, = self.publish("a")
+        text = self.app.bot.details_text(a)
+        self.assertNotIn("❌ <b>Instagram</b>", text)                      # чекає повтору — це не помилка
+        self.assertIn("⏳ <b>Instagram</b>", text)
+        self.assertIn("повторю завантаження", text)
+
     def test_others_publish_while_waiting_for_retry(self):
         a, b = self.publish("a", "b")
         self.assertEqual(self.res(a)["status"], "ig_next")
