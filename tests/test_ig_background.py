@@ -141,13 +141,6 @@ class TenMinutesTest(IgFlowBase):
         rows = self.app.db.q("SELECT result FROM history WHERE item_id=? AND result='stuck_retry'", (a,))
         self.assertEqual(len(rows), 3)
 
-    def test_lost_upload_same_flow(self):
-        self.ig.default_inline = "lost"
-        a, = self.publish("a")
-        self.assertIn("файл до Meta не дійшов", self.res(a)["note"])
-        rows = self.app.db.q("SELECT result FROM history WHERE item_id=? AND result='lost_retry'", (a,))
-        self.assertEqual(len(rows), 1)
-
     def test_details_show_waiting_not_error(self):
         a, = self.publish("a")
         text = self.app.bot.details_text(a)
@@ -301,7 +294,7 @@ class RealInstagramFlowTest(IgFlowBase):
         self.assertNotEqual(self.app.db.get_item(a)["status"], "failed")    # без «аварійно завершилась»
         r = self.res(a)
         self.assertEqual(r["status"], "ig_next")
-        self.assertIn("файл до Meta не дійшов", r["note"])
+        self.assertIn("не обробив за 10 хв", r["note"])
         polls_c1 = [c for c in f.calls if c[0] == "GET" and c[1].endswith("/C1")]
         self.assertLessEqual(len(polls_c1), 12)                            # ~10 хв, рідко
         self.later(31)
@@ -309,7 +302,7 @@ class RealInstagramFlowTest(IgFlowBase):
         self.assertEqual(n["c"], 2)                                        # рівно два контейнери, один Reels
         rows = [x["result"] for x in self.app.db.q("SELECT result FROM history WHERE item_id=? AND platform='instagram'",
                                                    (a,))]
-        self.assertIn("lost_retry", rows)
+        self.assertIn("stuck_retry", rows)
         self.assertIn("ok", rows)
 
 

@@ -279,25 +279,20 @@ class DiagnosticsTest(IgBase):
         self.assertIn("IN_PROGRESS", t)
 
 
-class UploadLostTest(IgBase):
-    def test_400_with_zero_bytes_is_marked_lost(self):
+class Upload400Test(IgBase):
+    def test_400_no_extra_requests_and_not_a_verdict(self):
+        # 21.11, #82: «400» і «0 байтів», а відео за 0,7 с оброблено — тож байти більше не питаємо, вирішує статус
+        f = self.http(meta_graph, self.routes([{"status_code": "FINISHED"}], upload=Resp(None, 400, BODY400)))
+        f.rupload_status = {"offset": 0}
+        r = meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(r["id"], "M1")
+        self.assertFalse([c for c in f.calls if c[0] == "GET" and "rupload" in c[1]])
+
+    def test_400_still_processing_not_marked_lost(self):
         f = self.http(meta_graph, self.routes([{"status_code": "IN_PROGRESS"}] * 60, upload=Resp(None, 400, BODY400)))
-        f.rupload_status = {"offset": 0, "dc": "pnb1c16"}
         with self.assertRaises(StillProcessing) as cm:
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
-        self.assertTrue(cm.exception.upload_lost)
-        self.assertEqual(len([c for c in f.calls if c[0] == "GET" and "rupload" in c[1]]), 1)   # один запит
-
-    def test_400_with_bytes_on_server_is_not_lost(self):
-        f = self.http(meta_graph, self.routes([{"status_code": "IN_PROGRESS"}] * 60, upload=Resp(None, 400, BODY400)))
-        f.rupload_status = {"offset": 2048}
-        with self.assertRaises(StillProcessing) as cm:
-            meta_graph.Instagram(self.cfg).publish(str(self.video), META)
-        self.assertFalse(cm.exception.upload_lost)
-
-    def test_200_upload_no_extra_request(self):
-        f = self.http(meta_graph, self.routes([{"status_code": "FINISHED"}]))
-        meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertFalse(getattr(cm.exception, "upload_lost", False))
         self.assertFalse([c for c in f.calls if c[0] == "GET" and "rupload" in c[1]])
 
 

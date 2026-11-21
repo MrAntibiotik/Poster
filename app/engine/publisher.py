@@ -587,14 +587,14 @@ class Publisher:
         return self._ig_max_wait()
 
     def _ig_retry(self, it: dict, plat, r: dict, polls: list, res: dict, age: int) -> dict:
-        """Контейнер не оброблено за max_wait_min (або файл до Meta не дійшов): контейнер покидаємо — його ніхто не
+        """Контейнер не оброблено за max_wait_min: контейнер покидаємо — його ніхто не
         опублікує, тож дубля немає; нове завантаження того самого відео через паузу; після RETRY_PAUSES — у Telegram."""
         n = int(r.get("lost_retries") or 0)
-        lost = bool(r.get("upload_lost"))
+        lost = bool(r.get("upload_lost"))      # лише записи старих версій; відповідь «0 байтів» нічого не означає
+        http = r.get("upload_http") or (r.get("ig_report") or {}).get("upload_http")
         why = (f"контейнер {r.get('container')}: {age // 60} хв «{res.get('status_code') or '—'}»"
-               + (f"; файл до Meta не дійшов (rupload {r.get('upload_http') or 400}, 0 байтів)" if lost else ""))
-        self._hist(it, plat, "lost_retry" if lost else "stuck_retry", int(r.get("since") or 0), polls=polls,
-                   error=why, processing_s=age)
+               + (f"; завантаження відповіло HTTP {http}" if http and int(http) >= 400 else ""))
+        self._hist(it, plat, "stuck_retry", int(r.get("since") or 0), polls=polls, error=why, processing_s=age)
         if n < len(self.RETRY_PAUSES):
             pause = self.RETRY_PAUSES[n]
             log.warning("#%s instagram: %s — не чекаю далі, нове завантаження через %s хв (спроба %s з %s)",
@@ -602,8 +602,8 @@ class Publisher:
             self.app.db.event(it["id"], "ig_retry", {"container": r.get("container"), "retry": n + 1, "lost": lost})
             return {"status": "ig_next", "method": int(r.get("method") or 0), "not_before": now_ts() + pause,
                     "lost_retries": n + 1, "tried": [t for t in r.get("tried") or [] if t],
-                    "note": ("файл до Meta не дійшов" if lost else f"Instagram не обробив за {self._ig_max_wait() // 60} хв")
-                            + f" — повторю завантаження через {pause // 60} хв"}
+                    "note": f"Instagram не обробив за {self._ig_max_wait() // 60} хв — повторю завантаження через "
+                            f"{pause // 60} хв"}
         log.warning("#%s instagram: %s — повторні завантаження не допомогли", it["id"], why)
         return self._ig_after_failure(it, plat, {**r, "polls": polls, "method": 99}, "stuck",
                                       why + f"; після {n} нових завантажень")
