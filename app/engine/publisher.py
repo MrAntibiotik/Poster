@@ -342,12 +342,12 @@ class Publisher:
                     "note": "Instagram через API не прийняв — надіслано вам у Telegram"}
         return {"status": "error", "attempts": attempts, "error": str(last)[:2000]}
 
-    def _hist(self, it: dict, plat, result: str, since=None, polls=None, **kw) -> None:
+    def _hist(self, it: dict, plat, result: str, since=None, polls=None, r: dict | None = None, **kw) -> None:
         """Запис фонової події Instagram в історію — зі станом контейнера (status_code / status), етапом і ВСІЄЮ
         історією перевірок — і підсумок у журнал контейнерів."""
         from app.insights import containers, history
         cd = history.container_details(plat)
-        r = (it.get("results") or {}).get("instagram") or {}
+        r = r or (it.get("results") or {}).get("instagram") or {}     # свіжий запис (ще не збережений у базі)
         rec = dict(r.get("ig_report") or {})
         all_polls = list(rec.get("polls") or []) + list(polls or r.get("polls") or [])
         history.record(self.app, it, "instagram", result, since, polls=all_polls or None,
@@ -594,7 +594,7 @@ class Publisher:
         http = r.get("upload_http") or (r.get("ig_report") or {}).get("upload_http")
         why = (f"контейнер {r.get('container')}: {age // 60} хв «{res.get('status_code') or '—'}»"
                + (f"; завантаження відповіло HTTP {http}" if http and int(http) >= 400 else ""))
-        self._hist(it, plat, "stuck_retry", int(r.get("since") or 0), polls=polls, error=why, processing_s=age)
+        self._hist(it, plat, "stuck_retry", int(r.get("since") or 0), polls=polls, r=r, error=why, processing_s=age)
         if n < len(self.RETRY_PAUSES):
             pause = self.RETRY_PAUSES[n]
             log.warning("#%s instagram: %s — не чекаю далі, нове завантаження через %s хв (спроба %s з %s)",

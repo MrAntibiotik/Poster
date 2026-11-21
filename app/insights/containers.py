@@ -67,6 +67,7 @@ def fmt(rec: dict) -> str:
         f"FPS: {v(rec.get('fps'))}",
         f"Bitrate: {v(rec.get('bitrate_kbps'), ' кбіт/с')}",
         f"Upload completed: {v(up)}",
+        f"Upload mode: {v(rec.get('upload_mode'))}",
         f"Last status_code: {v(rec.get('status_code'))}",
         f"Last status: {v(rec.get('status'))}",
         f"Last error_message: {v(rec.get('error'))}",

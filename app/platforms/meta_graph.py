@@ -426,6 +426,7 @@ class Instagram(_MetaBase):
                 "vfr": p.get("vfr"), "pix_fmt": p.get("pix_fmt"),
                 "container_created": d.get("container_created"), "upload_s": up.get("seconds"),
                 "upload_body": up.get("body"), "trace": up.get("trace") or None,
+                "upload_mode": self.upload_mode(up) if up else None,
                 "polls": [list(x) for x in polls] or None,
                 "stages": [[s["stage"], s["ok"], s["seconds"], (s.get("info") or "")[:300]]
                            for s in d.get("stages") or []] or None}
@@ -435,6 +436,24 @@ class Instagram(_MetaBase):
     # відповіді Meta ERROR або EXPIRED. Тайм-аут очікування НЕ є помилкою: контейнер зберігається й перевіряється далі.
     # Способи: оригінал (якщо вже відповідає вимогам Reels) → копія під вимоги Reels → легка копія 30 к/с.
     METHODS = (("копія під вимоги Reels", ""), ("легка копія 30 к/с", "safe30"))   # лише 1080p — 720p надто погано
+
+    CHUNK_MB = 8   # «частинами»: кожна частина — окремий короткий запит (~8 с), далеко від 40-секундного обриву
+
+    def chunk_mb(self) -> float:
+        """Розмір частини для rupload (0 — одним запитом). Перемикач у панелі: platforms.instagram.chunked_upload."""
+        if self.pcfg.get("chunked_upload"):
+            return float(self.pcfg.get("upload_chunk_mb") or self.CHUNK_MB)
+        return 0.0
+
+    @staticmethod
+    def upload_mode(up: dict) -> str:
+        """Як вантажилось: «одним запитом» або «частинами по 8 МБ ×6 (206×5, 200)» — для історії й журналу контейнерів."""
+        chunks = up.get("chunks") or []
+        if not up.get("chunk_mb"):
+            return "одним запитом"
+        codes = [str(c[3]) for c in chunks]
+        summary = ", ".join(f"{k}×{codes.count(k)}" if codes.count(k) > 1 else k for k in dict.fromkeys(codes))
+        return f"частинами по {up['chunk_mb']:g} МБ ×{len(chunks)}" + (f" ({summary})" if summary else "")
 
     def methods_for(self, video_path: str) -> tuple:
         """Способи для цього файлу: оригінал без перекодування, якщо він уже сумісний (не знижуємо якість без потреби)
@@ -506,7 +525,7 @@ class Instagram(_MetaBase):
             note = ""
             t0 = time.time()
             try:
-                g.upload_binary(uri, path, float(self.pcfg.get("upload_chunk_mb", 0) or 0))
+                g.upload_binary(uri, path, self.chunk_mb())
             except RateLimited:
                 raise
             except PublishError as e:
@@ -514,7 +533,8 @@ class Instagram(_MetaBase):
                 log.info("Instagram rupload: %s — ще не відмова, результат покаже статус контейнера", note)
             up = getattr(g, "last_upload", {}) or {}
             d["rupload"] = {"http": up.get("http"), "body": up.get("body"), "seconds": up.get("seconds"),
-                            "mbps": up.get("mbps"), "trace": up.get("trace") or {}}
+                            "mbps": up.get("mbps"), "trace": up.get("trace") or {},
+                            "chunk_mb": up.get("chunk_mb") or 0, "chunks": up.get("chunks") or []}
             # Запит «скільки байтів дійшло» більше НЕ робимо: 21.11 (#82) Meta відповіла «400, 0 байтів», а відео за
             # 0,7 с оброблено й опубліковано — ця відповідь нічого не означає. Результат показує лише статус контейнера.
             if not _media.file_unchanged(path, check):

@@ -16,7 +16,7 @@ log = logging.getLogger("history")
 COLUMNS = ("id", "ts", "item_id", "platform", "result", "file", "title", "duration", "width", "height", "fps",
            "vkbps", "size_mb", "sent_file", "sent_mb", "method", "upload_http", "upload_s", "processing_s",
            "total_s", "url", "error", "version", "stage", "upload_body", "container_id", "container_status",
-           "container_status_text", "category", "polls", "trace", "audio")
+           "container_status_text", "category", "polls", "trace", "audio", "upload_mode")
 
 STAGES = {"файл": "файл", "контейнер": "створення контейнера", "rupload": "rupload (завантаження)",
           "обробка": "обробка в Instagram", "публікація": "media_publish", "media_publish": "media_publish"}
@@ -98,6 +98,9 @@ def ig_details(plat) -> dict:
         out["polls"] = [list(x) for x in polls]
     if up.get("trace"):
         out["trace"] = up["trace"]
+    if up:
+        from app.platforms.meta_graph import Instagram
+        out["upload_mode"] = Instagram.upload_mode(up)
     p = d.get("probe_raw") or {}
     if p.get("acodec"):
         out["audio"] = f"{p['acodec']} {p.get('akbps')} кбіт/с {p.get('arate')} Гц {p.get('channels')} кан."
@@ -181,7 +184,7 @@ def to_csv(app) -> bytes:
                 "спосіб", "HTTP завантаження", "завантаження, с", "обробка, с", "усього, с", "посилання", "помилка",
                 "версія", "етап, де зламалось", "відповідь завантаження (debug_info)", "контейнер",
                 "status_code контейнера", "status контейнера", "де проблема", "усі перевірки статусу",
-                "трасування Meta (x-fb-trace-id / x-fb-debug)", "звук"])
+                "трасування Meta (x-fb-trace-id / x-fb-debug)", "звук", "як вантажилось"])
     for r in rows:
         w.writerow([r["id"], local_dt(app.cfg, r["ts"]).strftime("%Y-%m-%d %H:%M"), r["item_id"],
                     NAMES.get(r["platform"], r["platform"]), r["result"], RESULTS.get(r["result"], ""),
@@ -189,7 +192,8 @@ def to_csv(app) -> bytes:
                     r["size_mb"], r["sent_file"], r["sent_mb"], r["method"], r["upload_http"], r["upload_s"],
                     r["processing_s"], r["total_s"], r["url"], r["error"], r["version"], r.get("stage"),
                     r.get("upload_body"), r.get("container_id"), r.get("container_status"),
-                    r.get("container_status_text"), r.get("category"), r.get("polls"), r.get("trace"), r.get("audio")])
+                    r.get("container_status_text"), r.get("category"), r.get("polls"), r.get("trace"), r.get("audio"),
+                    r.get("upload_mode")])
     return ("﻿" + buf.getvalue()).encode("utf-8")
 
 
@@ -224,6 +228,15 @@ def summary(app) -> str:
         if codes:
             lines.append("📤 Відповідь завантаження → опубліковано: "
                          + ", ".join(f"HTTP {k}: {v[1]} з {v[0]}" for k, v in sorted(codes.items())))
+    modes = {}
+    for r in db.q("SELECT upload_mode, result FROM history WHERE platform='instagram' AND upload_mode IS NOT NULL "
+                  "AND result NOT IN ('processing','next_method','stuck_retry','lost_retry')"):
+        m = "частинами" if str(r["upload_mode"]).startswith("частинами") else "одним запитом"
+        c = modes.setdefault(m, [0, 0])
+        c[0] += 1
+        c[1] += r["result"] in ok
+    if modes:
+        lines.append("🧩 Як вантажилось → опубліковано: " + ", ".join(f"{k}: {v[1]} з {v[0]}" for k, v in modes.items()))
     # по днях: чи проходили відео через API (без ручних/проміжних записів) — щоб побачити, КОЛИ почались відмови
     days: dict[str, list[int]] = {}
     for r in db.q("SELECT ts, result FROM history WHERE platform='instagram' AND result NOT IN "

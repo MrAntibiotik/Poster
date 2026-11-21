@@ -304,6 +304,10 @@ class RealInstagramFlowTest(IgFlowBase):
                                                    (a,))]
         self.assertIn("stuck_retry", rows)
         self.assertIn("ok", rows)
+        from app.insights import containers
+        stuck = [x for x in containers.last(self.cfg, 10) if x.get("outcome") == "stuck_retry"]
+        self.assertTrue(stuck and stuck[0].get("file"))                     # запис повтору — з даними файлу
+        self.assertEqual(stuck[0].get("upload_mode"), "одним запитом")
 
 
 if __name__ == "__main__":

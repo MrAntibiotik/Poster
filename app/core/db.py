@@ -116,7 +116,8 @@ CREATE TABLE IF NOT EXISTS history (
     category     TEXT,
     polls        TEXT,
     trace        TEXT,
-    audio        TEXT
+    audio        TEXT,
+    upload_mode  TEXT
 );
 CREATE INDEX IF NOT EXISTS history_idx ON history(item_id, platform, ts);
 
@@ -153,7 +154,8 @@ class DB:
                                     ("history", "container_id", "TEXT"), ("history", "container_status", "TEXT"),
                                     ("history", "container_status_text", "TEXT"),
                                     ("history", "category", "TEXT"), ("history", "polls", "TEXT"),
-                                    ("history", "trace", "TEXT"), ("history", "audio", "TEXT")):
+                                    ("history", "trace", "TEXT"), ("history", "audio", "TEXT"),
+                                    ("history", "upload_mode", "TEXT")):
                 cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
                 if col not in cols:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")

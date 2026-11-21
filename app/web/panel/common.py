@@ -48,7 +48,7 @@ FIELDS = {
     "platforms.youtube.enabled": "bool", "platforms.youtube.privacy": "privacy",
     "platforms.youtube.add_shorts_hashtag": "bool", "platforms.youtube.notify_subscribers": "bool",
     "platforms.instagram.enabled": "bool", "platforms.instagram.share_to_feed": "bool", "platforms.instagram.max_upload_mb": "int",
-    "platforms.instagram.single_attempt": "bool", "platforms.instagram.manual": "bool", "platforms.instagram.silent_wait": "bool", "platforms.instagram.max_seconds": "float",
+    "platforms.instagram.single_attempt": "bool", "platforms.instagram.manual": "bool", "platforms.instagram.silent_wait": "bool", "platforms.instagram.chunked_upload": "bool", "platforms.instagram.max_seconds": "float",
     "platforms.facebook.enabled": "bool",
     "platforms.tiktok.enabled": "bool", "platforms.tiktok.public": "bool", "platforms.tiktok.redirect_uri": "str",
     "auto_meta.enabled": "bool", "auto_meta.hashtags": "tagmap",

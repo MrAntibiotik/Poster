@@ -38,7 +38,7 @@ class IgBase(Base):
                 ("GET", "/IG1/media", Resp({"data": [{"id": "MOLD", "permalink": "https://ig/old",
                                                       "timestamp": "2026-11-19T10:00:00+0000"}]})),
                 ("POST", "/IG1/media", Resp({"id": "C1", "uri": "https://rupload.facebook.com/ig-api-upload/v25.0/C1"})),
-                ("POST", "rupload", upload or Resp({"success": True})),
+                ("POST", "rupload", upload if isinstance(upload, list) else (upload or Resp({"success": True}))),
                 ("GET", "/C1", [Resp(s) for s in statuses]),
                 ("GET", "/M1", Resp({"permalink": "https://ig/M1"}))]
 
@@ -294,6 +294,29 @@ class Upload400Test(IgBase):
             meta_graph.Instagram(self.cfg).publish(str(self.video), META)
         self.assertFalse(getattr(cm.exception, "upload_lost", False))
         self.assertFalse([c for c in f.calls if c[0] == "GET" and "rupload" in c[1]])
+
+
+class ChunkedUploadTest(IgBase):
+    def test_off_by_default_one_request(self):
+        f = self.http(meta_graph, self.routes([{"status_code": "FINISHED"}]))
+        meta_graph.Instagram(self.cfg).publish(str(self.video), META)
+        self.assertEqual(self.count(f)["uploads"], 1)
+
+    def test_chunked_short_requests_same_file(self):
+        self.cfg["platforms"]["instagram"].update(chunked_upload=True, upload_chunk_mb=1024 / 1048576)   # 1 КБ
+        f = self.http(meta_graph, self.routes([{"status_code": "FINISHED"}],
+                                              upload=[Resp({"success": True}, 206), Resp({"success": True}, 200)]))
+        ig = meta_graph.Instagram(self.cfg)
+        r = ig.publish(str(self.video), META)                             # файл 2048 байт → 2 частини
+        self.assertEqual(r["id"], "M1")
+        ups = [c for c in f.calls if c[0] == "POST" and "rupload" in c[1]]
+        self.assertEqual([c[2]["headers"]["offset"] for c in ups], ["0", "1024"])
+        self.assertEqual(b"".join(c[2]["data"] for c in ups), self.video.read_bytes())   # той самий файл
+        self.assertEqual(len([c for c in f.calls if "graph.facebook.com" in c[1]]), 4)  # Graph API — як завжди
+        from app.insights import containers
+        rec = containers.last(self.cfg, 1)[0]
+        self.assertTrue(rec["upload_mode"].startswith("частинами"))
+        self.assertIn("Upload mode: частинами", containers.fmt(rec))
 
 
 if __name__ == "__main__":
